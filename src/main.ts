@@ -12,11 +12,13 @@ import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
+import type { SceneBuildResult } from './render/buildScene'
 import { pickNodeId, Selection } from './render/picking'
 import { invertLocalRotation } from './render/rotationInverse'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { Inspector } from './ui/inspector'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
+import linkCsv from './examples/link_example_gv_node.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
 import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 
@@ -37,6 +39,7 @@ const BUILT_IN_SCENES: Record<string, { csv: string; filename: string }> = {
     csv: worldGridCsv,
     filename: 'world_grid_example_gv_node.csv',
   },
+  'Link example (lines + prisms)': { csv: linkCsv, filename: 'link_example_gv_node.csv' },
 }
 
 // GlyphViz worlds are Z-up (ANTz convention).
@@ -189,10 +192,11 @@ function setSelected(nodeId: number | null) {
     inspector.hide()
     return
   }
-  // No gizmo on World Grids (simplest default): their frame deliberately
-  // carries no scale, so gizmo modes would fight it — edit grids through
-  // the inspector instead, like the desktop's panel/table.
-  if (node.type === NodeType.WorldGrid) {
+  // No gizmo on World Grids (their frame deliberately carries no scale, so
+  // gizmo modes would fight it) or Links (their own transform is inert —
+  // the edge follows its endpoints) — edit those through the inspector,
+  // like the desktop's panel/table. Simplest defaults.
+  if (node.type === NodeType.WorldGrid || node.type === NodeType.Link) {
     gizmo.detach()
   } else {
     const frame = currentRoot.getObjectByName(`gv:${node.id}`)
@@ -212,6 +216,7 @@ function cycleGridSelection() {
 // --- Scene loading -----------------------------------------------------------
 
 let currentRoot: THREE.Group | null = null
+let currentLinks: SceneBuildResult['links'] | null = null
 let currentNodes: GvNode[] = []
 let currentDisplayName = ''
 let currentFilename = 'scene_gv_node.csv'
@@ -241,6 +246,11 @@ function rebuildScene(fitCamera: boolean) {
     scene.remove(currentRoot)
   }
   currentRoot = built.root
+  currentLinks = built.links
+  currentLinks.setResolution(
+    window.innerWidth * window.devicePixelRatio,
+    window.innerHeight * window.devicePixelRatio,
+  )
   scene.add(currentRoot)
   scene.background = built.background
   nodesById = new Map(currentNodes.map((n) => [n.id, n]))
@@ -248,7 +258,8 @@ function rebuildScene(fitCamera: boolean) {
   // of reference (its lattice has meaningful spacing; the backdrop's not).
   backdrop.showReferenceGrid = !currentNodes.some((n) => n.type === NodeType.WorldGrid)
 
-  hudScene.textContent = `${currentDisplayName} — ${currentNodes.length} node(s), ${built.drawnCount} drawn`
+  const linkNote = currentLinks.count > 0 ? `, ${currentLinks.count} link edge(s)` : ''
+  hudScene.textContent = `${currentDisplayName} — ${currentNodes.length} node(s), ${built.drawnCount} drawn${linkNote}`
   showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
 
   if (fitCamera) {
@@ -620,10 +631,17 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight
   camera.updateProjectionMatrix()
   renderer.setSize(window.innerWidth, window.innerHeight)
+  currentLinks?.setResolution(
+    window.innerWidth * window.devicePixelRatio,
+    window.innerHeight * window.devicePixelRatio,
+  )
 })
 
 renderer.setAnimationLoop(() => {
   controls.update()
   backdrop.update(camera.position.distanceTo(controls.target))
+  // Edges chase their endpoint nodes (gizmo drags mutate frames between
+  // rebuilds), so refresh them every frame like the desktop's redraw.
+  currentLinks?.update()
   renderer.render(scene, camera)
 })

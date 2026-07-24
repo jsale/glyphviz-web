@@ -9,15 +9,17 @@
 //
 // All 18 topologies place via topoOffset/topoBaseRotation (src/render/
 // topology.ts), and World Grid (type 6) children place by geography —
-// both verified against the desktop engine by the parity test.
-// Not yet implemented: Link edges and the Plot/Surface overlay drawing
-// (their children still place correctly).
+// both verified against the desktop engine by the parity test. Link (type
+// 7) edges render via the LinkOverlay between endpoint world positions.
+// Not yet implemented: the Plot/Surface overlay drawing (their children
+// still place correctly).
 
 import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
 import { NodeType, Topo } from '../gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { createGlyphObject, createPickProxy } from './glyphGeometry'
+import { buildLinkOverlay, LinkOverlay } from './linkOverlay'
 import { localRotationMatrix } from './rotation'
 import { topoBaseRotation, topoOffset } from './topology'
 import { createWorldGridObject } from './worldGridGeometry'
@@ -126,8 +128,10 @@ export function frameBaseRotation(node: GvNode, parentGv: GvNode | null): THREE.
 export interface SceneBuildResult {
   root: THREE.Group
   background: THREE.Color
-  /** Nodes that produced a drawable glyph. */
+  /** Nodes that produced a drawable glyph (Link edges counted separately). */
   drawnCount: number
+  /** Rendered type-7 edges; call update() per frame, setResolution on resize. */
+  links: LinkOverlay
   warnings: string[]
 }
 
@@ -193,11 +197,9 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
 
     const cumScale = parentCumScale.clone().multiply(frame.scale)
 
+    // Links draw as overlay edges (below), never as a glyph at their frame.
     const drawable =
       !NON_VISUAL_TYPES.has(node.type) && node.type !== NodeType.Link && node.hide === 0
-    if (node.type === NodeType.Link) {
-      warnings.add(`Node ${node.id}: Link nodes are not rendered yet.`)
-    }
 
     if (drawable && node.type === NodeType.WorldGrid) {
       // Bespoke draw path: ±1-unit plate/globe scaled by the RAW node scale
@@ -248,7 +250,9 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
     attach(node, root, null, unit, visited)
   }
 
-  return { root, background, drawnCount, warnings: [...warnings] }
+  const links = buildLinkOverlay(nodes, root, (m) => warnings.add(m))
+
+  return { root, background, drawnCount, links, warnings: [...warnings] }
 }
 
 /** Ratio to apply on the glyph so its drawn world scale respects the floor. */

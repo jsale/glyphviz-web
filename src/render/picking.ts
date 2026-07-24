@@ -58,6 +58,11 @@ export function createSelectionBox(): THREE.LineSegments {
 /**
  * Single-selection holder: moves one shared halo onto the selected node's
  * glyph. (Desktop supports multi-select; single is the Tier-1 scope.)
+ *
+ * Nodes without a glyph (Links, hidden nodes) are still selectable when
+ * their frame exists — keyboard navigation reaches them and the inspector
+ * shows them, just with no halo. Same as the desktop, whose nav/table
+ * selects them while the outline pass skips them.
  */
 export class Selection {
   private box = createSelectionBox()
@@ -73,9 +78,9 @@ export class Selection {
     this.selectedId = null
     if (nodeId === null) return
     const frame = root.getObjectByName(`gv:${nodeId}`)
-    const glyph = frame?.children.find((c) => c.userData.isGlyph)
-    if (!glyph) return // non-visual or hidden node: nothing to halo
-    glyph.add(this.box)
+    if (!frame) return // not in the scene at all
     this.selectedId = nodeId
+    const glyph = frame.children.find((c) => c.userData.isGlyph)
+    if (glyph) glyph.add(this.box)
   }
 }

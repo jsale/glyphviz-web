@@ -150,10 +150,18 @@ describe('selection box', () => {
     expect(root.getObjectByName('selection-box')).toBeUndefined()
   })
 
-  it('refuses to select nodes without a glyph (hidden/non-visual)', () => {
+  it('selects glyph-less nodes (hidden, links) without a halo — nav/inspector reach them', () => {
     const { root } = buildAndUpdate([makeNode({ id: 1, hide: 1 })])
     const sel = new Selection()
     sel.set(root, 1)
+    expect(sel.id).toBe(1)
+    expect(root.getObjectByName('selection-box')).toBeUndefined()
+  })
+
+  it('refuses to select ids with no frame in the scene', () => {
+    const { root } = buildAndUpdate([makeNode({ id: 1 })])
+    const sel = new Selection()
+    sel.set(root, 99)
     expect(sel.id).toBeNull()
   })
 })

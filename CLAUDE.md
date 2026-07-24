@@ -105,8 +105,19 @@ something to decide now).
    - Also shipped 2026-07-24 (desktop viewport parity, Jeff's request):
      the procedural "infinite" reference grid (hidden once a real World
      Grid exists) and RGB origin axes — `src/render/backdrop.ts`.
-   - Remaining: Link edges, Plot/Surface overlays, textures, tags/labels,
-     Channels animation.
+   - ~~Link edges~~ (shipped 2026-07-24): type-7 edges drawn between the
+     A-end (parent_id) and B-end (extras child_id — same storage the
+     desktop reads) world positions, refreshed per frame so gizmo drags
+     track live. Lines use the three fat-line addon (desktop pixel-width
+     rule max(ratio·20, 1); WebGL core lines cap at 1 px), geometry 28 is
+     the square tube at half-width max(ratio, 0.01). Edges are never
+     pickable; link nodes are reachable by Tab-nav and edited via the
+     inspector (Selection now supports glyph-less nodes, halo-less — same
+     as desktop's outline pass skipping links). Deferred to later steps:
+     prism texture + rotate_rate_z flow scroll (textures step), desktop's
+     round line end caps (cosmetic), link authoring UI.
+   - Remaining: Plot/Surface overlays, textures, tags/labels, Channels
+     animation.
 8. WebXR/stereo: deliberately deferred until basic parity exists.
 
 ## Collaboration notes
