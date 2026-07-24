@@ -2,7 +2,10 @@ import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { parseGvNodeCsv } from './gv/nodeCsv'
+import type { GvNode } from './gv/types'
+import { describeNode, nodeCssColor } from './gv/describe'
 import { buildScene } from './render/buildScene'
+import { pickNodeId, Selection } from './render/picking'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
 
@@ -83,6 +86,47 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 }
 
+// --- Inspector panel ---------------------------------------------------------
+
+const inspector = document.createElement('div')
+inspector.id = 'inspector'
+inspector.hidden = true
+app.appendChild(inspector)
+
+const selection = new Selection()
+let nodesById = new Map<number, GvNode>()
+
+function setSelected(nodeId: number | null) {
+  if (!currentRoot) return
+  selection.set(currentRoot, nodeId)
+  const node = selection.id !== null ? nodesById.get(selection.id) : undefined
+  if (!node) {
+    inspector.hidden = true
+    return
+  }
+
+  currentRoot.updateMatrixWorld(true)
+  const frame = currentRoot.getObjectByName(`gv:${node.id}`)
+  const world = frame ? frame.getWorldPosition(new THREE.Vector3()) : null
+
+  const rows = describeNode(node)
+    .map(
+      (f) =>
+        `<div class="ins-row"><span class="ins-label">${escapeHtml(f.label)}</span>` +
+        `<span class="ins-value">${escapeHtml(f.value)}</span></div>`,
+    )
+    .join('')
+  const worldRow = world
+    ? `<div class="ins-row"><span class="ins-label">world pos</span><span class="ins-value">` +
+      `${world.x.toFixed(4)}, ${world.y.toFixed(4)}, ${world.z.toFixed(4)}</span></div>`
+    : ''
+  inspector.innerHTML =
+    `<div id="ins-title"><span id="ins-swatch" style="background:${nodeCssColor(node)}"></span>` +
+    `Node ${node.id}</div>${rows}${worldRow}` +
+    `<div id="ins-hint">Esc deselect · double-click recenters orbit</div>`
+  inspector.hidden = false
+}
+
 // --- Scene loading -----------------------------------------------------------
 
 let currentRoot: THREE.Group | null = null
@@ -100,11 +144,14 @@ function loadCsv(text: string, name: string) {
 
   const built = buildScene(parsed.nodes)
   if (currentRoot) {
+    setSelected(null)
     scene.remove(currentRoot)
   }
   currentRoot = built.root
   scene.add(currentRoot)
   scene.background = built.background
+  nodesById = new Map(parsed.nodes.map((n) => [n.id, n]))
+  inspector.hidden = true
 
   hudScene.textContent = `${name} — ${parsed.nodes.length} node(s), ${built.drawnCount} drawn`
   showMessages(parsed.errors.map(parseIssue), [
@@ -156,6 +203,51 @@ window.addEventListener('drop', (e) => {
   e.preventDefault()
   const file = e.dataTransfer?.files?.[0]
   if (file) loadFile(file)
+})
+
+// --- Picking -------------------------------------------------------------------
+// Plain left-click on a node selects it (replacing the selection); clicking
+// empty space clears — matching the desktop viewport. A small movement
+// threshold separates clicks from orbit drags.
+
+const raycaster = new THREE.Raycaster()
+const CLICK_SLOP_PX = 5
+let downAt: { x: number; y: number } | null = null
+
+function pickAt(clientX: number, clientY: number): number | null {
+  if (!currentRoot) return null
+  const rect = renderer.domElement.getBoundingClientRect()
+  const ndc = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
+  )
+  raycaster.setFromCamera(ndc, camera)
+  return pickNodeId(raycaster, currentRoot)
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button === 0) downAt = { x: e.clientX, y: e.clientY }
+})
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (e.button !== 0 || !downAt) return
+  const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y)
+  downAt = null
+  if (moved > CLICK_SLOP_PX) return
+  setSelected(pickAt(e.clientX, e.clientY))
+})
+renderer.domElement.addEventListener('dblclick', (e) => {
+  // Recenter the orbit pivot on the node under the cursor (falls back to
+  // the current selection).
+  const nodeId = pickAt(e.clientX, e.clientY) ?? selection.id
+  if (nodeId === null || !currentRoot) return
+  const frame = currentRoot.getObjectByName(`gv:${nodeId}`)
+  if (!frame) return
+  currentRoot.updateMatrixWorld(true)
+  controls.target.copy(frame.getWorldPosition(new THREE.Vector3()))
+  controls.update()
+})
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') setSelected(null)
 })
 
 // --- Boot ---------------------------------------------------------------------

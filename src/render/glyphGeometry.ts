@@ -117,12 +117,16 @@ const WIRE_BUILDERS: Record<number, GeoBuilder> = {
 // Pin (16/17): ball head above a tapering needle, both along local Z —
 // head sphere r 0.12 centered at z 0.22; needle from r 0.12 at z 0.1 down
 // to r 0.03 at z −1.0 (glyphviz_gl _draw_pin).
-function pinParts(): THREE.BufferGeometry[] {
-  const head = new THREE.SphereGeometry(0.12, 12, 8)
-  head.translate(0, 0, 0.22)
-  const needle = zUp(new THREE.CylinderGeometry(0.12, 0.03, 1.1, 8, 1, true))
-  needle.translate(0, 0, -0.45)
-  return [head, needle]
+function pinSolidGeometries(): [THREE.BufferGeometry, THREE.BufferGeometry] {
+  if (!solidCache.has('pin:head')) {
+    const head = new THREE.SphereGeometry(0.12, 12, 8)
+    head.translate(0, 0, 0.22)
+    const needle = zUp(new THREE.CylinderGeometry(0.12, 0.03, 1.1, 8, 1, true))
+    needle.translate(0, 0, -0.45)
+    solidCache.set('pin:head', head)
+    solidCache.set('pin:needle', needle)
+  }
+  return [solidCache.get('pin:head')!, solidCache.get('pin:needle')!]
 }
 
 const solidCache = new Map<string, THREE.BufferGeometry>()
@@ -191,20 +195,14 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
 
   if (geometryId === Geometry.PinSolid || geometryId === Geometry.PinWire) {
     const wire = geometryId === Geometry.PinWire
-    const cache = wire ? wireCache : solidCache
-    if (!cache.has('pin:head')) {
-      const [head, needle] = pinParts()
-      cache.set('pin:head', wire ? new THREE.WireframeGeometry(head) : head)
-      cache.set('pin:needle', wire ? new THREE.WireframeGeometry(needle) : needle)
-    }
     const group = new THREE.Group()
-    for (const key of ['pin:head', 'pin:needle'] as const) {
-      const geo = cache.get(key)!
-      group.add(
-        wire
-          ? new THREE.LineSegments(geo, wireMaterial(style))
-          : new THREE.Mesh(geo, solidMaterial(style, false)),
-      )
+    for (const part of pinSolidGeometries()) {
+      if (wire) {
+        const geo = cached(wireCache, `pinwire:${part.uuid}`, () => new THREE.WireframeGeometry(part))
+        group.add(new THREE.LineSegments(geo, wireMaterial(style)))
+      } else {
+        group.add(new THREE.Mesh(part, solidMaterial(style, false)))
+      }
     }
     return group
   }
@@ -238,4 +236,68 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
   }
 
   return null
+}
+
+// --- Picking proxies ---------------------------------------------------------
+// The desktop pick pass draws SOLID silhouettes for every shape (wire glyphs
+// substitute their solid twin — geometry_data.WIRE_TO_SOLID) so any click
+// inside the bounding shape registers. Mirror that with an invisible solid
+// mesh per glyph: the renderer skips visible=false objects but the raycaster
+// does not, giving the same "solid silhouette" hit volume.
+
+const WIRE_TO_SOLID: Record<number, number> = {
+  [Geometry.CubeWire]: Geometry.CubeSolid,
+  [Geometry.SphereWire]: Geometry.SphereSolid,
+  [Geometry.ConeWire]: Geometry.ConeSolid,
+  [Geometry.TorusWire]: Geometry.TorusSolid,
+  [Geometry.DodecahedronWire]: Geometry.DodecahedronSolid,
+  [Geometry.OctahedronWire]: Geometry.OctahedronSolid,
+  [Geometry.TetrahedronWire]: Geometry.TetrahedronSolid,
+  [Geometry.IcosahedronWire]: Geometry.IcosahedronSolid,
+  [Geometry.PinWire]: Geometry.PinSolid,
+  [Geometry.CylinderWire]: Geometry.CylinderSolid,
+  [Geometry.GridWire]: Geometry.GridSolid,
+}
+
+// Double-sided so flat markers (and rays exiting solids) always hit.
+const PICK_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })
+
+/** Unit-space hit radius for Point glyphs (their sprite size is pixel-based). */
+const POINT_PICK_RADIUS = 0.15
+
+/**
+ * Invisible solid hit volume for a node's geometry, or null when the shape
+ * has no renderer yet. Attach as a child of the glyph so it inherits the
+ * draw-scale correction.
+ */
+export function createPickProxy(geometryId: number): THREE.Object3D | null {
+  const solidId = WIRE_TO_SOLID[geometryId] ?? geometryId
+
+  let proxy: THREE.Object3D | null = null
+  if (solidId === Geometry.Point) {
+    const geo = cached(solidCache, 'pointPick', () => new THREE.SphereGeometry(POINT_PICK_RADIUS, 8, 6))
+    proxy = new THREE.Mesh(geo, PICK_MATERIAL)
+  } else if (solidId === Geometry.PinSolid) {
+    const group = new THREE.Group()
+    for (const part of pinSolidGeometries()) {
+      group.add(new THREE.Mesh(part, PICK_MATERIAL))
+    }
+    proxy = group
+  } else if (solidId === Geometry.TorusSolid) {
+    // Pick tube uses the default ratio-agnostic torus; per-node accuracy
+    // isn't worth a per-ratio proxy geometry.
+    const geo = cached(solidCache, 'torusPick', () => torusGeometry(0.1))
+    proxy = new THREE.Mesh(geo, PICK_MATERIAL)
+  } else {
+    const builder = SOLID_BUILDERS[solidId]
+    if (!builder) return null
+    proxy = new THREE.Mesh(cached(solidCache, String(solidId), builder), PICK_MATERIAL)
+  }
+
+  proxy.visible = false
+  proxy.userData.isPickProxy = true
+  proxy.traverse((o) => {
+    o.userData.isPickProxy = true
+  })
+  return proxy
 }

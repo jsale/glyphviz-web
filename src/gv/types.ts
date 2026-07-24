@@ -87,6 +87,68 @@ export const Geometry = {
 
 export const GEOMETRY_MAX = 28
 
+// Display names matching the desktop app's NODE_TYPE/TOPO/GEO name tables.
+export const NODE_TYPE_NAMES: Record<number, string> = {
+  [NodeType.World]: 'World',
+  [NodeType.Camera]: 'Camera',
+  [NodeType.Glyph]: 'Glyph',
+  [NodeType.WorldGrid]: 'World Grid',
+  [NodeType.Link]: 'Link',
+}
+
+export const TOPO_NAMES: Record<number, string> = {
+  [Topo.None]: 'None',
+  [Topo.Cube]: 'Cube',
+  [Topo.Sphere]: 'Sphere (KML)',
+  [Topo.Torus]: 'Torus',
+  [Topo.Cylinder]: 'Cylinder',
+  [Topo.Pin]: 'Pin',
+  [Topo.Rod]: 'Rod',
+  [Topo.Point]: 'Point',
+  [Topo.Plane]: 'Plane (Grid)',
+  [Topo.Zcube]: 'Zcube',
+  [Topo.Zsphere]: 'Zsphere',
+  [Topo.Ztorus]: 'Ztorus',
+  [Topo.Zcylinder]: 'Zcylinder',
+  [Topo.Zrod]: 'Zrod',
+  [Topo.Spiral]: 'Spiral',
+  [Topo.Video]: 'Video',
+  [Topo.Plot]: 'Plot',
+  [Topo.Surface]: 'Surface',
+}
+
+export const GEOMETRY_NAMES: Record<number, string> = {
+  [Geometry.CubeWire]: 'Cube Wire',
+  [Geometry.CubeSolid]: 'Cube',
+  [Geometry.SphereWire]: 'Sphere Wire',
+  [Geometry.SphereSolid]: 'Sphere',
+  [Geometry.ConeWire]: 'Cone Wire',
+  [Geometry.ConeSolid]: 'Cone',
+  [Geometry.TorusWire]: 'Torus Wire',
+  [Geometry.TorusSolid]: 'Torus',
+  [Geometry.DodecahedronWire]: 'Dodecahedron Wire',
+  [Geometry.DodecahedronSolid]: 'Dodecahedron',
+  [Geometry.OctahedronWire]: 'Octahedron Wire',
+  [Geometry.OctahedronSolid]: 'Octahedron',
+  [Geometry.TetrahedronWire]: 'Tetrahedron Wire',
+  [Geometry.TetrahedronSolid]: 'Tetrahedron',
+  [Geometry.IcosahedronWire]: 'Icosahedron Wire',
+  [Geometry.IcosahedronSolid]: 'Icosahedron',
+  [Geometry.PinSolid]: 'Pin',
+  [Geometry.PinWire]: 'Pin Wire',
+  [Geometry.CylinderWire]: 'Cylinder Wire',
+  [Geometry.CylinderSolid]: 'Cylinder',
+  [Geometry.GridWire]: 'Grid Wire',
+  [Geometry.GridSolid]: 'Grid',
+  [Geometry.Point]: 'Point',
+  [Geometry.Mesh]: 'Mesh (Imported)',
+  [Geometry.Circle]: 'Circle',
+  [Geometry.Cross]: 'Cross',
+  [Geometry.Star]: 'Star',
+  [Geometry.Line]: 'Line',
+  [Geometry.TexturedPrism]: 'Textured Prism',
+}
+
 /** Rotation interpretation for `rotate_x/y/z` (`rotation_mode` column). */
 export const RotationMode = {
   /** Euler XYZ — each field rotates about its own axis. */

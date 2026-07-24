@@ -78,3 +78,54 @@ canvas {
   color: #6c7488;
   margin-top: 2px;
 }
+
+#inspector {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 300px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(10, 12, 20, 0.78);
+  color: #d8dce6;
+  font: 12px/1.6 system-ui, sans-serif;
+  user-select: text;
+}
+
+#ins-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+#ins-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.ins-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ins-label {
+  flex: 0 0 92px;
+  color: #9aa3b5;
+}
+
+.ins-value {
+  flex: 1;
+  word-break: break-word;
+}
+
+#ins-hint {
+  margin-top: 8px;
+  color: #6c7488;
+}

@@ -15,7 +15,7 @@
 import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
 import { NodeType } from '../gv/types'
-import { createGlyphObject } from './glyphGeometry'
+import { createGlyphObject, createPickProxy } from './glyphGeometry'
 import { localRotationMatrix } from './rotation'
 import { topoBaseRotation, topoOffset } from './topology'
 
@@ -150,6 +150,8 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
         )
         glyph.name = 'glyph'
         glyph.userData.isGlyph = true
+        const proxy = createPickProxy(node.geometry)
+        if (proxy) glyph.add(proxy)
         frame.add(glyph)
         drawnCount++
       } else {
