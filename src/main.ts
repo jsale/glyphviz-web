@@ -2,21 +2,26 @@ import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { parseGvNodeCsv } from './gv/nodeCsv'
-import type { GvNode } from './gv/types'
-import { describeNode, nodeCssColor } from './gv/describe'
+import type { GvNode, GvParseIssue } from './gv/types'
+import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { buildScene } from './render/buildScene'
 import { pickNodeId, Selection } from './render/picking'
+import { Inspector } from './ui/inspector'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
 
 // Parse a gv_node.csv, render it with the full topology placement math
 // (verified against the desktop engine by src/render/parity.test.ts), orbit
-// camera. Still to come: World Grid, Link edges, Plot/Surface overlays,
-// textures, tags.
+// camera, click-to-select with an editable inspector, save back to CSV.
+// Still to come: World Grid, Link edges, Plot/Surface overlays, textures,
+// tags, gizmo dragging.
 
-const BUILT_IN_SCENES: Record<string, string> = {
-  'Topology example (all 18 topologies)': topologyCsv,
-  'Cartesian example': cartesianCsv,
+const BUILT_IN_SCENES: Record<string, { csv: string; filename: string }> = {
+  'Topology example (all 18 topologies)': {
+    csv: topologyCsv,
+    filename: 'topology_example_gv_node.csv',
+  },
+  'Cartesian example': { csv: cartesianCsv, filename: 'cartesian_example_gv_node.csv' },
 }
 
 // GlyphViz worlds are Z-up (ANTz convention).
@@ -52,6 +57,7 @@ hud.innerHTML = `
   <div id="hud-scene"></div>
   <div id="hud-warnings"></div>
   <label id="hud-open">Open gv_node.csv<input type="file" accept=".csv,text/csv"></label>
+  <button id="hud-save">Save gv_node.csv</button>
   <div id="hud-hint">or drop a CSV anywhere</div>
 `
 app.appendChild(hud)
@@ -59,6 +65,7 @@ const hudScene = hud.querySelector<HTMLDivElement>('#hud-scene')!
 const hudWarnings = hud.querySelector<HTMLDivElement>('#hud-warnings')!
 const fileInput = hud.querySelector<HTMLInputElement>('input[type=file]')!
 const exampleSelect = hud.querySelector<HTMLSelectElement>('#hud-examples')!
+const saveButton = hud.querySelector<HTMLButtonElement>('#hud-save')!
 
 for (const name of Object.keys(BUILT_IN_SCENES)) {
   const option = document.createElement('option')
@@ -67,7 +74,18 @@ for (const name of Object.keys(BUILT_IN_SCENES)) {
   exampleSelect.appendChild(option)
 }
 exampleSelect.addEventListener('change', () => {
-  loadCsv(BUILT_IN_SCENES[exampleSelect.value], exampleSelect.value)
+  const builtIn = BUILT_IN_SCENES[exampleSelect.value]
+  loadCsv(builtIn.csv, exampleSelect.value, builtIn.filename)
+})
+
+saveButton.addEventListener('click', () => {
+  if (currentNodes.length === 0) return
+  const blob = new Blob([writeGvNodeCsv(currentNodes)], { type: 'text/csv' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = currentFilename
+  a.click()
+  URL.revokeObjectURL(a.href)
 })
 
 function showMessages(errors: string[], warnings: string[]) {
@@ -86,79 +104,88 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)
 }
 
-// --- Inspector panel ---------------------------------------------------------
+function issueText(i: GvParseIssue): string {
+  return [i.line !== undefined ? `line ${i.line}` : '', i.column ?? '', i.message]
+    .filter(Boolean)
+    .join(': ')
+}
 
-const inspector = document.createElement('div')
-inspector.id = 'inspector'
-inspector.hidden = true
-app.appendChild(inspector)
+// --- Selection + inspector ---------------------------------------------------
 
 const selection = new Selection()
 let nodesById = new Map<number, GvNode>()
+
+const inspector = new Inspector({
+  onNodeEdited() {
+    // The mutated node lives in currentNodes; rebuild in place, keeping the
+    // camera and reattaching the selection + inspector.
+    rebuildScene(false)
+  },
+})
+app.appendChild(inspector.element)
+
+function worldPosOf(nodeId: number): THREE.Vector3 | null {
+  if (!currentRoot) return null
+  currentRoot.updateMatrixWorld(true)
+  const frame = currentRoot.getObjectByName(`gv:${nodeId}`)
+  return frame ? frame.getWorldPosition(new THREE.Vector3()) : null
+}
 
 function setSelected(nodeId: number | null) {
   if (!currentRoot) return
   selection.set(currentRoot, nodeId)
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
   if (!node) {
-    inspector.hidden = true
+    inspector.hide()
     return
   }
-
-  currentRoot.updateMatrixWorld(true)
-  const frame = currentRoot.getObjectByName(`gv:${node.id}`)
-  const world = frame ? frame.getWorldPosition(new THREE.Vector3()) : null
-
-  const rows = describeNode(node)
-    .map(
-      (f) =>
-        `<div class="ins-row"><span class="ins-label">${escapeHtml(f.label)}</span>` +
-        `<span class="ins-value">${escapeHtml(f.value)}</span></div>`,
-    )
-    .join('')
-  const worldRow = world
-    ? `<div class="ins-row"><span class="ins-label">world pos</span><span class="ins-value">` +
-      `${world.x.toFixed(4)}, ${world.y.toFixed(4)}, ${world.z.toFixed(4)}</span></div>`
-    : ''
-  inspector.innerHTML =
-    `<div id="ins-title"><span id="ins-swatch" style="background:${nodeCssColor(node)}"></span>` +
-    `Node ${node.id}</div>${rows}${worldRow}` +
-    `<div id="ins-hint">Esc deselect · double-click recenters orbit</div>`
-  inspector.hidden = false
+  inspector.show(node, worldPosOf(node.id))
 }
 
 // --- Scene loading -----------------------------------------------------------
 
 let currentRoot: THREE.Group | null = null
+let currentNodes: GvNode[] = []
+let currentDisplayName = ''
+let currentFilename = 'scene_gv_node.csv'
+let parseErrorLines: string[] = []
+let parseWarningLines: string[] = []
 
-function loadCsv(text: string, name: string) {
+function loadCsv(text: string, displayName: string, filename: string) {
   const parsed = parseGvNodeCsv(text)
-  const parseIssue = (i: { line?: number; column?: string; message: string }) =>
-    [i.line !== undefined ? `line ${i.line}` : '', i.column ?? '', i.message]
-      .filter(Boolean)
-      .join(': ')
   if (parsed.errors.length > 0 && parsed.nodes.length === 0) {
-    showMessages(parsed.errors.map(parseIssue), [])
+    showMessages(parsed.errors.map(issueText), [])
     return
   }
+  currentNodes = parsed.nodes
+  currentDisplayName = displayName
+  currentFilename = filename
+  parseErrorLines = parsed.errors.map(issueText)
+  parseWarningLines = parsed.warnings.map(issueText)
+  rebuildScene(true)
+}
 
-  const built = buildScene(parsed.nodes)
+function rebuildScene(fitCamera: boolean) {
+  const prevSelected = selection.id
+  const built = buildScene(currentNodes)
   if (currentRoot) {
-    setSelected(null)
+    selection.set(currentRoot, null)
     scene.remove(currentRoot)
   }
   currentRoot = built.root
   scene.add(currentRoot)
   scene.background = built.background
-  nodesById = new Map(parsed.nodes.map((n) => [n.id, n]))
-  inspector.hidden = true
+  nodesById = new Map(currentNodes.map((n) => [n.id, n]))
 
-  hudScene.textContent = `${name} — ${parsed.nodes.length} node(s), ${built.drawnCount} drawn`
-  showMessages(parsed.errors.map(parseIssue), [
-    ...parsed.warnings.map(parseIssue),
-    ...built.warnings,
-  ])
-  fitCameraTo(currentRoot)
+  hudScene.textContent = `${currentDisplayName} — ${currentNodes.length} node(s), ${built.drawnCount} drawn`
+  showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
+
+  if (fitCamera) {
+    inspector.hide()
+    fitCameraTo(currentRoot)
+  } else {
+    setSelected(prevSelected)
+  }
 }
 
 function fitCameraTo(root: THREE.Object3D) {
@@ -185,7 +212,7 @@ function fitCameraTo(root: THREE.Object3D) {
 function loadFile(file: File) {
   file
     .text()
-    .then((text) => loadCsv(text, file.name))
+    .then((text) => loadCsv(text, file.name, file.name))
     .catch((err: unknown) => showMessages([`Could not read ${file.name}: ${String(err)}`], []))
 }
 
@@ -247,12 +274,15 @@ renderer.domElement.addEventListener('dblclick', (e) => {
   controls.update()
 })
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') setSelected(null)
+  if (e.key === 'Escape' && document.activeElement?.tagName !== 'INPUT') setSelected(null)
 })
 
 // --- Boot ---------------------------------------------------------------------
 
-loadCsv(BUILT_IN_SCENES[exampleSelect.value], exampleSelect.value)
+{
+  const builtIn = BUILT_IN_SCENES[exampleSelect.value]
+  loadCsv(builtIn.csv, exampleSelect.value, builtIn.filename)
+}
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight

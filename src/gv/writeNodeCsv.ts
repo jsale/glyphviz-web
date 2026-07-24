@@ -1,0 +1,154 @@
+// Writer for the GlyphViz gv_node.csv format — the minimal (authoring)
+// dialect, not the canonical 94-column layout the desktop's save_node_csv
+// emits. The desktop loader reads either (only the 20 required columns are
+// mandatory), so web-saved files round-trip through desktop GlyphViz.
+//
+// Formatting rules from node-csv-format.md (File formatting rules):
+// UTF-8, CRLF line endings, floats with 6 decimal places, ints bare.
+// Optional columns follow the spec's write-only-when-needed convention so a
+// load→save cycle never invents columns the data doesn't use; unknown
+// columns from `extras` are appended verbatim.
+
+import type { GvNode } from './types'
+import { RotationMode } from './types'
+
+const CRLF = '\r\n'
+
+function fmtFloat(v: number): string {
+  return v.toFixed(6)
+}
+
+function fmtInt(v: number): string {
+  return String(Math.trunc(v))
+}
+
+/** RFC 4180 quoting: only when the field needs it. */
+function escapeField(s: string): string {
+  return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s
+}
+
+interface Column {
+  name: string
+  value: (n: GvNode) => string
+}
+
+export function writeGvNodeCsv(nodes: GvNode[]): string {
+  const columns: Column[] = [
+    { name: 'id', value: (n) => fmtInt(n.id) },
+    { name: 'type', value: (n) => fmtInt(n.type) },
+    { name: 'parent_id', value: (n) => fmtInt(n.parentId) },
+    { name: 'branch_level', value: (n) => fmtInt(n.branchLevel) },
+    { name: 'translate_x', value: (n) => fmtFloat(n.translate.x) },
+    { name: 'translate_y', value: (n) => fmtFloat(n.translate.y) },
+    { name: 'translate_z', value: (n) => fmtFloat(n.translate.z) },
+    { name: 'rotate_x', value: (n) => fmtFloat(n.rotate.x) },
+    { name: 'rotate_y', value: (n) => fmtFloat(n.rotate.y) },
+    { name: 'rotate_z', value: (n) => fmtFloat(n.rotate.z) },
+    { name: 'scale_x', value: (n) => fmtFloat(n.scale.x) },
+    { name: 'scale_y', value: (n) => fmtFloat(n.scale.y) },
+    { name: 'scale_z', value: (n) => fmtFloat(n.scale.z) },
+    { name: 'color_r', value: (n) => fmtInt(n.color.r) },
+    { name: 'color_g', value: (n) => fmtInt(n.color.g) },
+    { name: 'color_b', value: (n) => fmtInt(n.color.b) },
+    { name: 'color_a', value: (n) => fmtInt(n.color.a) },
+    { name: 'geometry', value: (n) => fmtInt(n.geometry) },
+    { name: 'hide', value: (n) => fmtInt(n.hide) },
+    { name: 'topo', value: (n) => fmtInt(n.topo) },
+    // Always written, matching the repo's 22-column example files. Facet is
+    // the on-disk (1-indexed) spelling of subspace, per save_node_csv.
+    { name: 'ratio', value: (n) => fmtFloat(n.ratio) },
+    { name: 'facet', value: (n) => fmtInt(n.subspace + 1) },
+  ]
+
+  // Optional columns, written only when omitting them would misread on
+  // reload (the spec's extension-column rule).
+  const any = (pred: (n: GvNode) => boolean) => nodes.some(pred)
+  const optional: Array<{ when: boolean; cols: Column[] }> = [
+    {
+      when: any((n) => n.textureId !== 0),
+      cols: [{ name: 'texture_id', value: (n) => fmtInt(n.textureId) }],
+    },
+    {
+      when: any((n) => n.meshId !== 0),
+      cols: [{ name: 'mesh_id', value: (n) => fmtInt(n.meshId) }],
+    },
+    {
+      // Absent column loads as Heading/Tilt/Roll (1), so only mode 1 files
+      // may omit it.
+      when: any((n) => n.rotationMode !== RotationMode.HeadingTiltRoll),
+      cols: [{ name: 'rotation_mode', value: (n) => fmtInt(n.rotationMode) }],
+    },
+    {
+      when: any((n) => n.colorIndex !== 0),
+      cols: [{ name: 'color_index', value: (n) => fmtInt(n.colorIndex) }],
+    },
+    {
+      when: any((n) => n.paletteId !== 0),
+      cols: [{ name: 'palette_id', value: (n) => fmtInt(n.paletteId) }],
+    },
+    {
+      when: any((n) => n.translateRate.x !== 0 || n.translateRate.y !== 0 || n.translateRate.z !== 0),
+      cols: [
+        { name: 'translate_rate_x', value: (n) => fmtFloat(n.translateRate.x) },
+        { name: 'translate_rate_y', value: (n) => fmtFloat(n.translateRate.y) },
+        { name: 'translate_rate_z', value: (n) => fmtFloat(n.translateRate.z) },
+      ],
+    },
+    {
+      when: any((n) => n.rotateRate.x !== 0 || n.rotateRate.y !== 0 || n.rotateRate.z !== 0),
+      cols: [
+        { name: 'rotate_rate_x', value: (n) => fmtFloat(n.rotateRate.x) },
+        { name: 'rotate_rate_y', value: (n) => fmtFloat(n.rotateRate.y) },
+        { name: 'rotate_rate_z', value: (n) => fmtFloat(n.rotateRate.z) },
+      ],
+    },
+    {
+      when: any((n) => n.scaleRate.x !== 0 || n.scaleRate.y !== 0 || n.scaleRate.z !== 0),
+      cols: [
+        { name: 'scale_rate_x', value: (n) => fmtFloat(n.scaleRate.x) },
+        { name: 'scale_rate_y', value: (n) => fmtFloat(n.scaleRate.y) },
+        { name: 'scale_rate_z', value: (n) => fmtFloat(n.scaleRate.z) },
+      ],
+    },
+    {
+      when: any((n) => n.text !== ''),
+      cols: [{ name: 'text', value: (n) => n.text }],
+    },
+    {
+      when: any((n) => n.link !== ''),
+      cols: [{ name: 'link', value: (n) => n.link }],
+    },
+    {
+      when: any((n) => n.renderMode !== 0),
+      cols: [{ name: 'render_mode', value: (n) => fmtInt(n.renderMode) }],
+    },
+    {
+      when: any((n) => n.fogEnabled !== 0 || n.fogStart !== 0 || n.fogEnd !== 0),
+      cols: [
+        { name: 'fog_enabled', value: (n) => fmtInt(n.fogEnabled) },
+        { name: 'fog_start', value: (n) => fmtFloat(n.fogStart) },
+        { name: 'fog_end', value: (n) => fmtFloat(n.fogEnd) },
+      ],
+    },
+  ]
+  for (const group of optional) {
+    if (group.when) columns.push(...group.cols)
+  }
+
+  // Unknown columns, preserved verbatim in first-seen order across nodes.
+  const extraNames: string[] = []
+  for (const n of nodes) {
+    for (const name of Object.keys(n.extras)) {
+      if (!extraNames.includes(name)) extraNames.push(name)
+    }
+  }
+  for (const name of extraNames) {
+    columns.push({ name, value: (n) => n.extras[name] ?? '' })
+  }
+
+  const lines = [columns.map((c) => escapeField(c.name)).join(',')]
+  for (const n of nodes) {
+    lines.push(columns.map((c) => escapeField(c.value(n))).join(','))
+  }
+  return lines.join(CRLF) + CRLF
+}
