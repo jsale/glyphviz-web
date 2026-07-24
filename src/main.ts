@@ -2,8 +2,11 @@ import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
+import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/createNode'
+import type { NewObjectDefaults } from './gv/createNode'
 import { parseGvNodeCsv } from './gv/nodeCsv'
 import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
+import { GEOMETRY_NAMES, Geometry, TOPO_NAMES } from './gv/types'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { applyFrameTransform, BASE_SCALE, buildScene } from './render/buildScene'
 import { pickNodeId, Selection } from './render/picking'
@@ -67,6 +70,16 @@ hud.innerHTML = `
     <button data-mode="rotate">Rotate (E)</button>
     <button data-mode="scale">Scale (R)</button>
   </div>
+  <div id="hud-create">
+    <div id="hud-create-buttons">
+      <button id="hud-new-node" title="New object at the world origin, stepping +10 in X per press. If a child-level node is selected, adds a child instead.">New Node (N)</button>
+      <button id="hud-new-child" title="New child under the selected node; repeated presses spread children along X." disabled>New Child (Shift+N)</button>
+    </div>
+    <div class="hud-create-row"><span>Geometry</span><select id="hud-new-geo"></select></div>
+    <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
+    <div class="hud-create-row"><span>Scale</span><input id="hud-new-scale" type="number" min="0.001" step="0.1" value="1"></div>
+    <div class="hud-create-row"><span>Color</span><input id="hud-new-color" type="color" value="#c8c8c8"></div>
+  </div>
   <div id="hud-hint">or drop a CSV anywhere</div>
 `
 app.appendChild(hud)
@@ -75,6 +88,12 @@ const hudWarnings = hud.querySelector<HTMLDivElement>('#hud-warnings')!
 const fileInput = hud.querySelector<HTMLInputElement>('input[type=file]')!
 const exampleSelect = hud.querySelector<HTMLSelectElement>('#hud-examples')!
 const saveButton = hud.querySelector<HTMLButtonElement>('#hud-save')!
+const newNodeButton = hud.querySelector<HTMLButtonElement>('#hud-new-node')!
+const newChildButton = hud.querySelector<HTMLButtonElement>('#hud-new-child')!
+const newGeoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-geo')!
+const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
+const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
+const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
 
 for (const name of Object.keys(BUILT_IN_SCENES)) {
   const option = document.createElement('option')
@@ -148,6 +167,7 @@ function setSelected(nodeId: number | null) {
   if (!currentRoot) return
   selection.set(currentRoot, nodeId)
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
+  newChildButton.disabled = !node
   if (!node) {
     gizmo.detach()
     inspector.hide()
@@ -300,6 +320,8 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'w' || e.key === 'W') setGizmoMode('translate')
   else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate')
   else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
+  else if (e.key === 'N' && e.shiftKey) addChildOfSelection()
+  else if (e.key === 'n') addNode()
 })
 
 // --- Transform gizmo (interaction 6c) ------------------------------------------
@@ -422,6 +444,66 @@ gizmo.addEventListener('objectChange', () => {
   applyFrameTransform(frame, node, parentGv)
   inspector.show(node, worldPosOf(node.id))
 })
+
+// --- Node creation (N / Shift+N / Create panel) --------------------------------
+// Ported desktop behavior: N adds a root node (child instead when a
+// child-level node is selected); Shift+N adds a child under the selection,
+// keeping the parent selected so repeated presses spread siblings. The New
+// Object Defaults (geometry/topology/scale/color) apply to every path.
+
+for (const [names, select, defaultId] of [
+  [GEOMETRY_NAMES, newGeoSelect, NEW_OBJECT_DEFAULTS.geometry],
+  [TOPO_NAMES, newTopoSelect, NEW_OBJECT_DEFAULTS.topo],
+] as const) {
+  for (const id of Object.keys(names).map(Number).sort((a, b) => a - b)) {
+    if (id === Geometry.Mesh && names === GEOMETRY_NAMES) continue // needs an imported mesh
+    const option = document.createElement('option')
+    option.value = String(id)
+    option.textContent = `${names[id]} (${id})`
+    select.appendChild(option)
+  }
+  select.value = String(defaultId)
+}
+
+function readNewObjectDefaults(): NewObjectDefaults {
+  const s = Number(newScaleInput.value)
+  const scale = Number.isFinite(s) && s > 0 ? s : 1
+  const hex = newColorInput.value // "#rrggbb"
+  return {
+    geometry: Number(newGeoSelect.value),
+    topo: Number(newTopoSelect.value),
+    scale: { x: scale, y: scale, z: scale },
+    color: {
+      r: parseInt(hex.slice(1, 3), 16),
+      g: parseInt(hex.slice(3, 5), 16),
+      b: parseInt(hex.slice(5, 7), 16),
+      a: 255,
+    },
+  }
+}
+
+function addChildOfSelection() {
+  const parent = selection.id !== null ? nodesById.get(selection.id) : undefined
+  if (!parent) return
+  currentNodes.push(createChildNode(currentNodes, parent, readNewObjectDefaults()))
+  rebuildScene(false) // parent stays selected so repeated presses spread children
+}
+
+function addNode() {
+  // Desktop N semantics: child when a child-level node is selected.
+  const selected = selection.id !== null ? nodesById.get(selection.id) : undefined
+  if (selected && selected.branchLevel >= 1) {
+    addChildOfSelection()
+    return
+  }
+  const node = createRootNode(currentNodes, readNewObjectDefaults())
+  currentNodes.push(node)
+  rebuildScene(false)
+  setSelected(node.id)
+}
+
+newNodeButton.addEventListener('click', addNode)
+newChildButton.addEventListener('click', addChildOfSelection)
 
 // --- Boot ---------------------------------------------------------------------
 

@@ -100,6 +100,71 @@ canvas {
   border-color: #5a6a96;
 }
 
+#hud-create {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2a3040;
+}
+
+#hud-create-buttons {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+#hud-create-buttons button {
+  flex: 1;
+  padding: 3px 0;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-create-buttons button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#hud-create-buttons button:disabled {
+  color: #6c7488;
+  cursor: default;
+}
+
+.hud-create-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 2px 0;
+}
+
+.hud-create-row span {
+  flex: 0 0 64px;
+  color: #9aa3b5;
+}
+
+.hud-create-row select,
+.hud-create-row input[type='number'] {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  background: #161a26;
+  color: #cfd6e4;
+  font: inherit;
+}
+
+.hud-create-row input[type='color'] {
+  width: 34px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  background: none;
+}
+
 #hud-hint {
   color: #6c7488;
   margin-top: 2px;

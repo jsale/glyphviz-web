@@ -78,6 +78,14 @@ something to decide now).
       gimbal hold (roll keeps its previous value at singular tilt/pitch;
       heading absorbs the drag). Scale: pure local scale, 1:1 onto
       scale_x/y/z.
+   d. Node creation (shipped 2026-07-24), desktop-parity behavior from
+      `_create_root_node`/`_create_child_node`: N adds a root node (+10 X
+      per press; child instead when a child-level node is selected),
+      Shift+N adds a child at (siblings·5, 0, 5) keeping the parent
+      selected, HUD Create panel with New Object Defaults (geometry/
+      topology/scale/color). Factory in `src/gv/createNode.ts` — fresh
+      nodes are Euler rotation_mode 0 (desktop dataclass default), id =
+      max + 1, never 0.
 7. Still-unimplemented format features, scheduled opportunistically: World
    Grid placement, Link edges, Plot/Surface overlays, textures, tags/labels,
    Channels animation.
