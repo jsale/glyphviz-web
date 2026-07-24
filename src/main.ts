@@ -3,12 +3,18 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { parseGvNodeCsv } from './gv/nodeCsv'
 import { buildScene } from './render/buildScene'
-import exampleCsv from './examples/cartesian_example_gv_node.csv?raw'
+import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
+import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
 
-// Roadmap step 3 vertical slice: parse a gv_node.csv, render the Cartesian
-// (topo None) placement with real glyph geometry, orbit camera. Other
-// topologies load but place as Cartesian with a warning until their math
-// lands (step 4 pairs that work with the cross-implementation diff harness).
+// Parse a gv_node.csv, render it with the full topology placement math
+// (verified against the desktop engine by src/render/parity.test.ts), orbit
+// camera. Still to come: World Grid, Link edges, Plot/Surface overlays,
+// textures, tags.
+
+const BUILT_IN_SCENES: Record<string, string> = {
+  'Topology example (all 18 topologies)': topologyCsv,
+  'Cartesian example': cartesianCsv,
+}
 
 // GlyphViz worlds are Z-up (ANTz convention).
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1)
@@ -39,6 +45,7 @@ const hud = document.createElement('div')
 hud.id = 'hud'
 hud.innerHTML = `
   <div id="hud-title">GlyphViz Web</div>
+  <select id="hud-examples"></select>
   <div id="hud-scene"></div>
   <div id="hud-warnings"></div>
   <label id="hud-open">Open gv_node.csv<input type="file" accept=".csv,text/csv"></label>
@@ -48,6 +55,17 @@ app.appendChild(hud)
 const hudScene = hud.querySelector<HTMLDivElement>('#hud-scene')!
 const hudWarnings = hud.querySelector<HTMLDivElement>('#hud-warnings')!
 const fileInput = hud.querySelector<HTMLInputElement>('input[type=file]')!
+const exampleSelect = hud.querySelector<HTMLSelectElement>('#hud-examples')!
+
+for (const name of Object.keys(BUILT_IN_SCENES)) {
+  const option = document.createElement('option')
+  option.value = name
+  option.textContent = name
+  exampleSelect.appendChild(option)
+}
+exampleSelect.addEventListener('change', () => {
+  loadCsv(BUILT_IN_SCENES[exampleSelect.value], exampleSelect.value)
+})
 
 function showMessages(errors: string[], warnings: string[]) {
   const MAX = 8
@@ -142,7 +160,7 @@ window.addEventListener('drop', (e) => {
 
 // --- Boot ---------------------------------------------------------------------
 
-loadCsv(exampleCsv, 'cartesian_example_gv_node.csv (built-in)')
+loadCsv(BUILT_IN_SCENES[exampleSelect.value], exampleSelect.value)
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight

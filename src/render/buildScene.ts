@@ -7,16 +7,17 @@
 // topology-space translate. For the Cartesian topology family that is exactly
 // a standard TRS hierarchy, so plain Object3D nesting reproduces it.
 //
-// Roadmap step 3 scope: Cartesian placement only (topo None/Plane/Video/
-// Plot/Surface share the identical offset math; Plot/Surface overlays are
-// not drawn yet). Every other topology renders as Cartesian with a warning
-// until its placement math lands.
+// All 18 topologies place via topoOffset/topoBaseRotation (src/render/
+// topology.ts), verified against the desktop engine by the parity test.
+// Not yet implemented: World Grid placement, Link edges, and the Plot/
+// Surface overlay drawing (their children still place correctly).
 
 import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
-import { NodeType, Topo } from '../gv/types'
+import { NodeType } from '../gv/types'
 import { createGlyphObject } from './glyphGeometry'
 import { localRotationMatrix } from './rotation'
+import { topoBaseRotation, topoOffset } from './topology'
 
 /** Desktop "Global Scale" B — the unscaled base glyph size. */
 export const BASE_SCALE = 1.0
@@ -24,15 +25,6 @@ export const BASE_SCALE = 1.0
 export const RENDER_SCALE_FLOOR = 0.2
 /** Background when no World (type 0) row is present. */
 export const DEFAULT_BACKGROUND = new THREE.Color(20 / 255, 20 / 255, 31 / 255)
-
-/** Topologies whose child offset is a plain Cartesian (tx, ty, tz). */
-const CARTESIAN_TOPOS = new Set<number>([
-  Topo.None,
-  Topo.Plane,
-  Topo.Video,
-  Topo.Plot,
-  Topo.Surface,
-])
 
 /** Node types that are never drawn (their children still are). */
 const NON_VISUAL_TYPES = new Set<number>([NodeType.World, NodeType.Camera])
@@ -98,20 +90,37 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
     }
     visited.add(node.id)
 
-    if (parentGv && !CARTESIAN_TOPOS.has(parentGv.topo)) {
+    if (node.type === NodeType.WorldGrid) {
       warnings.add(
-        `Topology ${parentGv.topo} is not implemented yet; its children are placed as plain Cartesian offsets.`,
+        `Node ${node.id}: World Grid placement is not implemented yet; treated as a plain glyph.`,
       )
     }
-    if (node.type === NodeType.WorldGrid) {
-      warnings.add(`Node ${node.id}: World Grid nodes are not implemented yet; treated as a plain glyph.`)
+    if (parentGv?.type === NodeType.WorldGrid) {
+      warnings.add(
+        `Node ${node.id}: children of World Grid nodes place by grid extents, which is not implemented yet.`,
+      )
     }
 
     const frame = new THREE.Object3D()
     frame.name = `gv:${node.id}`
     frame.userData.nodeId = node.id
-    frame.position.set(node.translate.x, node.translate.y, node.translate.z)
-    rotation.copy(localRotationMatrix(node.rotate.x, node.rotate.y, node.rotate.z, node.rotationMode))
+    // Roots take plain world coordinates (parentTopo −1 → Cartesian fallback,
+    // identity base rotation), matching the engine's is_root handling.
+    const parentTopo = parentGv ? parentGv.topo : -1
+    frame.position.copy(
+      topoOffset({
+        parentTopo,
+        tx: node.translate.x,
+        ty: node.translate.y,
+        tz: node.translate.z,
+        parentRatio: parentGv?.ratio ?? 0,
+        subspace: node.subspace,
+        baseScale: BASE_SCALE,
+      }),
+    )
+    rotation
+      .copy(topoBaseRotation(parentTopo, node.translate.x, node.translate.y, node.subspace))
+      .multiply(localRotationMatrix(node.rotate.x, node.rotate.y, node.rotate.z, node.rotationMode))
     frame.quaternion.setFromRotationMatrix(rotation)
     frame.scale.set(node.scale.x, node.scale.y, node.scale.z)
     parent.add(frame)

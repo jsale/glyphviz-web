@@ -32,6 +32,17 @@ canvas {
   letter-spacing: 0.02em;
 }
 
+#hud-examples {
+  margin: 4px 0;
+  max-width: 100%;
+  padding: 2px 4px;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: #161a26;
+  color: #cfd6e4;
+  font: inherit;
+}
+
 #hud-scene {
   color: #9aa3b5;
   margin-bottom: 4px;

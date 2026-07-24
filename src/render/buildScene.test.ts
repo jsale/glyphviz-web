@@ -137,22 +137,37 @@ describe('buildScene drawing rules', () => {
     expect(background.equals(DEFAULT_BACKGROUND)).toBe(true)
   })
 
-  it('warns once per unimplemented topology and still places children', () => {
-    const { root, warnings } = buildScene([
-      makeNode({ id: 1, topo: Topo.Sphere }),
+  it('places children of a Sphere parent at KML lon/lat positions', () => {
+    const { root } = buildScene([
+      makeNode({ id: 1, topo: Topo.Sphere, translate: { x: 10, y: 20, z: 30 } }),
       makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 90, y: 0, z: 0 } }),
-      makeNode({ id: 3, parentId: 1, branchLevel: 1, translate: { x: 45, y: 45, z: 0 } }),
+      makeNode({ id: 3, parentId: 1, branchLevel: 1, translate: { x: 0, y: 90, z: 0.5 } }),
     ])
-    expect(warnings.filter((w) => w.includes(`Topology ${Topo.Sphere}`))).toHaveLength(1)
-    expect(glyphOf(root, 2)).toBeDefined()
+    expectVec(worldPosition(root, 2), [10, 21, 30])
+    expectVec(worldPosition(root, 3), [10, 20, 31.5])
   })
 
-  it('renders the whole topology-example fixture without throwing', () => {
+  it('scales and rotates topology offsets through the parent basis', () => {
+    // Sphere parent scaled 2× with heading 90 (HTR → Rz(−90)): child at
+    // lon 0 sits on the surface at local (1,0,0) → scaled (2,0,0) →
+    // rotated to (0,−2,0).
+    const { root } = buildScene([
+      makeNode({
+        id: 1,
+        topo: Topo.Sphere,
+        rotate: { x: 0, y: 90, z: 0 },
+        scale: { x: 2, y: 2, z: 2 },
+      }),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1 }),
+    ])
+    expectVec(worldPosition(root, 2), [0, -2, 0])
+  })
+
+  it('renders the whole topology-example fixture with no warnings', () => {
     const parsed = parseGvNodeCsv(topologyExampleCsv)
     expect(parsed.errors).toEqual([])
     const { drawnCount, warnings } = buildScene(parsed.nodes)
     expect(drawnCount).toBe(parsed.nodes.length)
-    // Every non-Cartesian topology in the fixture gets flagged exactly once.
-    expect(warnings.some((w) => w.startsWith('Topology'))).toBe(true)
+    expect(warnings).toEqual([])
   })
 })
