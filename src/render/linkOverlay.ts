@@ -14,16 +14,24 @@
 //   (rotate_rate_z scrolling) waits on the textures step; until then the
 //   tube renders in flat link color like the desktop's untextured path.
 //
-// Endpoints are node positions, so edges must track them live (gizmo drags,
-// inspector edits). The desktop redraws immediate-mode every frame; the
-// overlay mirrors that with update() recomputing endpoint world positions
-// per frame. Links are never pickable (raycast no-op'd), matching the
-// desktop's pick pass exclusion, and a hidden link draws nothing.
+// Built for scale (the Org_Event_Network example carries 6,400 links in a
+// 65k-node scene, which the first per-link-object version took minutes to
+// load): endpoints resolve through the builder's id→frame map (never
+// getObjectByName — that's a full scene-graph scan per call), edges batch
+// into one LineSegments2 per (width, alpha) group and one merged mesh per
+// prism alpha group with per-vertex colors, and update() writes endpoint
+// positions into preallocated GPU buffers with no allocation. update()
+// deliberately does NOT force a matrix recompute of the tree — it reads
+// the matrixWorld state of the renderer's own per-frame pass, at most one
+// frame stale, and only while something is actually moving.
+//
+// Links are never pickable (raycast no-op'd), matching the desktop's pick
+// pass exclusion, and a hidden link draws nothing.
 
 import * as THREE from 'three'
-import { Line2 } from 'three/addons/lines/Line2.js'
-import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js'
 import type { GvNode } from '../gv/types'
 import { Geometry, NodeType } from '../gv/types'
 import { linkChildId } from '../gv/links'
@@ -31,161 +39,241 @@ import { linkChildId } from '../gv/links'
 const MIN_PRISM_RADIUS = 0.01
 const EPS = 1e-6
 
-interface LinkEntry {
+interface EdgeSpec {
   aFrame: THREE.Object3D
   bFrame: THREE.Object3D
-  apply: (a: THREE.Vector3, b: THREE.Vector3) => void
+  color: THREE.Color
+  /** Prisms only: tube half-width in world units. */
+  radius: number
 }
 
+/** One batched LineSegments2 for every line link sharing (width, alpha). */
+class LineGroup {
+  readonly edges: EdgeSpec[]
+  readonly material: LineMaterial
+  readonly object: LineSegments2
+  private positions: THREE.InstancedInterleavedBuffer
+
+  constructor(edges: EdgeSpec[], widthPx: number, alpha: number) {
+    this.edges = edges
+    const geometry = new LineSegmentsGeometry()
+    geometry.setPositions(new Array(edges.length * 6).fill(0))
+    const colors: number[] = []
+    for (const e of edges) colors.push(e.color.r, e.color.g, e.color.b, e.color.r, e.color.g, e.color.b)
+    geometry.setColors(colors)
+    this.material = new LineMaterial({
+      vertexColors: true,
+      linewidth: widthPx,
+      transparent: alpha < 1,
+      opacity: alpha,
+    })
+    this.object = new LineSegments2(geometry, this.material)
+    this.object.name = 'link-lines'
+    this.object.raycast = () => {} // never pickable
+    // Endpoints move every frame; skip per-frame bounds maintenance.
+    this.object.frustumCulled = false
+    this.positions = (geometry.attributes.instanceStart as THREE.InterleavedBufferAttribute)
+      .data as THREE.InstancedInterleavedBuffer
+    this.positions.setUsage(THREE.DynamicDrawUsage)
+  }
+
+  update(a: THREE.Vector3, b: THREE.Vector3): void {
+    const arr = this.positions.array as Float32Array
+    for (let i = 0; i < this.edges.length; i++) {
+      const e = this.edges[i]
+      a.setFromMatrixPosition(e.aFrame.matrixWorld)
+      b.setFromMatrixPosition(e.bFrame.matrixWorld)
+      const o = i * 6
+      arr[o] = a.x
+      arr[o + 1] = a.y
+      arr[o + 2] = a.z
+      arr[o + 3] = b.x
+      arr[o + 4] = b.y
+      arr[o + 5] = b.z
+    }
+    this.positions.needsUpdate = true
+  }
+}
+
+/** One merged mesh for every prism link sharing an alpha: 8 verts + 4 quad
+ *  side faces per edge, per-vertex colors, dynamic positions. */
+class PrismGroup {
+  readonly edges: EdgeSpec[]
+  readonly object: THREE.Mesh
+  private positions: THREE.BufferAttribute
+
+  constructor(edges: EdgeSpec[], alpha: number) {
+    this.edges = edges
+    const geometry = new THREE.BufferGeometry()
+    this.positions = new THREE.BufferAttribute(new Float32Array(edges.length * 8 * 3), 3)
+    this.positions.setUsage(THREE.DynamicDrawUsage)
+    geometry.setAttribute('position', this.positions)
+    const colors = new Float32Array(edges.length * 8 * 3)
+    const index: number[] = []
+    for (let n = 0; n < edges.length; n++) {
+      const c = edges[n].color
+      for (let v = 0; v < 8; v++) {
+        colors[(n * 8 + v) * 3] = c.r
+        colors[(n * 8 + v) * 3 + 1] = c.g
+        colors[(n * 8 + v) * 3 + 2] = c.b
+      }
+      const base = n * 8
+      for (let i = 0; i < 4; i++) {
+        const j = (i + 1) % 4
+        index.push(base + i, base + j, base + 4 + j, base + i, base + 4 + j, base + 4 + i)
+      }
+    }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+    geometry.setIndex(index)
+    // DoubleSide spares us the desktop's hand-derived winding (which
+    // shipped inverted once).
+    this.object = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent: alpha < 1,
+        opacity: alpha,
+        side: THREE.DoubleSide,
+      }),
+    )
+    this.object.name = 'link-prisms'
+    this.object.raycast = () => {} // never pickable
+    this.object.frustumCulled = false
+  }
+
+  update(
+    a: THREE.Vector3,
+    b: THREE.Vector3,
+    dir: THREE.Vector3,
+    right: THREE.Vector3,
+    up: THREE.Vector3,
+    corner: THREE.Vector3,
+  ): void {
+    const arr = this.positions.array as Float32Array
+    for (let n = 0; n < this.edges.length; n++) {
+      const e = this.edges[n]
+      a.setFromMatrixPosition(e.aFrame.matrixWorld)
+      b.setFromMatrixPosition(e.bFrame.matrixWorld)
+      dir.subVectors(b, a)
+      const length = dir.length()
+      const base = n * 8 * 3
+      if (length < EPS) {
+        // Degenerate edge: collapse every face to a point (draws nothing).
+        for (let v = 0; v < 8; v++) {
+          arr[base + v * 3] = a.x
+          arr[base + v * 3 + 1] = a.y
+          arr[base + v * 3 + 2] = a.z
+        }
+        continue
+      }
+      dir.divideScalar(length)
+      // Arbitrary-up basis: cross with a reference axis not (near-)
+      // parallel to the direction, then cross again (desktop's trick).
+      right.crossVectors(dir, Math.abs(dir.z) < 0.99 ? UNIT_Z : UNIT_X).normalize()
+      up.crossVectors(right, dir)
+      for (let i = 0; i < 4; i++) {
+        const [s, t] = PRISM_RING[i]
+        corner
+          .copy(right)
+          .multiplyScalar(s * e.radius)
+          .addScaledVector(up, t * e.radius)
+        arr[base + i * 3] = a.x + corner.x
+        arr[base + i * 3 + 1] = a.y + corner.y
+        arr[base + i * 3 + 2] = a.z + corner.z
+        arr[base + (4 + i) * 3] = b.x + corner.x
+        arr[base + (4 + i) * 3 + 1] = b.y + corner.y
+        arr[base + (4 + i) * 3 + 2] = b.z + corner.z
+      }
+    }
+    this.positions.needsUpdate = true
+  }
+}
+
+// Ring order stepping consistently around the square: ++, +−, −−, −+.
+const PRISM_RING: ReadonlyArray<readonly [number, number]> = [
+  [1, 1],
+  [1, -1],
+  [-1, -1],
+  [-1, 1],
+]
+const UNIT_Z = new THREE.Vector3(0, 0, 1)
+const UNIT_X = new THREE.Vector3(1, 0, 0)
+
 /**
- * All rendered link edges of one built scene. Attach `group` under the
- * scene root (buildScene does), call `update()` once per frame and
- * `setResolution` on init/resize for correct line pixel widths.
+ * All rendered link edges of one built scene, batched. Attach `group`
+ * under the scene root (buildScene does), call `update()` once per frame
+ * and `setResolution` on init/resize for correct line pixel widths.
  */
 export class LinkOverlay {
   readonly group = new THREE.Group()
-  private entries: LinkEntry[] = []
-  private lineMaterials: LineMaterial[] = []
-  private root: THREE.Object3D
+  private lineGroups: LineGroup[] = []
+  private prismGroups: PrismGroup[] = []
+  private edgeCount = 0
+  // Scratch vectors so update() never allocates.
+  private va = new THREE.Vector3()
+  private vb = new THREE.Vector3()
+  private vDir = new THREE.Vector3()
+  private vRight = new THREE.Vector3()
+  private vUp = new THREE.Vector3()
+  private vCorner = new THREE.Vector3()
 
-  constructor(root: THREE.Object3D) {
-    this.root = root
+  constructor(lines: Map<string, { edges: EdgeSpec[]; widthPx: number; alpha: number }>,
+              prisms: Map<string, { edges: EdgeSpec[]; alpha: number }>) {
     this.group.name = 'link-overlay'
+    for (const { edges, widthPx, alpha } of lines.values()) {
+      const g = new LineGroup(edges, widthPx, alpha)
+      this.lineGroups.push(g)
+      this.group.add(g.object)
+      this.edgeCount += edges.length
+    }
+    for (const { edges, alpha } of prisms.values()) {
+      const g = new PrismGroup(edges, alpha)
+      this.prismGroups.push(g)
+      this.group.add(g.object)
+      this.edgeCount += edges.length
+    }
   }
 
   get count(): number {
-    return this.entries.length
+    return this.edgeCount
   }
 
   /** Viewport size in device pixels — LineMaterial's screen-space widths. */
   setResolution(width: number, height: number): void {
-    for (const m of this.lineMaterials) m.resolution.set(width, height)
+    for (const g of this.lineGroups) g.material.resolution.set(width, height)
   }
 
-  /** Recompute every edge from its endpoints' current world positions. */
+  /**
+   * Rewrite every edge from its endpoints' current matrixWorld. Callers own
+   * the matrix state: the render loop relies on the renderer's own pass
+   * (≤ 1 frame stale while dragging); tests/builders updateMatrixWorld
+   * first.
+   */
   update(): void {
-    if (this.entries.length === 0) return
-    this.root.updateMatrixWorld(true)
-    const a = new THREE.Vector3()
-    const b = new THREE.Vector3()
-    for (const e of this.entries) {
-      a.setFromMatrixPosition(e.aFrame.matrixWorld)
-      b.setFromMatrixPosition(e.bFrame.matrixWorld)
-      e.apply(a, b)
+    for (const g of this.lineGroups) g.update(this.va, this.vb)
+    for (const g of this.prismGroups) {
+      g.update(this.va, this.vb, this.vDir, this.vRight, this.vUp, this.vCorner)
     }
   }
-
-  addLine(link: GvNode, aFrame: THREE.Object3D, bFrame: THREE.Object3D): void {
-    const geometry = new LineGeometry()
-    geometry.setPositions([0, 0, 0, 0, 0, 0])
-    const material = new LineMaterial({
-      color: colorOf(link).getHex(),
-      linewidth: Math.max(link.ratio * 20, 1), // pixels, desktop convention
-      transparent: link.color.a < 255,
-      opacity: link.color.a / 255,
-    })
-    this.lineMaterials.push(material)
-    const line = new Line2(geometry, material)
-    line.raycast = () => {} // never pickable
-    this.group.add(line)
-    this.entries.push({
-      aFrame,
-      bFrame,
-      apply: (a, b) => {
-        geometry.setPositions([a.x, a.y, a.z, b.x, b.y, b.z])
-        line.visible = a.distanceToSquared(b) > EPS * EPS
-      },
-    })
-  }
-
-  addPrism(link: GvNode, aFrame: THREE.Object3D, bFrame: THREE.Object3D): void {
-    // Two 4-corner rings (A then B), 4 quad side faces. DoubleSide spares
-    // us the desktop's hand-derived winding (which shipped inverted once).
-    const positions = new Float32Array(8 * 3)
-    const geometry = new THREE.BufferGeometry()
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    const index: number[] = []
-    for (let i = 0; i < 4; i++) {
-      const j = (i + 1) % 4
-      index.push(i, j, 4 + j, i, 4 + j, 4 + i)
-    }
-    geometry.setIndex(index)
-    const mesh = new THREE.Mesh(
-      geometry,
-      new THREE.MeshBasicMaterial({
-        color: colorOf(link),
-        transparent: link.color.a < 255,
-        opacity: link.color.a / 255,
-        side: THREE.DoubleSide,
-      }),
-    )
-    mesh.raycast = () => {} // never pickable
-    this.group.add(mesh)
-
-    const radius = Math.max(link.ratio, MIN_PRISM_RADIUS)
-    const dir = new THREE.Vector3()
-    const right = new THREE.Vector3()
-    const up = new THREE.Vector3()
-    const corner = new THREE.Vector3()
-    this.entries.push({
-      aFrame,
-      bFrame,
-      apply: (a, b) => {
-        dir.subVectors(b, a)
-        const length = dir.length()
-        mesh.visible = length > EPS
-        if (!mesh.visible) return
-        dir.divideScalar(length)
-        // Arbitrary-up basis: cross with a reference axis not (near-)
-        // parallel to the direction, then cross again (desktop's trick).
-        const ref = Math.abs(dir.z) < 0.99 ? UNIT_Z : UNIT_X
-        right.crossVectors(dir, ref).normalize()
-        up.crossVectors(right, dir)
-        // Ring order stepping consistently around the square: ++, +−, −−, −+.
-        const ring: ReadonlyArray<readonly [number, number]> = [
-          [1, 1],
-          [1, -1],
-          [-1, -1],
-          [-1, 1],
-        ]
-        for (let i = 0; i < 4; i++) {
-          const [s, t] = ring[i]
-          corner
-            .copy(right)
-            .multiplyScalar(s * radius)
-            .addScaledVector(up, t * radius)
-          positions[i * 3] = a.x + corner.x
-          positions[i * 3 + 1] = a.y + corner.y
-          positions[i * 3 + 2] = a.z + corner.z
-          positions[(4 + i) * 3] = b.x + corner.x
-          positions[(4 + i) * 3 + 1] = b.y + corner.y
-          positions[(4 + i) * 3 + 2] = b.z + corner.z
-        }
-        geometry.attributes.position.needsUpdate = true
-        geometry.computeBoundingSphere()
-      },
-    })
-  }
-}
-
-const UNIT_Z = new THREE.Vector3(0, 0, 1)
-const UNIT_X = new THREE.Vector3(1, 0, 0)
-
-function colorOf(link: GvNode): THREE.Color {
-  return new THREE.Color(link.color.r / 255, link.color.g / 255, link.color.b / 255)
 }
 
 /**
- * Collect the scene's renderable link edges. Skips (with a warning where
- * the file is at fault) links that are hidden, endpoint-less (either id 0,
- * the desktop's "pending" state), or dangling.
+ * Collect the scene's renderable link edges into batched groups. `frames`
+ * is the builder's id→frame map — endpoint resolution must never walk the
+ * scene graph (getObjectByName is a full scan; at Org_Event_Network scale
+ * that's minutes of load time). Skips, with a warning where the file is at
+ * fault, links that are hidden, endpoint-less (either id 0, the desktop's
+ * "pending" state), or dangling.
  */
 export function buildLinkOverlay(
   nodes: GvNode[],
+  frames: ReadonlyMap<number, THREE.Object3D>,
   root: THREE.Object3D,
   warn: (message: string) => void,
 ): LinkOverlay {
-  const overlay = new LinkOverlay(root)
+  const lines = new Map<string, { edges: EdgeSpec[]; widthPx: number; alpha: number }>()
+  const prisms = new Map<string, { edges: EdgeSpec[]; alpha: number }>()
+
   for (const node of nodes) {
     if (node.type !== NodeType.Link || node.hide !== 0) continue
     const aId = node.parentId
@@ -194,19 +282,44 @@ export function buildLinkOverlay(
       warn(`Link node ${node.id}: missing A-end (parent_id) or B-end (child_id); edge not drawn.`)
       continue
     }
-    const aFrame = root.getObjectByName(`gv:${aId}`)
-    const bFrame = root.getObjectByName(`gv:${bId}`)
+    const aFrame = frames.get(aId)
+    const bFrame = frames.get(bId)
     if (!aFrame || !bFrame) {
       warn(`Link node ${node.id}: endpoint node ${aFrame ? bId : aId} not found; edge not drawn.`)
       continue
     }
+    const spec: EdgeSpec = {
+      aFrame,
+      bFrame,
+      color: new THREE.Color(node.color.r / 255, node.color.g / 255, node.color.b / 255),
+      radius: Math.max(node.ratio, MIN_PRISM_RADIUS),
+    }
+    const alpha = node.color.a / 255
     if (node.geometry === Geometry.TexturedPrism) {
-      overlay.addPrism(node, aFrame, bFrame)
+      const key = alpha.toFixed(6)
+      let g = prisms.get(key)
+      if (!g) {
+        g = { edges: [], alpha }
+        prisms.set(key, g)
+      }
+      g.edges.push(spec)
     } else {
-      overlay.addLine(node, aFrame, bFrame)
+      const widthPx = Math.max(node.ratio * 20, 1) // pixels, desktop convention
+      const key = `${widthPx.toFixed(4)}:${alpha.toFixed(6)}`
+      let g = lines.get(key)
+      if (!g) {
+        g = { edges: [], widthPx, alpha }
+        lines.set(key, g)
+      }
+      g.edges.push(spec)
     }
   }
+
+  const overlay = new LinkOverlay(lines, prisms)
   root.add(overlay.group)
-  overlay.update()
+  if (overlay.count > 0) {
+    root.updateMatrixWorld(true) // once, so the first frame is exact
+    overlay.update()
+  }
   return overlay
 }

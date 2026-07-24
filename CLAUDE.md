@@ -113,7 +113,15 @@ something to decide now).
      the square tube at half-width max(ratio, 0.01). Edges are never
      pickable; link nodes are reachable by Tab-nav and edited via the
      inspector (Selection now supports glyph-less nodes, halo-less — same
-     as desktop's outline pass skipping links). Deferred to later steps:
+     as desktop's outline pass skipping links). Built for scale after the
+     Org_Event_Network example (6,400 links / 65k nodes) exposed a
+     90-second hang: endpoints resolve through buildScene's id→frame map
+     (getObjectByName is a full scene scan — keep it out of per-link and
+     per-tick paths), edges batch into one draw object per (width, alpha)
+     group with per-vertex colors, and the per-frame update writes
+     preallocated buffers reading the renderer's own matrix pass (~1 ms).
+     `?csv=<url>` fetches a scene at boot (added for headless testing of
+     big files; also handy for sharing). Deferred to later steps:
      prism texture + rotate_rate_z flow scroll (textures step), desktop's
      round line end caps (cosmetic), link authoring UI.
    - Remaining: Plot/Surface overlays, textures, tags/labels, Channels

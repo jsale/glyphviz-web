@@ -132,6 +132,9 @@ export interface SceneBuildResult {
   drawnCount: number
   /** Rendered type-7 edges; call update() per frame, setResolution on resize. */
   links: LinkOverlay
+  /** id → frame, first row wins. O(1) lookups — getObjectByName scans the
+   *  whole graph and must stay out of per-tick interaction paths. */
+  frames: ReadonlyMap<number, THREE.Object3D>
   warnings: string[]
 }
 
@@ -173,6 +176,9 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
   }
 
   let drawnCount = 0
+  // id → frame, first row wins (mirrors byId) — link endpoint resolution
+  // must be O(1), never a getObjectByName scene scan.
+  const frames = new Map<number, THREE.Object3D>()
 
   const attach = (
     node: GvNode,
@@ -190,6 +196,7 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
     const frame = new THREE.Object3D()
     frame.name = `gv:${node.id}`
     frame.userData.nodeId = node.id
+    if (!frames.has(node.id)) frames.set(node.id, frame)
     // Roots take plain world coordinates (parentTopo −1 → Cartesian fallback,
     // identity base rotation), matching the engine's is_root handling.
     applyFrameTransform(frame, node, parentGv)
@@ -250,9 +257,9 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
     attach(node, root, null, unit, visited)
   }
 
-  const links = buildLinkOverlay(nodes, root, (m) => warnings.add(m))
+  const links = buildLinkOverlay(nodes, frames, root, (m) => warnings.add(m))
 
-  return { root, background, drawnCount, links, warnings: [...warnings] }
+  return { root, background, drawnCount, links, frames, warnings: [...warnings] }
 }
 
 /** Ratio to apply on the glyph so its drawn world scale respects the floor. */

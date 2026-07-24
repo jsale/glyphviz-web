@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { Line2 } from 'three/addons/lines/Line2.js'
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import type { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { applyFrameTransform, buildScene } from './buildScene'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
@@ -53,20 +53,25 @@ const makeLink = (id: number, aId: number, bId: number, overrides: Partial<GvNod
     ...overrides,
   })
 
-function overlayLines(root: THREE.Object3D): Line2[] {
-  const found: Line2[] = []
-  root.getObjectByName('link-overlay')!.traverse((o) => {
-    if (o instanceof Line2) found.push(o)
-  })
-  return found
+function overlayOf(root: THREE.Object3D): THREE.Object3D {
+  return root.getObjectByName('link-overlay')!
 }
 
-function lineEndpoints(line: Line2): [number[], number[]] {
-  const start = line.geometry.attributes.instanceStart as THREE.InterleavedBufferAttribute
-  const end = line.geometry.attributes.instanceEnd as THREE.InterleavedBufferAttribute
+function lineBatches(root: THREE.Object3D): LineSegments2[] {
+  return overlayOf(root).children.filter((o): o is LineSegments2 => o.name === 'link-lines')
+}
+
+function prismBatches(root: THREE.Object3D): THREE.Mesh[] {
+  return overlayOf(root).children.filter((o): o is THREE.Mesh => o.name === 'link-prisms')
+}
+
+/** Segment endpoints [a, b] of segment `i` in a batched line object. */
+function segmentAt(batch: LineSegments2, i: number): [number[], number[]] {
+  const start = batch.geometry.attributes.instanceStart as THREE.InterleavedBufferAttribute
+  const end = batch.geometry.attributes.instanceEnd as THREE.InterleavedBufferAttribute
   return [
-    [start.getX(0), start.getY(0), start.getZ(0)],
-    [end.getX(0), end.getY(0), end.getZ(0)],
+    [start.getX(i), start.getY(i), start.getZ(i)],
+    [end.getX(i), end.getY(i), end.getZ(i)],
   ]
 }
 
@@ -92,33 +97,39 @@ describe('link edges', () => {
     ])
     expect(warnings).toEqual([])
     expect(links.count).toBe(1)
-    const [a, b] = lineEndpoints(overlayLines(root)[0])
+    const [a, b] = segmentAt(lineBatches(root)[0], 0)
     expectVec(a, [-3, 0, 1])
     expectVec(b, [5, -2, 0])
   })
 
   it('tracks endpoint moves on update() without a rebuild (gizmo-drag path)', () => {
     const nodeA = makeNode({ id: 1 })
-    const { root, links } = buildScene([
+    const { root, links, frames } = buildScene([
       nodeA,
       makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
       makeLink(3, 1, 2),
     ])
     nodeA.translate.x = 4
-    applyFrameTransform(root.getObjectByName('gv:1')!, nodeA, null)
+    applyFrameTransform(frames.get(1)!, nodeA, null)
+    // update() reads matrixWorld as-is (the render loop's own pass supplies
+    // it); tests stand in for the renderer here.
+    root.updateMatrixWorld(true)
     links.update()
-    const [a] = lineEndpoints(overlayLines(root)[0])
+    const [a] = segmentAt(lineBatches(root)[0], 0)
     expectVec(a, [4, 0, 0])
   })
 
-  it('uses the desktop pixel-width rule max(ratio·20, 1)', () => {
-    const { root } = buildScene([
+  it('batches by pixel width max(ratio·20, 1): one draw object per width', () => {
+    const { root, links } = buildScene([
       makeNode({ id: 1 }),
       makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
-      makeLink(3, 1, 2, { ratio: 0.35 }),
-      makeLink(4, 2, 1, { ratio: 0.01 }),
+      makeNode({ id: 3, translate: { x: 0, y: 10, z: 0 } }),
+      makeLink(4, 1, 2, { ratio: 0.35 }),
+      makeLink(5, 2, 1, { ratio: 0.01 }),
+      makeLink(6, 1, 3, { ratio: 0.01 }), // same width as link 5 → same batch
     ])
-    const widths = overlayLines(root).map((l) => (l.material as LineMaterial).linewidth)
+    expect(links.count).toBe(3)
+    const widths = lineBatches(root).map((l) => (l.material as LineMaterial).linewidth)
     expect(widths.sort((x, y) => x - y)).toEqual([1, 7])
   })
 
@@ -129,9 +140,7 @@ describe('link edges', () => {
       makeLink(3, 1, 2, { geometry: Geometry.TexturedPrism, ratio: 0.5 }),
     ])
     expect(links.count).toBe(1)
-    const mesh = root
-      .getObjectByName('link-overlay')!
-      .children.find((o): o is THREE.Mesh => o instanceof THREE.Mesh)!
+    const mesh = prismBatches(root)[0]
     const pos = mesh.geometry.getAttribute('position')
     expect(pos.count).toBe(8)
     expect(mesh.geometry.index!.count).toBe(24) // 4 faces × 2 triangles
@@ -158,13 +167,14 @@ describe('link edges', () => {
   })
 
   it('never draws a glyph or pick proxy at the link node’s own frame', () => {
-    const { root, drawnCount } = buildScene([
+    const { root, drawnCount, frames } = buildScene([
       makeNode({ id: 1 }),
       makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
       makeLink(3, 1, 2),
     ])
     expect(drawnCount).toBe(2)
-    const frame = root.getObjectByName('gv:3')!
+    expect(root.getObjectByName('gv:3')).toBeDefined()
+    const frame = frames.get(3)!
     expect(frame.children.find((c) => c.userData.isGlyph)).toBeUndefined()
     let proxies = 0
     frame.traverse((o) => {
@@ -176,9 +186,12 @@ describe('link edges', () => {
   it('renders the link example scene: 6 ring lines + 6 spoke prisms, no warnings', () => {
     const parsed = parseGvNodeCsv(linkExampleCsv)
     expect(parsed.errors).toEqual([])
-    const { links, warnings, drawnCount } = buildScene(parsed.nodes)
+    const { root, links, warnings, drawnCount } = buildScene(parsed.nodes)
     expect(warnings).toEqual([])
     expect(drawnCount).toBe(7)
     expect(links.count).toBe(12)
+    // Three line batches (thin/thick/translucent) + one prism batch.
+    expect(lineBatches(root)).toHaveLength(3)
+    expect(prismBatches(root)).toHaveLength(1)
   })
 })

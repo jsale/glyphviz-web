@@ -171,9 +171,9 @@ const inspector = new Inspector({
 app.appendChild(inspector.element)
 
 function worldPosOf(nodeId: number): THREE.Vector3 | null {
-  if (!currentRoot) return null
-  currentRoot.updateMatrixWorld(true)
-  const frame = currentRoot.getObjectByName(`gv:${nodeId}`)
+  // Called per gizmo tick — must stay O(depth): frames map lookup, and
+  // getWorldPosition refreshes only the ancestor chain (no full-tree pass).
+  const frame = currentFrames?.get(nodeId)
   return frame ? frame.getWorldPosition(new THREE.Vector3()) : null
 }
 
@@ -199,7 +199,7 @@ function setSelected(nodeId: number | null) {
   if (node.type === NodeType.WorldGrid || node.type === NodeType.Link) {
     gizmo.detach()
   } else {
-    const frame = currentRoot.getObjectByName(`gv:${node.id}`)
+    const frame = currentFrames?.get(node.id)
     if (frame) gizmo.attach(frame)
   }
   inspector.show(node, worldPosOf(node.id))
@@ -217,6 +217,7 @@ function cycleGridSelection() {
 
 let currentRoot: THREE.Group | null = null
 let currentLinks: SceneBuildResult['links'] | null = null
+let currentFrames: SceneBuildResult['frames'] | null = null
 let currentNodes: GvNode[] = []
 let currentDisplayName = ''
 let currentFilename = 'scene_gv_node.csv'
@@ -247,6 +248,7 @@ function rebuildScene(fitCamera: boolean) {
   }
   currentRoot = built.root
   currentLinks = built.links
+  currentFrames = built.frames
   currentLinks.setResolution(
     window.innerWidth * window.devicePixelRatio,
     window.innerHeight * window.devicePixelRatio,
@@ -351,11 +353,10 @@ renderer.domElement.addEventListener('dblclick', (e) => {
   // Recenter the orbit pivot on the node under the cursor (falls back to
   // the current selection).
   const nodeId = pickAt(e.clientX, e.clientY) ?? selection.id
-  if (nodeId === null || !currentRoot) return
-  const frame = currentRoot.getObjectByName(`gv:${nodeId}`)
-  if (!frame) return
-  currentRoot.updateMatrixWorld(true)
-  controls.target.copy(frame.getWorldPosition(new THREE.Vector3()))
+  if (nodeId === null) return
+  const pos = worldPosOf(nodeId)
+  if (!pos) return
+  controls.target.copy(pos)
   controls.update()
 })
 window.addEventListener('keydown', (e) => {
@@ -617,14 +618,24 @@ deleteButton.addEventListener('click', deleteSelection)
 // --- Boot ---------------------------------------------------------------------
 
 {
+  // ?csv=<url> fetches a gv_node.csv (same-origin or CORS-permitting);
   // ?scene=<substring> deep-links a built-in scene (case-insensitive).
-  const wanted = new URLSearchParams(location.search).get('scene')?.toLowerCase()
+  const params = new URLSearchParams(location.search)
+  const csvUrl = params.get('csv')
+  const wanted = params.get('scene')?.toLowerCase()
   const match = wanted
     ? Object.keys(BUILT_IN_SCENES).find((name) => name.toLowerCase().includes(wanted))
     : undefined
   if (match) exampleSelect.value = match
   const builtIn = BUILT_IN_SCENES[exampleSelect.value]
   loadCsv(builtIn.csv, exampleSelect.value, builtIn.filename)
+  if (csvUrl) {
+    const filename = csvUrl.split('/').pop() || 'scene_gv_node.csv'
+    fetch(csvUrl)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((text) => loadCsv(text, filename, filename))
+      .catch((err: unknown) => showMessages([`Could not fetch ${csvUrl}: ${String(err)}`], []))
+  }
 }
 
 window.addEventListener('resize', () => {
