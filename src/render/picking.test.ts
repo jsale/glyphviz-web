@@ -94,6 +94,20 @@ describe('pickNodeId', () => {
     expect(pickNodeId(rayAt(15, 0), root)).toBeNull()
   })
 
+  it('never picks a World Grid, but its solid surface occludes glyphs behind it', () => {
+    // Solid plate at z = 0 between the ray origin (z = 50) and a cube at
+    // z = −5: the click must not reach the cube, nor select the grid.
+    const solidGrid = makeNode({ id: 1, type: NodeType.WorldGrid, geometry: Geometry.GridSolid })
+    const behind = makeNode({ id: 2, translate: { x: 0, y: 0, z: -5 } })
+    const { root } = buildAndUpdate([solidGrid, behind])
+    expect(pickNodeId(rayAt(0, 0), root)).toBeNull()
+
+    // A wire grid neither occludes nor gets picked.
+    const wireGrid = makeNode({ id: 1, type: NodeType.WorldGrid, geometry: Geometry.GridWire })
+    const { root: wireRoot } = buildAndUpdate([wireGrid, behind])
+    expect(pickNodeId(rayAt(0, 0), wireRoot)).toBe(2)
+  })
+
   it('pick proxies exist but are invisible to the renderer', () => {
     const { root } = buildAndUpdate([makeNode({ id: 1 })])
     const proxyRoots: THREE.Object3D[] = []

@@ -91,9 +91,22 @@ something to decide now).
       (children never reparented); Up/Down walk parent/first-child,
       Tab/Shift+Tab cycle visual siblings in row order (all roots at
       level 0), wrapping. `src/gv/treeOps.ts`.
-7. Still-unimplemented format features, scheduled opportunistically: World
-   Grid placement, Link edges, Plot/Surface overlays, textures, tags/labels,
-   Channels animation.
+7. Still-unimplemented format features, scheduled opportunistically:
+   - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
+     extents windows, the scale-respacing rule, geographic gizmo drags,
+     G-key selection cycling (grids are never click-pickable; solid
+     surfaces occlude picking), desktop-parity fixture
+     (`world_grid_example_gv_node.csv` + engine dump) in the parity test.
+     Grid frames carry scale (1,1,1) — the grid's scale is baked into
+     child positions and the plate's draw scale; the parity test
+     re-applies it when comparing bases. No World Grid panel yet
+     (extents/segments edit via CSV or inspector extras only); globe
+     equirect texture UVs deferred to the textures step.
+   - Also shipped 2026-07-24 (desktop viewport parity, Jeff's request):
+     the procedural "infinite" reference grid (hidden once a real World
+     Grid exists) and RGB origin axes — `src/render/backdrop.ts`.
+   - Remaining: Link edges, Plot/Surface overlays, textures, tags/labels,
+     Channels animation.
 8. WebXR/stereo: deliberately deferred until basic parity exists.
 
 ## Collaboration notes

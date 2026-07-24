@@ -8,16 +8,19 @@
 // a standard TRS hierarchy, so plain Object3D nesting reproduces it.
 //
 // All 18 topologies place via topoOffset/topoBaseRotation (src/render/
-// topology.ts), verified against the desktop engine by the parity test.
-// Not yet implemented: World Grid placement, Link edges, and the Plot/
-// Surface overlay drawing (their children still place correctly).
+// topology.ts), and World Grid (type 6) children place by geography —
+// both verified against the desktop engine by the parity test.
+// Not yet implemented: Link edges and the Plot/Surface overlay drawing
+// (their children still place correctly).
 
 import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
-import { NodeType } from '../gv/types'
+import { NodeType, Topo } from '../gv/types'
+import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { createGlyphObject, createPickProxy } from './glyphGeometry'
 import { localRotationMatrix } from './rotation'
 import { topoBaseRotation, topoOffset } from './topology'
+import { createWorldGridObject } from './worldGridGeometry'
 
 /** Desktop "Global Scale" B — the unscaled base glyph size. */
 export const BASE_SCALE = 1.0
@@ -40,22 +43,84 @@ export function applyFrameTransform(
   node: GvNode,
   parentGv: GvNode | null,
 ): void {
-  const parentTopo = parentGv ? parentGv.topo : -1
-  frame.position.copy(
-    topoOffset({
-      parentTopo,
-      tx: node.translate.x,
-      ty: node.translate.y,
-      tz: node.translate.z,
-      parentRatio: parentGv?.ratio ?? 0,
-      subspace: node.subspace,
-      baseScale: BASE_SCALE,
-    }),
+  frame.position.copy(framePosition(node, parentGv))
+  const rotation = frameBaseRotation(node, parentGv).multiply(
+    localRotationMatrix(node.rotate.x, node.rotate.y, node.rotate.z, node.rotationMode),
   )
-  const rotation = topoBaseRotation(parentTopo, node.translate.x, node.translate.y, node.subspace)
-    .multiply(localRotationMatrix(node.rotate.x, node.rotate.y, node.rotate.z, node.rotationMode))
   frame.quaternion.setFromRotationMatrix(rotation)
-  frame.scale.set(node.scale.x, node.scale.y, node.scale.z)
+  // A World Grid's own scale must not stretch its children (the ANTz Grid
+  // rule), so its frame carries scale (1, 1, 1); the scale reaches its
+  // rendered plate via gridDrawScale on the glyph and its children's
+  // positions via the per-axis re-spacing in framePosition.
+  if (node.type === NodeType.WorldGrid) {
+    frame.scale.set(1, 1, 1)
+  } else {
+    frame.scale.set(node.scale.x, node.scale.y, node.scale.z)
+  }
+}
+
+/**
+ * The node's local-frame position. Children of a World Grid place by
+ * geography, regardless of the grid row's own topo field: flat → Cartesian
+ * recentered on the extents window's midpoint; globe → KML lon/lat/elevation
+ * on the 180/π sphere. The grid's per-axis scale re-spaces these offsets
+ * here (its frame carries no scale — see applyFrameTransform).
+ */
+function framePosition(node: GvNode, parentGv: GvNode | null): THREE.Vector3 {
+  if (parentGv && parentGv.type === NodeType.WorldGrid) {
+    let offset: THREE.Vector3
+    if (gridIsGlobe(parentGv)) {
+      offset = topoOffset({
+        parentTopo: Topo.Sphere,
+        tx: node.translate.x,
+        ty: node.translate.y,
+        tz: node.translate.z,
+        parentRatio: 0,
+        subspace: node.subspace,
+        baseScale: GRID_GLOBE_RADIUS,
+      })
+    } else {
+      const c = gridCenter(parentGv)
+      offset = new THREE.Vector3(
+        node.translate.x - c.lon,
+        node.translate.y - c.lat,
+        node.translate.z,
+      )
+    }
+    return offset.multiply(
+      new THREE.Vector3(parentGv.scale.x, parentGv.scale.y, parentGv.scale.z),
+    )
+  }
+  return topoOffset({
+    parentTopo: parentGv ? parentGv.topo : -1,
+    tx: node.translate.x,
+    ty: node.translate.y,
+    tz: node.translate.z,
+    parentRatio: parentGv?.ratio ?? 0,
+    subspace: node.subspace,
+    baseScale: BASE_SCALE,
+  })
+}
+
+/**
+ * The outward-orientation scaffold premultiplied onto the node's own
+ * rotation: the parent topo's base rotation, with the World Grid override —
+ * flat-grid children take none (their placement is plain Cartesian), globe
+ * children the TOPO_SPHERE outward scaffold. Shared with the rotate gizmo,
+ * which strips it before decomposing a dragged quaternion.
+ */
+export function frameBaseRotation(node: GvNode, parentGv: GvNode | null): THREE.Matrix4 {
+  if (parentGv && parentGv.type === NodeType.WorldGrid) {
+    return gridIsGlobe(parentGv)
+      ? topoBaseRotation(Topo.Sphere, node.translate.x, node.translate.y, node.subspace)
+      : new THREE.Matrix4()
+  }
+  return topoBaseRotation(
+    parentGv ? parentGv.topo : -1,
+    node.translate.x,
+    node.translate.y,
+    node.subspace,
+  )
 }
 
 export interface SceneBuildResult {
@@ -118,17 +183,6 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
     }
     visited.add(node.id)
 
-    if (node.type === NodeType.WorldGrid) {
-      warnings.add(
-        `Node ${node.id}: World Grid placement is not implemented yet; treated as a plain glyph.`,
-      )
-    }
-    if (parentGv?.type === NodeType.WorldGrid) {
-      warnings.add(
-        `Node ${node.id}: children of World Grid nodes place by grid extents, which is not implemented yet.`,
-      )
-    }
-
     const frame = new THREE.Object3D()
     frame.name = `gv:${node.id}`
     frame.userData.nodeId = node.id
@@ -145,7 +199,19 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
       warnings.add(`Node ${node.id}: Link nodes are not rendered yet.`)
     }
 
-    if (drawable) {
+    if (drawable && node.type === NodeType.WorldGrid) {
+      // Bespoke draw path: ±1-unit plate/globe scaled by the RAW node scale
+      // times the shape's half-spans — no base_scale, no 0.2 floor, so the
+      // surface sits exactly under the children it frames. Never pickable
+      // (no proxy); a solid surface still occludes picking.
+      const glyph = createWorldGridObject(node)
+      const s = gridDrawScale(node)
+      glyph.scale.set(s.x, s.y, s.z)
+      glyph.name = 'glyph'
+      glyph.userData.isGlyph = true
+      frame.add(glyph)
+      drawnCount++
+    } else if (drawable) {
       const glyph = createGlyphObject(node.geometry, {
         color: new THREE.Color(node.color.r / 255, node.color.g / 255, node.color.b / 255),
         opacity: node.color.a / 255,

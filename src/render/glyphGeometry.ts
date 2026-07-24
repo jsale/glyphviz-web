@@ -245,7 +245,7 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
 // mesh per glyph: the renderer skips visible=false objects but the raycaster
 // does not, giving the same "solid silhouette" hit volume.
 
-const WIRE_TO_SOLID: Record<number, number> = {
+export const WIRE_TO_SOLID: Record<number, number> = {
   [Geometry.CubeWire]: Geometry.CubeSolid,
   [Geometry.SphereWire]: Geometry.SphereSolid,
   [Geometry.ConeWire]: Geometry.ConeSolid,

@@ -7,22 +7,25 @@ import type { NewObjectDefaults } from './gv/createNode'
 import { parseGvNodeCsv } from './gv/nodeCsv'
 import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOps'
 import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
-import { GEOMETRY_NAMES, Geometry, TOPO_NAMES } from './gv/types'
+import { GEOMETRY_NAMES, Geometry, NodeType, TOPO_NAMES, Topo } from './gv/types'
+import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
-import { applyFrameTransform, BASE_SCALE, buildScene } from './render/buildScene'
+import { Backdrop } from './render/backdrop'
+import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
 import { pickNodeId, Selection } from './render/picking'
 import { invertLocalRotation } from './render/rotationInverse'
-import { topoBaseRotation } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { Inspector } from './ui/inspector'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
+import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 
-// Parse a gv_node.csv, render it with the full topology placement math
-// (verified against the desktop engine by src/render/parity.test.ts), orbit
-// camera, click-to-select with an editable inspector, gizmo dragging
-// (move/rotate/scale), save back to CSV. Still to come: World Grid, Link
-// edges, Plot/Surface overlays, textures, tags.
+// Parse a gv_node.csv, render it with the full topology placement math and
+// World Grid geographic placement (verified against the desktop engine by
+// src/render/parity.test.ts), orbit camera, click-to-select with an editable
+// inspector, gizmo dragging (move/rotate/scale), save back to CSV. Grids are
+// selected with the G key, never by click. Still to come: Link edges,
+// Plot/Surface overlays, textures, tags.
 
 const BUILT_IN_SCENES: Record<string, { csv: string; filename: string }> = {
   'Topology example (all 18 topologies)': {
@@ -30,6 +33,10 @@ const BUILT_IN_SCENES: Record<string, { csv: string; filename: string }> = {
     filename: 'topology_example_gv_node.csv',
   },
   'Cartesian example': { csv: cartesianCsv, filename: 'cartesian_example_gv_node.csv' },
+  'World Grid example (flat, region, globe)': {
+    csv: worldGridCsv,
+    filename: 'world_grid_example_gv_node.csv',
+  },
 }
 
 // GlyphViz worlds are Z-up (ANTz convention).
@@ -54,6 +61,11 @@ scene.add(key)
 
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
+
+// Desktop-style procedural backdrop: the "infinite" reference grid (hidden
+// once the scene contains a real World Grid) and the RGB origin axes.
+const backdrop = new Backdrop()
+scene.add(backdrop.group)
 
 // --- HUD -------------------------------------------------------------------
 
@@ -177,9 +189,24 @@ function setSelected(nodeId: number | null) {
     inspector.hide()
     return
   }
-  const frame = currentRoot.getObjectByName(`gv:${node.id}`)
-  if (frame) gizmo.attach(frame)
+  // No gizmo on World Grids (simplest default): their frame deliberately
+  // carries no scale, so gizmo modes would fight it — edit grids through
+  // the inspector instead, like the desktop's panel/table.
+  if (node.type === NodeType.WorldGrid) {
+    gizmo.detach()
+  } else {
+    const frame = currentRoot.getObjectByName(`gv:${node.id}`)
+    if (frame) gizmo.attach(frame)
+  }
   inspector.show(node, worldPosOf(node.id))
+}
+
+/** G key, desktop-style: select the first World Grid, or cycle to the next. */
+function cycleGridSelection() {
+  const grids = currentNodes.filter((n) => n.type === NodeType.WorldGrid)
+  if (grids.length === 0) return
+  const at = grids.findIndex((n) => n.id === selection.id)
+  setSelected(grids[(at + 1) % grids.length].id)
 }
 
 // --- Scene loading -----------------------------------------------------------
@@ -217,6 +244,9 @@ function rebuildScene(fitCamera: boolean) {
   scene.add(currentRoot)
   scene.background = built.background
   nodesById = new Map(currentNodes.map((n) => [n.id, n]))
+  // A real World Grid replaces the procedural reference grid as the plane
+  // of reference (its lattice has meaningful spacing; the backdrop's not).
+  backdrop.showReferenceGrid = !currentNodes.some((n) => n.type === NodeType.WorldGrid)
 
   hudScene.textContent = `${currentDisplayName} — ${currentNodes.length} node(s), ${built.drawnCount} drawn`
   showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
@@ -321,6 +351,7 @@ window.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName
   if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
   if (e.key === 'Escape') setSelected(null)
+  else if (e.key === 'g' || e.key === 'G') cycleGridSelection()
   else if (e.key === 'w' || e.key === 'W') setGizmoMode('translate')
   else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate')
   else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
@@ -395,13 +426,33 @@ gizmo.addEventListener('dragging-changed', (e) => {
   }
 })
 
+// A grid child's frame position is diag(gridScale)·offset (the grid's scale
+// re-spaces positions without living on its frame) — strip that re-spacing
+// to work in offset space, holding a zero-scale axis at 0.
+function gridOffsetSpace(v: THREE.Vector3, grid: GvNode): THREE.Vector3 {
+  const d = (p: number, s: number) => (Math.abs(s) < 1e-12 ? 0 : p / s)
+  return new THREE.Vector3(d(v.x, grid.scale.x), d(v.y, grid.scale.y), d(v.z, grid.scale.z))
+}
+
 gizmo.addEventListener('objectChange', () => {
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
   const frame = gizmo.object
   if (!node || !frame) return
   const parentGv = parentOf(node)
-  const parentTopo = parentGv ? parentGv.topo : -1
-  const parentRatio = parentGv?.ratio ?? 0
+  // Children of a World Grid invert through geography, regardless of the
+  // grid row's own topo field: a globe is exactly the Sphere topology at
+  // radius 180/π; a flat grid is Cartesian recentered on the window midpoint.
+  const gridParent = parentGv?.type === NodeType.WorldGrid ? parentGv : null
+  const gridGlobe = gridParent !== null && gridIsGlobe(gridParent)
+  const parentTopo = gridParent
+    ? gridGlobe
+      ? Topo.Sphere
+      : Topo.None
+    : parentGv
+      ? parentGv.topo
+      : -1
+  const parentRatio = gridParent ? 0 : (parentGv?.ratio ?? 0)
+  const baseScale = gridGlobe ? GRID_GLOBE_RADIUS : BASE_SCALE
 
   if (gizmo.mode === 'scale') {
     node.scale.x = frame.scale.x
@@ -414,7 +465,7 @@ gizmo.addEventListener('objectChange', () => {
   if (gizmo.mode === 'rotate') {
     // Strip the outward base rotation (constant during a rotate drag —
     // it depends only on translate), decompose the node's own rotation.
-    const own = topoBaseRotation(parentTopo, node.translate.x, node.translate.y, node.subspace)
+    const own = frameBaseRotation(node, parentGv)
       .transpose() // inverse of a pure rotation
       .multiply(new THREE.Matrix4().makeRotationFromQuaternion(frame.quaternion))
     const r = invertLocalRotation(own, node.rotate, node.rotationMode)
@@ -434,21 +485,28 @@ gizmo.addEventListener('objectChange', () => {
     dragField = pickDominantField(
       parentTopo,
       dragStartTranslate,
-      motion,
+      gridParent ? gridOffsetSpace(motion, gridParent) : motion,
       parentRatio,
       node.subspace,
-      BASE_SCALE,
+      baseScale,
     )
   }
 
   const inverted = invertTopoOffset({
     parentTopo,
-    offset: frame.position,
+    offset: gridParent ? gridOffsetSpace(frame.position, gridParent) : frame.position,
     prev: node.translate, // last committed tick — keeps unwrap continuous
     parentRatio,
     subspace: node.subspace,
-    baseScale: BASE_SCALE,
+    baseScale,
   })
+  if (gridParent && !gridGlobe) {
+    // Cartesian inversion recovered the window-relative offset; translate
+    // fields are absolute lon/lat.
+    const c = gridCenter(gridParent)
+    inverted.x += c.lon
+    inverted.y += c.lat
+  }
   const t =
     dragField === null ? inverted : { ...dragStartTranslate, [dragField]: inverted[dragField] }
 
@@ -548,6 +606,12 @@ deleteButton.addEventListener('click', deleteSelection)
 // --- Boot ---------------------------------------------------------------------
 
 {
+  // ?scene=<substring> deep-links a built-in scene (case-insensitive).
+  const wanted = new URLSearchParams(location.search).get('scene')?.toLowerCase()
+  const match = wanted
+    ? Object.keys(BUILT_IN_SCENES).find((name) => name.toLowerCase().includes(wanted))
+    : undefined
+  if (match) exampleSelect.value = match
   const builtIn = BUILT_IN_SCENES[exampleSelect.value]
   loadCsv(builtIn.csv, exampleSelect.value, builtIn.filename)
 }
@@ -560,5 +624,6 @@ window.addEventListener('resize', () => {
 
 renderer.setAnimationLoop(() => {
   controls.update()
+  backdrop.update(camera.position.distanceTo(controls.target))
   renderer.render(scene, camera)
 })

@@ -15,10 +15,14 @@ export const SELECTION_COLOR = new THREE.Color(1.0, 0.95, 0.1)
 /**
  * Nearest picked node id along the ray, or null. Only pick-proxy hits count
  * (mirrors the desktop's solid-silhouette pick pass); World/Camera/Link and
- * hidden nodes have no proxy, so they are unpickable by construction.
+ * hidden nodes have no proxy, so they are unpickable by construction. World
+ * Grids are never pickable either (select them with the G key), but a SOLID
+ * grid surface still occludes — a click can't reach a glyph hidden behind
+ * the plate/globe; wire grids don't occlude.
  */
 export function pickNodeId(raycaster: THREE.Raycaster, root: THREE.Object3D): number | null {
   for (const hit of raycaster.intersectObject(root, true)) {
+    if (hit.object.userData.isGridOccluder) return null
     if (!hit.object.userData.isPickProxy) continue
     let o: THREE.Object3D | null = hit.object
     while (o && o.userData.nodeId === undefined) o = o.parent

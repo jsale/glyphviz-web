@@ -171,3 +171,96 @@ describe('buildScene drawing rules', () => {
     expect(warnings).toEqual([])
   })
 })
+
+describe('World Grid placement and drawing', () => {
+  const flatGrid = (overrides: Partial<GvNode> = {}) =>
+    makeNode({ id: 1, type: NodeType.WorldGrid, geometry: Geometry.GridWire, ...overrides })
+
+  it('is a 1:1 frame with the default window at the origin', () => {
+    const { root } = buildScene([
+      flatGrid(),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 180, y: 90, z: 0 } }),
+    ])
+    expectVec(worldPosition(root, 2), [180, 90, 0])
+  })
+
+  it('recenters a region window on its midpoint', () => {
+    const extras = {
+      trigger_lo_x: '-125',
+      trigger_hi_x: '-66',
+      trigger_lo_y: '24',
+      trigger_hi_y: '49',
+    }
+    const { root } = buildScene([
+      flatGrid({ extras }),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: -95.5, y: 36.5, z: 0 } }),
+      makeNode({ id: 3, parentId: 1, branchLevel: 1, translate: { x: -66, y: 49, z: 0 } }),
+    ])
+    expectVec(worldPosition(root, 2), [0, 0, 0])
+    expectVec(worldPosition(root, 3), [29.5, 12.5, 0])
+  })
+
+  it('ignores the grid row’s own topo field for child placement', () => {
+    const { root } = buildScene([
+      flatGrid({ topo: Topo.Sphere }),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 10, y: 20, z: 5 } }),
+    ])
+    expectVec(worldPosition(root, 2), [10, 20, 5])
+  })
+
+  it('re-spaces child positions with grid scale but never their size or subtree spacing', () => {
+    const { root } = buildScene([
+      flatGrid({ scale: { x: 2, y: 2, z: 1 } }),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 10, y: 20, z: 5 } }),
+      makeNode({ id: 3, parentId: 2, branchLevel: 2, translate: { x: 0, y: 0, z: 7 } }),
+    ])
+    expectVec(worldPosition(root, 2), [20, 40, 5])
+    // The engine-checked ANTz rule: 7 above its parent, not 14.
+    expectVec(worldPosition(root, 3), [20, 40, 12])
+    root.updateMatrixWorld(true)
+    const drawn = glyphOf(root, 2)!.getWorldScale(new THREE.Vector3())
+    expectVec([drawn.x, drawn.y, drawn.z], [1, 1, 1])
+  })
+
+  it('places globe children by KML lon/lat on the 180/π sphere, absolute (no recentering)', () => {
+    const R = 180 / Math.PI
+    const extras = {
+      // A region window must NOT recenter globe children.
+      trigger_lo_x: '-125',
+      trigger_hi_x: '-66',
+      trigger_lo_y: '24',
+      trigger_hi_y: '49',
+    }
+    const { root } = buildScene([
+      flatGrid({ geometry: Geometry.SphereSolid, extras }),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 0, y: 0, z: 0 } }),
+      makeNode({ id: 3, parentId: 1, branchLevel: 1, translate: { x: 90, y: 0, z: 0 } }),
+      makeNode({ id: 4, parentId: 1, branchLevel: 1, translate: { x: 0, y: 90, z: 10 } }),
+    ])
+    expectVec(worldPosition(root, 2), [R, 0, 0])
+    expectVec(worldPosition(root, 3), [0, R, 0])
+    expectVec(worldPosition(root, 4), [0, 0, R + 10])
+  })
+
+  it('draws the plate at raw scale × window half-spans with no 0.2 floor', () => {
+    const { root, drawnCount } = buildScene([flatGrid({ scale: { x: 0.05, y: 0.05, z: 0.05 } })])
+    expect(drawnCount).toBe(1)
+    root.updateMatrixWorld(true)
+    const drawn = glyphOf(root, 1)!.getWorldScale(new THREE.Vector3())
+    expectVec([drawn.x, drawn.y, drawn.z], [9, 4.5, 0.05])
+  })
+
+  it('marks solid surfaces as pick occluders; wire grids have none; neither has a proxy', () => {
+    const collect = (nodes: GvNode[], key: string) => {
+      const { root } = buildScene(nodes)
+      const found: THREE.Object3D[] = []
+      root.traverse((o) => {
+        if (o.userData[key]) found.push(o)
+      })
+      return found
+    }
+    expect(collect([flatGrid({ geometry: Geometry.GridSolid })], 'isGridOccluder')).toHaveLength(1)
+    expect(collect([flatGrid()], 'isGridOccluder')).toHaveLength(0)
+    expect(collect([flatGrid({ geometry: Geometry.GridSolid })], 'isPickProxy')).toHaveLength(0)
+  })
+})
