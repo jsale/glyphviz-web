@@ -13,3 +13,57 @@ html, body {
 canvas {
   display: block;
 }
+
+#hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  max-width: 380px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(10, 12, 20, 0.72);
+  color: #d8dce6;
+  font: 12px/1.5 system-ui, sans-serif;
+  user-select: none;
+}
+
+#hud-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+#hud-scene {
+  color: #9aa3b5;
+  margin-bottom: 4px;
+}
+
+.hud-error {
+  color: #ff7a7a;
+}
+
+.hud-warning {
+  color: #e6c363;
+}
+
+#hud-open {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 3px 10px;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #cfd6e4;
+}
+
+#hud-open:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#hud-open input {
+  display: none;
+}
+
+#hud-hint {
+  color: #6c7488;
+  margin-top: 2px;
+}
