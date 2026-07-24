@@ -48,21 +48,32 @@ something to decide now).
 1. ~~Scaffold: Vite + TypeScript + Three.js, CI (typecheck + build), this
    file.~~ Done — smoke-test cube in `src/main.ts` proves the pipeline
    renders. No CSV loading yet.
-2. `gv_node.csv` parser, validated against the 20-required-column rule in
-   `node-csv-format.md`. Not the full 94-column dialect — just what GlyphViz
-   itself requires.
-3. Minimal vertical slice: load a parsed scene, render **one** topology
-   (start with plain Cartesian/None — no topology placement math yet),
-   orbit camera. Resist scoping in more topologies, Channels, tags, or World
-   Grid until this slice works end to end.
-4. Cross-implementation verification harness: render the same example CSV in
-   both this project and the desktop GlyphViz app, diff computed node
-   world-transforms numerically. Set this up early — topology math is exactly
-   the kind of thing that silently drifts in a reimplementation, and it
-   should be caught per-topology, not after several are "done."
-5. Pick one existing (or the forthcoming "Getting Started") example as the
-   first parity target rather than open-endedly porting everything.
-6. WebXR/stereo: deliberately deferred until basic parity exists.
+2. ~~`gv_node.csv` parser, validated against the 20-required-column rule in
+   `node-csv-format.md`.~~ Done — `src/gv/`, minimal dialect only, unknown
+   columns preserved in `extras`.
+3. ~~Minimal vertical slice: load a parsed scene, render one topology
+   (plain Cartesian/None), orbit camera.~~ Done — `src/render/`, verified
+   live on iluvdata.org.
+4. ~~Cross-implementation verification harness + topology placement math.~~
+   Done — all 18 topologies in `src/render/topology.ts`;
+   `tools/dump_world_transforms.py` dumps the desktop engine's transforms,
+   `src/render/parity.test.ts` diffs all 109 Topology_Example nodes at 1e-6.
+   Regenerate the vendored JSON when either side's placement math changes.
+5. ~~Pick one example as the first parity target.~~ Satisfied by step 4:
+   Topology_Example is the parity target and the default built-in scene.
+6. Interaction phase (agreed 2026-07-24, in order):
+   a. Picking + inspection (read-only): raycast selection, highlight,
+      node-properties panel. Debugging tool first.
+   b. Property-panel editing + CSV **writer** (round-trip: desktop must load
+      a web-saved file; gives the parity harness a second direction).
+   c. Direct mouse manipulation (TransformControls gizmos). Topology-aware
+      dragging needs the *inverse* placement mapping (world → lon/lat/alt
+      etc. in the parent's frame) — treat as its own design conversation;
+      Cartesian-parent dragging may ship earlier.
+7. Still-unimplemented format features, scheduled opportunistically: World
+   Grid placement, Link edges, Plot/Surface overlays, textures, tags/labels,
+   Channels animation.
+8. WebXR/stereo: deliberately deferred until basic parity exists.
 
 ## Collaboration notes
 
