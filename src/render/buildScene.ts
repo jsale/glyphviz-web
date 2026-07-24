@@ -29,6 +29,35 @@ export const DEFAULT_BACKGROUND = new THREE.Color(20 / 255, 20 / 255, 31 / 255)
 /** Node types that are never drawn (their children still are). */
 const NON_VISUAL_TYPES = new Set<number>([NodeType.World, NodeType.Camera])
 
+/**
+ * Set a frame's local TRS from its node row: topology offset for position,
+ * outward base rotation · own rotation, raw scale. Shared by the scene
+ * builder and the drag gizmo (which re-applies it live after mutating
+ * translate).
+ */
+export function applyFrameTransform(
+  frame: THREE.Object3D,
+  node: GvNode,
+  parentGv: GvNode | null,
+): void {
+  const parentTopo = parentGv ? parentGv.topo : -1
+  frame.position.copy(
+    topoOffset({
+      parentTopo,
+      tx: node.translate.x,
+      ty: node.translate.y,
+      tz: node.translate.z,
+      parentRatio: parentGv?.ratio ?? 0,
+      subspace: node.subspace,
+      baseScale: BASE_SCALE,
+    }),
+  )
+  const rotation = topoBaseRotation(parentTopo, node.translate.x, node.translate.y, node.subspace)
+    .multiply(localRotationMatrix(node.rotate.x, node.rotate.y, node.rotate.z, node.rotationMode))
+  frame.quaternion.setFromRotationMatrix(rotation)
+  frame.scale.set(node.scale.x, node.scale.y, node.scale.z)
+}
+
 export interface SceneBuildResult {
   root: THREE.Group
   background: THREE.Color
@@ -75,7 +104,6 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
   }
 
   let drawnCount = 0
-  const rotation = new THREE.Matrix4()
 
   const attach = (
     node: GvNode,
@@ -106,23 +134,7 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
     frame.userData.nodeId = node.id
     // Roots take plain world coordinates (parentTopo −1 → Cartesian fallback,
     // identity base rotation), matching the engine's is_root handling.
-    const parentTopo = parentGv ? parentGv.topo : -1
-    frame.position.copy(
-      topoOffset({
-        parentTopo,
-        tx: node.translate.x,
-        ty: node.translate.y,
-        tz: node.translate.z,
-        parentRatio: parentGv?.ratio ?? 0,
-        subspace: node.subspace,
-        baseScale: BASE_SCALE,
-      }),
-    )
-    rotation
-      .copy(topoBaseRotation(parentTopo, node.translate.x, node.translate.y, node.subspace))
-      .multiply(localRotationMatrix(node.rotate.x, node.rotate.y, node.rotate.z, node.rotationMode))
-    frame.quaternion.setFromRotationMatrix(rotation)
-    frame.scale.set(node.scale.x, node.scale.y, node.scale.z)
+    applyFrameTransform(frame, node, parentGv)
     parent.add(frame)
 
     const cumScale = parentCumScale.clone().multiply(frame.scale)

@@ -1,11 +1,13 @@
 import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { parseGvNodeCsv } from './gv/nodeCsv'
-import type { GvNode, GvParseIssue } from './gv/types'
+import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
-import { buildScene } from './render/buildScene'
+import { applyFrameTransform, BASE_SCALE, buildScene } from './render/buildScene'
 import { pickNodeId, Selection } from './render/picking'
+import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { Inspector } from './ui/inspector'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
@@ -131,14 +133,21 @@ function worldPosOf(nodeId: number): THREE.Vector3 | null {
   return frame ? frame.getWorldPosition(new THREE.Vector3()) : null
 }
 
+function parentOf(node: GvNode): GvNode | null {
+  return node.parentId !== 0 ? (nodesById.get(node.parentId) ?? null) : null
+}
+
 function setSelected(nodeId: number | null) {
   if (!currentRoot) return
   selection.set(currentRoot, nodeId)
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
   if (!node) {
+    gizmo.detach()
     inspector.hide()
     return
   }
+  const frame = currentRoot.getObjectByName(`gv:${node.id}`)
+  if (frame) gizmo.attach(frame)
   inspector.show(node, worldPosOf(node.id))
 }
 
@@ -169,6 +178,7 @@ function rebuildScene(fitCamera: boolean) {
   const prevSelected = selection.id
   const built = buildScene(currentNodes)
   if (currentRoot) {
+    gizmo.detach()
     selection.set(currentRoot, null)
     scene.remove(currentRoot)
   }
@@ -260,6 +270,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y)
   downAt = null
   if (moved > CLICK_SLOP_PX) return
+  // Clicks on (or releases over) a gizmo arrow are drag interactions, not
+  // selection changes.
+  if (gizmo.dragging || gizmo.axis !== null) return
   setSelected(pickAt(e.clientX, e.clientY))
 })
 renderer.domElement.addEventListener('dblclick', (e) => {
@@ -275,6 +288,81 @@ renderer.domElement.addEventListener('dblclick', (e) => {
 })
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.activeElement?.tagName !== 'INPUT') setSelected(null)
+})
+
+// --- Translate gizmo (interaction 6c) ------------------------------------------
+// TransformControls in LOCAL space: thanks to the outward base rotation, the
+// arrows align with the topology's natural directions (normal arrow =
+// altitude, tangent arrows = angles). The gizmo drags the frame along a
+// straight line; each tick we invert that position back into topology
+// coordinates, pin the two fields the drag axis doesn't own (decided once
+// per drag from the placement gradients), and re-apply the frame transform —
+// so the node slides on the topology surface and exactly one CSV field
+// changes per arrow. Children ride along rigidly, matching the engine.
+
+const gizmo = new TransformControls(camera, renderer.domElement)
+gizmo.setMode('translate')
+gizmo.setSpace('local')
+gizmo.setSize(0.8)
+scene.add(gizmo.getHelper())
+
+let dragStartTranslate: Vec3 | null = null
+let dragStartOffset = new THREE.Vector3()
+let dragField: 'x' | 'y' | 'z' | null | 'undecided' = 'undecided'
+
+gizmo.addEventListener('dragging-changed', (e) => {
+  const dragging = (e as unknown as { value: boolean }).value
+  controls.enabled = !dragging
+  const node = selection.id !== null ? nodesById.get(selection.id) : undefined
+  if (dragging && node && gizmo.object) {
+    dragStartTranslate = { ...node.translate }
+    dragStartOffset = gizmo.object.position.clone()
+    dragField = 'undecided'
+  } else if (!dragging) {
+    dragStartTranslate = null
+    // Final commit: full rebuild refreshes glyph draw scale, HUD, halo.
+    if (node) rebuildScene(false)
+  }
+})
+
+gizmo.addEventListener('objectChange', () => {
+  const node = selection.id !== null ? nodesById.get(selection.id) : undefined
+  const frame = gizmo.object
+  if (!node || !frame || !dragStartTranslate) return
+  const parentGv = parentOf(node)
+  const parentTopo = parentGv ? parentGv.topo : -1
+  const parentRatio = parentGv?.ratio ?? 0
+
+  if (dragField === 'undecided') {
+    const motion = frame.position.clone().sub(dragStartOffset)
+    if (motion.lengthSq() < 1e-12) return
+    dragField = pickDominantField(
+      parentTopo,
+      dragStartTranslate,
+      motion,
+      parentRatio,
+      node.subspace,
+      BASE_SCALE,
+    )
+  }
+
+  const inverted = invertTopoOffset({
+    parentTopo,
+    offset: frame.position,
+    prev: node.translate, // last committed tick — keeps unwrap continuous
+    parentRatio,
+    subspace: node.subspace,
+    baseScale: BASE_SCALE,
+  })
+  const t =
+    dragField === null ? inverted : { ...dragStartTranslate, [dragField]: inverted[dragField] }
+
+  node.translate.x = t.x
+  node.translate.y = t.y
+  node.translate.z = t.z
+  // Reproject onto the topology surface and track outward orientation.
+  applyFrameTransform(frame, node, parentGv)
+  inspector.show(node, worldPosOf(node.id))
 })
 
 // --- Boot ---------------------------------------------------------------------

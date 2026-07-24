@@ -66,10 +66,13 @@ something to decide now).
       node-properties panel. Debugging tool first.
    b. Property-panel editing + CSV **writer** (round-trip: desktop must load
       a web-saved file; gives the parity harness a second direction).
-   c. Direct mouse manipulation (TransformControls gizmos). Topology-aware
-      dragging needs the *inverse* placement mapping (world → lon/lat/alt
-      etc. in the parent's frame) — treat as its own design conversation;
-      Cartesian-parent dragging may ship earlier.
+   c. Direct mouse manipulation (TransformControls gizmos). Translate mode
+      shipped (2026-07-24): local-space gizmo + full inverse topology
+      mapping (`src/render/topologyInverse.ts`) with agreed policies —
+      angle unwrap to nearest 360°-equivalent, hold-at-singularities,
+      facet never changes on drag, gradient-picked dominant field pins
+      the other coordinates per drag. Scale and rotate modes remain
+      (rotate needs a Z-X-Z HTR matrix decomposition + gimbal policy).
 7. Still-unimplemented format features, scheduled opportunistically: World
    Grid placement, Link edges, Plot/Surface overlays, textures, tags/labels,
    Channels animation.
