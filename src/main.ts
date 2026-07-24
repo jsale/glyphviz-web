@@ -7,6 +7,8 @@ import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { applyFrameTransform, BASE_SCALE, buildScene } from './render/buildScene'
 import { pickNodeId, Selection } from './render/picking'
+import { invertLocalRotation } from './render/rotationInverse'
+import { topoBaseRotation } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { Inspector } from './ui/inspector'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
@@ -14,9 +16,9 @@ import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
 
 // Parse a gv_node.csv, render it with the full topology placement math
 // (verified against the desktop engine by src/render/parity.test.ts), orbit
-// camera, click-to-select with an editable inspector, save back to CSV.
-// Still to come: World Grid, Link edges, Plot/Surface overlays, textures,
-// tags, gizmo dragging.
+// camera, click-to-select with an editable inspector, gizmo dragging
+// (move/rotate/scale), save back to CSV. Still to come: World Grid, Link
+// edges, Plot/Surface overlays, textures, tags.
 
 const BUILT_IN_SCENES: Record<string, { csv: string; filename: string }> = {
   'Topology example (all 18 topologies)': {
@@ -60,6 +62,11 @@ hud.innerHTML = `
   <div id="hud-warnings"></div>
   <label id="hud-open">Open gv_node.csv<input type="file" accept=".csv,text/csv"></label>
   <button id="hud-save">Save gv_node.csv</button>
+  <div id="hud-modes">
+    <button data-mode="translate" class="active">Move (W)</button>
+    <button data-mode="rotate">Rotate (E)</button>
+    <button data-mode="scale">Scale (R)</button>
+  </div>
   <div id="hud-hint">or drop a CSV anywhere</div>
 `
 app.appendChild(hud)
@@ -287,24 +294,48 @@ renderer.domElement.addEventListener('dblclick', (e) => {
   controls.update()
 })
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && document.activeElement?.tagName !== 'INPUT') setSelected(null)
+  const tag = document.activeElement?.tagName
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
+  if (e.key === 'Escape') setSelected(null)
+  else if (e.key === 'w' || e.key === 'W') setGizmoMode('translate')
+  else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate')
+  else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
 })
 
-// --- Translate gizmo (interaction 6c) ------------------------------------------
+// --- Transform gizmo (interaction 6c) ------------------------------------------
 // TransformControls in LOCAL space: thanks to the outward base rotation, the
-// arrows align with the topology's natural directions (normal arrow =
-// altitude, tangent arrows = angles). The gizmo drags the frame along a
-// straight line; each tick we invert that position back into topology
-// coordinates, pin the two fields the drag axis doesn't own (decided once
-// per drag from the placement gradients), and re-apply the frame transform —
-// so the node slides on the topology surface and exactly one CSV field
-// changes per arrow. Children ride along rigidly, matching the engine.
+// handles align with the topology's natural directions.
+//
+// Translate: the gizmo drags the frame along a straight line; each tick we
+// invert that position back into topology coordinates, pin the two fields
+// the drag axis doesn't own (decided once per drag from the placement
+// gradients), and re-apply the frame transform — so the node slides on the
+// topology surface and exactly one CSV field changes per arrow.
+//
+// Rotate: each tick we strip the topology base rotation off the dragged
+// quaternion and decompose the rest back into rotate_x/y/z per the node's
+// rotation_mode (HTR Z-X-Z or Euler XYZ) with unwrap/branch/gimbal-hold
+// policies (src/render/rotationInverse.ts).
+//
+// Scale: pure local scale — frame.scale maps 1:1 onto scale_x/y/z.
+//
+// In every mode children ride along rigidly, matching the engine.
 
 const gizmo = new TransformControls(camera, renderer.domElement)
 gizmo.setMode('translate')
 gizmo.setSpace('local')
 gizmo.setSize(0.8)
 scene.add(gizmo.getHelper())
+
+type GizmoMode = 'translate' | 'rotate' | 'scale'
+const modeButtons = [...hud.querySelectorAll<HTMLButtonElement>('#hud-modes button')]
+function setGizmoMode(mode: GizmoMode) {
+  gizmo.setMode(mode)
+  for (const b of modeButtons) b.classList.toggle('active', b.dataset.mode === mode)
+}
+for (const b of modeButtons) {
+  b.addEventListener('click', () => setGizmoMode(b.dataset.mode as GizmoMode))
+}
 
 let dragStartTranslate: Vec3 | null = null
 let dragStartOffset = new THREE.Vector3()
@@ -315,9 +346,11 @@ gizmo.addEventListener('dragging-changed', (e) => {
   controls.enabled = !dragging
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
   if (dragging && node && gizmo.object) {
-    dragStartTranslate = { ...node.translate }
-    dragStartOffset = gizmo.object.position.clone()
-    dragField = 'undecided'
+    if (gizmo.mode === 'translate') {
+      dragStartTranslate = { ...node.translate }
+      dragStartOffset = gizmo.object.position.clone()
+      dragField = 'undecided'
+    }
   } else if (!dragging) {
     dragStartTranslate = null
     // Final commit: full rebuild refreshes glyph draw scale, HUD, halo.
@@ -328,11 +361,36 @@ gizmo.addEventListener('dragging-changed', (e) => {
 gizmo.addEventListener('objectChange', () => {
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
   const frame = gizmo.object
-  if (!node || !frame || !dragStartTranslate) return
+  if (!node || !frame) return
   const parentGv = parentOf(node)
   const parentTopo = parentGv ? parentGv.topo : -1
   const parentRatio = parentGv?.ratio ?? 0
 
+  if (gizmo.mode === 'scale') {
+    node.scale.x = frame.scale.x
+    node.scale.y = frame.scale.y
+    node.scale.z = frame.scale.z
+    inspector.show(node, worldPosOf(node.id))
+    return
+  }
+
+  if (gizmo.mode === 'rotate') {
+    // Strip the outward base rotation (constant during a rotate drag —
+    // it depends only on translate), decompose the node's own rotation.
+    const own = topoBaseRotation(parentTopo, node.translate.x, node.translate.y, node.subspace)
+      .transpose() // inverse of a pure rotation
+      .multiply(new THREE.Matrix4().makeRotationFromQuaternion(frame.quaternion))
+    const r = invertLocalRotation(own, node.rotate, node.rotationMode)
+    node.rotate.x = r.x
+    node.rotate.y = r.y
+    node.rotate.z = r.z
+    // Snap the frame to the exact CSV-representable rotation.
+    applyFrameTransform(frame, node, parentGv)
+    inspector.show(node, worldPosOf(node.id))
+    return
+  }
+
+  if (!dragStartTranslate) return
   if (dragField === 'undecided') {
     const motion = frame.position.clone().sub(dragStartOffset)
     if (motion.lengthSq() < 1e-12) return

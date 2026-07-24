@@ -74,6 +74,32 @@ canvas {
   display: none;
 }
 
+#hud-modes {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+#hud-modes button {
+  flex: 1;
+  padding: 3px 0;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-modes button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#hud-modes button.active {
+  background: #2a3350;
+  border-color: #5a6a96;
+}
+
 #hud-hint {
   color: #6c7488;
   margin-top: 2px;

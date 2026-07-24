@@ -66,13 +66,18 @@ something to decide now).
       node-properties panel. Debugging tool first.
    b. Property-panel editing + CSV **writer** (round-trip: desktop must load
       a web-saved file; gives the parity harness a second direction).
-   c. Direct mouse manipulation (TransformControls gizmos). Translate mode
-      shipped (2026-07-24): local-space gizmo + full inverse topology
-      mapping (`src/render/topologyInverse.ts`) with agreed policies —
-      angle unwrap to nearest 360°-equivalent, hold-at-singularities,
-      facet never changes on drag, gradient-picked dominant field pins
-      the other coordinates per drag. Scale and rotate modes remain
-      (rotate needs a Z-X-Z HTR matrix decomposition + gimbal policy).
+   c. Direct mouse manipulation (TransformControls gizmos) — all three
+      modes shipped 2026-07-24, W/E/R keys + HUD buttons switch modes.
+      Translate: local-space gizmo + full inverse topology mapping
+      (`src/render/topologyInverse.ts`) with agreed policies — angle
+      unwrap to nearest 360°-equivalent, hold-at-singularities, facet
+      never changes on drag, gradient-picked dominant field pins the
+      other coordinates per drag. Rotate: exact inverse decomposition
+      (`src/render/rotationInverse.ts`) of both rotation modes (HTR
+      Z-X-Z, Euler XYZ) with unwrap, nearest-branch continuity, and
+      gimbal hold (roll keeps its previous value at singular tilt/pitch;
+      heading absorbs the drag). Scale: pure local scale, 1:1 onto
+      scale_x/y/z.
 7. Still-unimplemented format features, scheduled opportunistically: World
    Grid placement, Link edges, Plot/Surface overlays, textures, tags/labels,
    Channels animation.
