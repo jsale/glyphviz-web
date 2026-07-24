@@ -86,6 +86,11 @@ something to decide now).
       topology/scale/color). Factory in `src/gv/createNode.ts` — fresh
       nodes are Euler rotation_mode 0 (desktop dataclass default), id =
       max + 1, never 0.
+   e. Delete + tree navigation (shipped 2026-07-24), desktop parity:
+      Delete/Backspace + HUD button cascade-delete the selected subtree
+      (children never reparented); Up/Down walk parent/first-child,
+      Tab/Shift+Tab cycle visual siblings in row order (all roots at
+      level 0), wrapping. `src/gv/treeOps.ts`.
 7. Still-unimplemented format features, scheduled opportunistically: World
    Grid placement, Link edges, Plot/Surface overlays, textures, tags/labels,
    Channels animation.

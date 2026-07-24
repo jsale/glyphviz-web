@@ -5,6 +5,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
 import { parseGvNodeCsv } from './gv/nodeCsv'
+import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOps'
 import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
 import { GEOMETRY_NAMES, Geometry, TOPO_NAMES } from './gv/types'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
@@ -79,6 +80,7 @@ hud.innerHTML = `
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
     <div class="hud-create-row"><span>Scale</span><input id="hud-new-scale" type="number" min="0.001" step="0.1" value="1"></div>
     <div class="hud-create-row"><span>Color</span><input id="hud-new-color" type="color" value="#c8c8c8"></div>
+    <button id="hud-delete" title="Delete the selected node and all of its descendants — children are never reparented." disabled>Delete (Del)</button>
   </div>
   <div id="hud-hint">or drop a CSV anywhere</div>
 `
@@ -94,6 +96,7 @@ const newGeoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-geo')!
 const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
 const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
+const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
 
 for (const name of Object.keys(BUILT_IN_SCENES)) {
   const option = document.createElement('option')
@@ -168,6 +171,7 @@ function setSelected(nodeId: number | null) {
   selection.set(currentRoot, nodeId)
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
   newChildButton.disabled = !node
+  deleteButton.disabled = !node
   if (!node) {
     gizmo.detach()
     inspector.hide()
@@ -322,6 +326,17 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
   else if (e.key === 'N' && e.shiftKey) addChildOfSelection()
   else if (e.key === 'n') addNode()
+  else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelection()
+  else if (e.key === 'Tab') {
+    e.preventDefault() // keep focus out of the HUD; Tab is sibling cycling
+    navTo(navSibling(currentNodes, selectedNode(), e.shiftKey ? -1 : 1))
+  } else if (e.key === 'ArrowUp' && selectedNode()) {
+    e.preventDefault()
+    navTo(navParent(currentNodes, selectedNode()!))
+  } else if (e.key === 'ArrowDown' && selectedNode()) {
+    e.preventDefault()
+    navTo(navFirstChild(currentNodes, selectedNode()!))
+  }
 })
 
 // --- Transform gizmo (interaction 6c) ------------------------------------------
@@ -504,6 +519,31 @@ function addNode() {
 
 newNodeButton.addEventListener('click', addNode)
 newChildButton.addEventListener('click', addChildOfSelection)
+
+// --- Delete + tree navigation --------------------------------------------------
+// Desktop parity: Delete/Backspace removes the selected node AND its whole
+// subtree (children are never reparented). Up/Down walk parent/first-child,
+// Tab/Shift+Tab cycle visual siblings in row order (all roots at level 0),
+// wrapping — Tab with nothing selected starts at the first visual node.
+
+function selectedNode(): GvNode | null {
+  return selection.id !== null ? (nodesById.get(selection.id) ?? null) : null
+}
+
+function deleteSelection() {
+  const node = selectedNode()
+  if (!node) return
+  currentNodes = deleteSubtree(currentNodes, node.id)
+  // rebuildScene re-selects the previous id, finds it gone, and cleanly
+  // detaches the gizmo + hides the inspector.
+  rebuildScene(false)
+}
+
+function navTo(node: GvNode | null) {
+  if (node) setSelected(node.id)
+}
+
+deleteButton.addEventListener('click', deleteSelection)
 
 // --- Boot ---------------------------------------------------------------------
 

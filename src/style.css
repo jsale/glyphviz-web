@@ -165,6 +165,28 @@ canvas {
   background: none;
 }
 
+#hud-delete {
+  width: 100%;
+  margin-top: 6px;
+  padding: 3px 0;
+  border: 1px solid #5a3a42;
+  border-radius: 6px;
+  background: none;
+  color: #e0a0a8;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-delete:hover:not(:disabled) {
+  background: rgba(255, 122, 122, 0.12);
+}
+
+#hud-delete:disabled {
+  color: #6c7488;
+  border-color: #3a4256;
+  cursor: default;
+}
+
 #hud-hint {
   color: #6c7488;
   margin-top: 2px;
