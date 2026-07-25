@@ -64,6 +64,7 @@ import { Panel } from './ui/panel'
 import { SelectionPanel } from './ui/selectionPanel'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import linkCsv from './examples/link_example_gv_node.csv?raw'
+import plotSurfaceCsv from './examples/plot_surface_example_gv_node.csv?raw'
 import sineWaveCsv from './examples/sine_wave_example_gv_node.csv?raw'
 import sineWaveTagCsv from './examples/sine_wave_example_gv_tag.csv?raw'
 import sineWaveChMapCsv from './examples/sine_wave_example_gv_ch-map.csv?raw'
@@ -87,7 +88,10 @@ import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 // time series over its nodes (Space plays, Shift+Space stops), and the ANTz
 // *_rate fields integrate continuously whether or not a channel drives them.
 //
-// Still to come: select by tag text, a Node Table panel, Plot/Surface overlays.
+// Plot (16) polylines and Surface (17) quad meshes draw over their children
+// (src/render/topologyOverlay.ts), refreshed each frame like the Link edges.
+//
+// Still to come: select by tag text, a Node Table panel.
 
 interface BuiltInScene {
   csv: string
@@ -112,6 +116,10 @@ const BUILT_IN_SCENES: Record<string, BuiltInScene> = {
     filename: 'world_grid_example_gv_node.csv',
   },
   'Link example (lines + prisms)': { csv: linkCsv, filename: 'link_example_gv_node.csv' },
+  'Plot & Surface example': {
+    csv: plotSurfaceCsv,
+    filename: 'plot_surface_example_gv_node.csv',
+  },
   'Sine wave example (Channels animation)': {
     csv: sineWaveCsv,
     tag: sineWaveTagCsv,
@@ -671,6 +679,7 @@ function openSelectedLink() {
 
 let currentRoot: THREE.Group | null = null
 let currentLinks: SceneBuildResult['links'] | null = null
+let currentOverlays: SceneBuildResult['overlays'] | null = null
 let currentFrames: SceneBuildResult['frames'] | null = null
 let currentNodes: GvNode[] = []
 let currentDisplayName = ''
@@ -868,13 +877,15 @@ function rebuildScene(fitCamera: boolean) {
   // The animated slice belongs to one build: it holds that build's Object3Ds
   // and its own material clones.
   dynamic?.dispose()
+  currentOverlays?.dispose()
   currentRoot = built.root
   currentLinks = built.links
+  currentOverlays = built.overlays
   currentFrames = built.frames
-  currentLinks.setResolution(
-    window.innerWidth * window.devicePixelRatio,
-    window.innerHeight * window.devicePixelRatio,
-  )
+  const pixelWidth = window.innerWidth * window.devicePixelRatio
+  const pixelHeight = window.innerHeight * window.devicePixelRatio
+  currentLinks.setResolution(pixelWidth, pixelHeight)
+  currentOverlays.setResolution(pixelWidth, pixelHeight)
   scene.add(currentRoot)
   scene.background = built.background
   nodesById = new Map(currentNodes.map((n) => [n.id, n]))
@@ -905,6 +916,10 @@ function rebuildScene(fitCamera: boolean) {
     `${currentNodes.length} node(s)`,
     `${built.drawnCount} drawn`,
     ...(currentLinks.count > 0 ? [`${currentLinks.count} link edge(s)`] : []),
+    ...(built.overlays.plotCount > 0 ? [`${built.overlays.plotCount} plot line(s)`] : []),
+    ...(built.overlays.quadCount > 0
+      ? [`${built.overlays.surfaceCount} surface(s), ${built.overlays.quadCount} quad(s)`]
+      : []),
     ...(labelNote ? [labelNote] : []),
     ...(mediaCount > 0 ? [`${mediaCount} media file(s)`] : []),
     ...(textureNote ? [textureNote] : []),
@@ -1704,6 +1719,10 @@ window.addEventListener('resize', () => {
     window.innerWidth * window.devicePixelRatio,
     window.innerHeight * window.devicePixelRatio,
   )
+  currentOverlays?.setResolution(
+    window.innerWidth * window.devicePixelRatio,
+    window.innerHeight * window.devicePixelRatio,
+  )
 })
 
 renderer.setAnimationLoop(() => {
@@ -1717,9 +1736,11 @@ renderer.setAnimationLoop(() => {
 
   controls.update()
   backdrop.update(camera.position.distanceTo(controls.target))
-  // Edges chase their endpoint nodes (gizmo drags mutate frames between
-  // rebuilds), so refresh them every frame like the desktop's redraw.
+  // Edges, plot lines and surface meshes chase the nodes they connect (gizmo
+  // drags mutate frames between rebuilds), so refresh them every frame like
+  // the desktop's redraw.
   currentLinks?.update()
+  currentOverlays?.update()
   renderer.render(scene, camera)
   // After render: world matrices are the ones just drawn, so labels track
   // gizmo drags without a scene rebuild.

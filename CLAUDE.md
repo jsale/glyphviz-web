@@ -303,11 +303,53 @@ something to decide now).
        guess the conventional companion names (no folder to scan).
        Not done: the desktop's rate-pause snapshot restore (the panel's
        Rate Motion checkbox just freezes in place).
+   - ~~Plot/Surface overlays~~ (shipped 2026-07-25): the last two
+     topologies whose children already placed correctly but whose
+     connecting geometry never drew. `src/render/topologyOverlay.ts`
+     ports the desktop `_draw_topology_overlays`' remaining two passes:
+     a Plot (16) parent strings a polyline through its children in FILE
+     (row) order at pixel width max(ratio·20, 1) from the PARENT, each
+     vertex taking its own child's color; a Surface (17) parent buckets
+     its children on their exact (translate_x, translate_y) rounded to
+     6 decimals, sorts the unique x's and y's, and draws a quad per cell
+     whose four corners all exist — holes are legal — with per-vertex
+     child colors and a per-face normal, LIT (the only lit overlay) and
+     one-sided, because paintGL runs with GL_CULL_FACE on. A Link (type
+     7) child is never folded into either (the rule the YBCO example is
+     built around), a hidden parent draws nothing, and neither overlay
+     is pickable or occludes picking — the desktop's pick pass renders
+     glyphs only.
+     - Structure follows `linkOverlay.ts` for the same scale reasons:
+       endpoints resolve through buildScene's id→frame map, plots batch
+       into one fat-line object per (width, alpha), each surface is one
+       mesh with 4 unshared verts per quad (so each keeps its own flat
+       normal), and update() rewrites preallocated buffers per frame off
+       the renderer's own matrix pass.
+     - Parity: `tools/dump_topology_overlays.py` runs the REAL desktop
+       `Viewport._draw_topology_overlays` HEADLESSLY — the module does
+       `from OpenGL.GL import *`, so swapping those names for recorders
+       captures its exact vertex stream with no GL context and no
+       restatement of the logic under test.
+       `src/render/topologyOverlay.parity.test.ts` diffs four fixtures
+       (topology example, an edge-case CSV covering hidden rows / a link
+       child / a lattice hole / a duplicate cell / a scaled parent, that
+       same CSV under Show Hidden Nodes, and the 794-node showcase
+       example at 529 quads).
+     - Divergences, all from the fat-line addon: three's
+       LineSegmentsGeometry carries RGB only, so a polyline draws at the
+       MEAN alpha of its children (every stock example uses one alpha
+       throughout); and the desktop's antialiased GL_POINTS cap/join
+       dots are not reproduced — three's fat lines round their own caps.
+       Structurally, membership (which children are on a polyline, which
+       cells a lattice has) is baked per scene build rather than
+       re-derived every redraw, so a translate_x/y change re-cells a
+       surface at the next rebuild (drag release, inspector commit)
+       rather than mid-drag. Lattice coordinates are meant to be fixed
+       generated values, so this only shows in authoring the spec warns
+       against.
    - Remaining: zip bundles + a curated set of hosted example folders
      (agreed 2026-07-25, textures downscaled to ~2048px — the full
-     examples tree is 315 MB and is never shipped wholesale), Plot/
-     Surface overlays with links and facets (agreed 2026-07-25 as the
-     last of the step-7 gap filling).
+     examples tree is 315 MB and is never shipped wholesale).
 8. WebXR/stereo: deliberately deferred until basic parity exists.
 
 ## Collaboration notes

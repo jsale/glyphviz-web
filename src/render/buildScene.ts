@@ -10,9 +10,9 @@
 // All 18 topologies place via topoOffset/topoBaseRotation (src/render/
 // topology.ts), and World Grid (type 6) children place by geography —
 // both verified against the desktop engine by the parity test. Link (type
-// 7) edges render via the LinkOverlay between endpoint world positions.
-// Not yet implemented: the Plot/Surface overlay drawing (their children
-// still place correctly).
+// 7) edges render via the LinkOverlay between endpoint world positions, and
+// Plot (16) polylines / Surface (17) quad meshes via the TopologyOverlay
+// between their children's.
 
 import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
@@ -22,6 +22,7 @@ import { createGlyphObject, createPickProxy } from './glyphGeometry'
 import { buildLinkOverlay, LinkOverlay } from './linkOverlay'
 import { localRotationMatrix } from './rotation'
 import { topoBaseRotation, topoOffset } from './topology'
+import { buildTopologyOverlay, TopologyOverlay } from './topologyOverlay'
 import { createWorldGridObject } from './worldGridGeometry'
 
 /** Desktop "Global Scale" B — the unscaled base glyph size. */
@@ -132,6 +133,8 @@ export interface SceneBuildResult {
   drawnCount: number
   /** Rendered type-7 edges; call update() per frame, setResolution on resize. */
   links: LinkOverlay
+  /** Plot polylines + Surface meshes; same per-frame/resize contract. */
+  overlays: TopologyOverlay
   /** id → frame, first row wins. O(1) lookups — getObjectByName scans the
    *  whole graph and must stay out of per-tick interaction paths. */
   frames: ReadonlyMap<number, THREE.Object3D>
@@ -281,8 +284,11 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   }
 
   const links = buildLinkOverlay(nodes, frames, root, (m) => warnings.add(m))
+  const overlays = buildTopologyOverlay(nodes, frames, root, {
+    showHidden: options.showHidden,
+  })
 
-  return { root, background, drawnCount, links, frames, warnings: [...warnings] }
+  return { root, background, drawnCount, links, overlays, frames, warnings: [...warnings] }
 }
 
 /**
