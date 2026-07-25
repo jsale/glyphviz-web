@@ -32,7 +32,19 @@ interface Column {
   value: (n: GvNode) => string
 }
 
-export function writeGvNodeCsv(nodes: GvNode[]): string {
+export interface WriteNodeCsvOptions {
+  /**
+   * Write `text`/`link` as inline columns (default). Set false for a scene
+   * whose labels came from a companion gv_tag.csv: the tag file is written
+   * alongside instead, preserving the scene's authoring style rather than
+   * silently converting it to inline labels (which, per the spec's absolute
+   * precedence rule, would then shadow the tag file on reload).
+   */
+  inlineLabels?: boolean
+}
+
+export function writeGvNodeCsv(nodes: GvNode[], options: WriteNodeCsvOptions = {}): string {
+  const inlineLabels = options.inlineLabels ?? true
   const columns: Column[] = [
     { name: 'id', value: (n) => fmtInt(n.id) },
     { name: 'type', value: (n) => fmtInt(n.type) },
@@ -111,11 +123,11 @@ export function writeGvNodeCsv(nodes: GvNode[]): string {
       ],
     },
     {
-      when: any((n) => n.text !== ''),
+      when: inlineLabels && any((n) => n.text !== ''),
       cols: [{ name: 'text', value: (n) => n.text }],
     },
     {
-      when: any((n) => n.link !== ''),
+      when: inlineLabels && any((n) => n.link !== ''),
       cols: [{ name: 'link', value: (n) => n.link }],
     },
     {

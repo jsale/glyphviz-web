@@ -3,13 +3,13 @@
 // matching and hide-flag rules live in src/gv/selectionOps.ts.
 //
 // Not here yet: "Select Matching Tags" (desktop's keyword search over tag
-// text). Deferred deliberately — this app has no story for scenes whose labels
-// live in a companion gv_tag.csv rather than inline text columns, and a search
-// box that silently only works for half the files would mislead.
+// text). The companion gv_tag.csv now loads (src/gv/tagCsv.ts), so the reason
+// it was deferred is gone — it is simply the next thing to add here.
 
 import type { GvNode } from '../gv/types'
 import type { CriterionValue, SelectCriterion } from '../gv/selectionOps'
 import { CRITERION_LABELS, criterionValues } from '../gv/selectionOps'
+import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
 import { Panel } from './panel'
 
 export interface SelectionPanelHost {
@@ -23,6 +23,8 @@ export interface SelectionPanelHost {
   isolateSelected(): void
   showAll(): void
   setShowHidden(showHidden: boolean): void
+  setShowTags(showTags: boolean): void
+  setTagsSelectedOnly(selectedOnly: boolean): void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -53,6 +55,9 @@ export class SelectionPanel {
   private value = el('select')
   private additive: HTMLInputElement
   private showHidden: HTMLInputElement
+  private showTags: HTMLInputElement
+  private tagsSelectedOnly: HTMLInputElement
+  private tagCount = el('div', { className: 'sel-hint' })
   private selectionButtons: HTMLButtonElement[] = []
   private values: CriterionValue[] = []
   private nodes: GvNode[] = []
@@ -79,6 +84,27 @@ export class SelectionPanel {
     )
     this.showHidden = hiddenCheck.input
     this.showHidden.addEventListener('change', () => host.setShowHidden(this.showHidden.checked))
+
+    // Labels are off by default, as on the desktop ("press T to see labels").
+    const tagCheck = checkbox(
+      'Show Tag Labels',
+      'Draw each node’s label text in the viewport  [T]\n' +
+        'Labels come from inline text/link columns, or from the companion\n' +
+        'gv_tag.csv when the node CSV has neither.',
+    )
+    this.showTags = tagCheck.input
+    this.showTags.addEventListener('change', () => host.setShowTags(this.showTags.checked))
+
+    const tagSelectedCheck = checkbox(
+      'Labels of Selected Only',
+      'Restrict labels to the current selection.\n' +
+        `In show-all mode at most ${MAX_TAGS_PER_FRAME} labels draw per frame (a frame-rate\n` +
+        'safety valve); scoping to a selection lifts that cap entirely.',
+    )
+    this.tagsSelectedOnly = tagSelectedCheck.input
+    this.tagsSelectedOnly.addEventListener('change', () =>
+      host.setTagsSelectedOnly(this.tagsSelectedOnly.checked),
+    )
 
     const selectAll = button('Select All', 'Select every node  (Ctrl+A)', () => host.selectAll())
     const deselect = button('Deselect All', 'Clear the selection  (Ctrl+A again, or Esc)', () =>
@@ -142,6 +168,10 @@ export class SelectionPanel {
       isolate,
       showAll,
       hiddenCheck.row,
+      el('div', { className: 'sel-section', textContent: 'Labels' }),
+      tagCheck.row,
+      tagSelectedCheck.row,
+      this.tagCount,
       el('div', {
         className: 'sel-hint',
         textContent:
@@ -177,5 +207,19 @@ export class SelectionPanel {
     this.count.textContent =
       selectedCount === 0 ? 'No selection' : `${selectedCount} node(s) selected`
     for (const b of this.selectionButtons) b.disabled = selectedCount === 0
+
+    const labelled = nodes.filter((n) => n.text !== '').length
+    this.tagCount.textContent =
+      labelled === 0
+        ? 'No labels in this scene'
+        : `${labelled} labelled node(s)` +
+          (labelled > MAX_TAGS_PER_FRAME ? ` — over the ${MAX_TAGS_PER_FRAME}/frame cap` : '')
+    this.showTags.disabled = labelled === 0
+    this.tagsSelectedOnly.disabled = labelled === 0
+  }
+
+  /** Keep the checkbox in step when the T key toggles labels. */
+  setShowTagsChecked(showTags: boolean): void {
+    this.showTags.checked = showTags
   }
 }

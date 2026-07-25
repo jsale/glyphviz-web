@@ -14,6 +14,17 @@ canvas {
   display: block;
 }
 
+/* Tag labels sit above the WebGL canvas but below the panels, and never take
+   a click — the desktop paints them as a QPainter overlay for the same reason. */
+#label-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  /* Above the WebGL canvas, below every panel (#panels-left is z-index 1, the
+     rest are positioned later in tree order). */
+  z-index: 0;
+}
+
 /* --- Collapsible panel chrome ------------------------------------------- */
 
 #panels-left {
@@ -109,22 +120,38 @@ canvas {
   color: #e6c363;
 }
 
-#hud-open {
-  display: inline-block;
+/* Two ways in — a file pick and a whole scene folder — sharing one row. */
+#hud-open,
+#hud-save-row {
+  display: flex;
+  gap: 4px;
   margin-top: 6px;
-  padding: 3px 10px;
+}
+
+#hud-open label {
+  flex: 1;
+  padding: 3px 0;
   border: 1px solid #3a4256;
   border-radius: 6px;
+  text-align: center;
   cursor: pointer;
   color: #cfd6e4;
 }
 
-#hud-open:hover {
+#hud-open label:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
 #hud-open input {
   display: none;
+}
+
+#hud-save-row button {
+  flex: 1;
+}
+
+#hud-scenes {
+  margin-top: 6px;
 }
 
 #hud-modes {

@@ -6,7 +6,14 @@ import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/creat
 import type { NewObjectDefaults } from './gv/createNode'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
 import type { DragMode, DragSnapshot } from './gv/multiEdit'
+import { findScenes, normalizePath } from './gv/bundle'
+import type { SceneCandidate } from './gv/bundle'
+import type { MediaIndex } from './gv/media'
 import { parseGvNodeCsv } from './gv/nodeCsv'
+import { applyTags, deriveTagFilename, parseGvTagCsv } from './gv/tagCsv'
+import { hasAnyLabel, writeGvTagCsv } from './gv/writeTagCsv'
+import { filesFromDataTransfer, filesFromInput } from './io/browserFiles'
+import type { PathedFile } from './io/browserFiles'
 import {
   invertSelection,
   isolateSelection,
@@ -24,6 +31,7 @@ import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
+import { LabelOverlay } from './render/labelOverlay'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
 import { nodeIdsInRect } from './render/rectSelect'
 import { invertLocalRotation } from './render/rotationInverse'
@@ -34,6 +42,7 @@ import { SelectionPanel } from './ui/selectionPanel'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import linkCsv from './examples/link_example_gv_node.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
+import topologyTagCsv from './gv/fixtures/topology_example_gv_tag.csv?raw'
 import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 
 // Parse a gv_node.csv, render it with the full topology placement math and
@@ -50,9 +59,12 @@ import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 // Still to come: select by tag text, a Node Table panel, Plot/Surface
 // overlays, textures, tags/labels, Channels animation.
 
-const BUILT_IN_SCENES: Record<string, { csv: string; filename: string }> = {
+const BUILT_IN_SCENES: Record<string, { csv: string; tag?: string; filename: string }> = {
   'Topology example (all 18 topologies)': {
     csv: topologyCsv,
+    // Its companion label file, vendored alongside the node CSV — the same
+    // pairing 29 of the desktop repo's 36 example scenes use.
+    tag: topologyTagCsv,
     filename: 'topology_example_gv_node.csv',
   },
   'Cartesian example': { csv: cartesianCsv, filename: 'cartesian_example_gv_node.csv' },
@@ -75,6 +87,12 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuff
 renderer.setPixelRatio(window.devicePixelRatio)
 renderer.setSize(window.innerWidth, window.innerHeight)
 app.appendChild(renderer.domElement)
+
+// Tag labels paint on a 2D canvas above the WebGL one, the way the desktop
+// paints them with QPainter over the GL scene.
+const labels = new LabelOverlay()
+labels.setSize(window.innerWidth, window.innerHeight, window.devicePixelRatio)
+app.appendChild(labels.canvas)
 
 const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.001, 1000)
@@ -116,8 +134,15 @@ hud.innerHTML = `
   <select id="hud-examples"></select>
   <div id="hud-scene"></div>
   <div id="hud-warnings"></div>
-  <label id="hud-open">Open gv_node.csv<input type="file" accept=".csv,text/csv"></label>
-  <button id="hud-save">Save gv_node.csv</button>
+  <div id="hud-open">
+    <label title="Pick a gv_node.csv, or select it together with its companion gv_tag.csv and media files.">Open Files<input type="file" accept=".csv,text/csv" multiple></label>
+    <label title="Pick a whole scene folder: the node CSV, its companion tag file and media/ folder are found inside.">Open Folder<input type="file" id="hud-open-folder" webkitdirectory></label>
+  </div>
+  <select id="hud-scenes" title="Scenes found in the opened folder" hidden></select>
+  <div id="hud-save-row">
+    <button id="hud-save">Save gv_node.csv</button>
+    <button id="hud-save-tags" hidden title="Write the companion label file alongside the node CSV.">Save gv_tag.csv</button>
+  </div>
   <div id="hud-modes">
     <button data-mode="translate" class="active">Move (W)</button>
     <button data-mode="rotate">Rotate (E)</button>
@@ -134,13 +159,16 @@ hud.innerHTML = `
     <div class="hud-create-row"><span>Color</span><input id="hud-new-color" type="color" value="#c8c8c8"></div>
     <button id="hud-delete" title="Delete the selected node and all of its descendants — children are never reparented." disabled>Delete (Del)</button>
   </div>
-  <div id="hud-hint">or drop a CSV anywhere</div>
+  <div id="hud-hint">or drop a scene folder (or CSV) anywhere</div>
 `
 const hudScene = hud.querySelector<HTMLDivElement>('#hud-scene')!
 const hudWarnings = hud.querySelector<HTMLDivElement>('#hud-warnings')!
-const fileInput = hud.querySelector<HTMLInputElement>('input[type=file]')!
+const fileInput = hud.querySelector<HTMLInputElement>('#hud-open input[type=file]')!
+const folderInput = hud.querySelector<HTMLInputElement>('#hud-open-folder')!
+const sceneSelect = hud.querySelector<HTMLSelectElement>('#hud-scenes')!
 const exampleSelect = hud.querySelector<HTMLSelectElement>('#hud-examples')!
 const saveButton = hud.querySelector<HTMLButtonElement>('#hud-save')!
+const saveTagsButton = hud.querySelector<HTMLButtonElement>('#hud-save-tags')!
 const newNodeButton = hud.querySelector<HTMLButtonElement>('#hud-new-node')!
 const newChildButton = hud.querySelector<HTMLButtonElement>('#hud-new-child')!
 const newGeoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-geo')!
@@ -149,6 +177,17 @@ const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
 
+// Selected while an opened file/folder scene is showing, so the combo never
+// claims a built-in that isn't on screen.
+const OPENED_SCENE_OPTION = '— opened scene —'
+exampleSelect.appendChild(
+  Object.assign(document.createElement('option'), {
+    value: OPENED_SCENE_OPTION,
+    textContent: OPENED_SCENE_OPTION,
+    disabled: true,
+    hidden: true,
+  }),
+)
 for (const name of Object.keys(BUILT_IN_SCENES)) {
   const option = document.createElement('option')
   option.value = name
@@ -156,18 +195,29 @@ for (const name of Object.keys(BUILT_IN_SCENES)) {
   exampleSelect.appendChild(option)
 }
 exampleSelect.addEventListener('change', () => {
-  const builtIn = BUILT_IN_SCENES[exampleSelect.value]
-  loadCsv(builtIn.csv, exampleSelect.value, builtIn.filename)
+  loadBuiltIn(exampleSelect.value)
 })
+
+function download(text: string, filename: string, type = 'text/csv') {
+  const blob = new Blob([text], { type })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
 
 saveButton.addEventListener('click', () => {
   if (currentNodes.length === 0) return
-  const blob = new Blob([writeGvNodeCsv(currentNodes)], { type: 'text/csv' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = currentFilename
-  a.click()
-  URL.revokeObjectURL(a.href)
+  // A tag-file scene keeps its authoring style: labels go to the companion
+  // file, not into inline columns that would shadow it on reload.
+  download(writeGvNodeCsv(currentNodes, { inlineLabels: !labelsFromTagFile }), currentFilename)
+})
+
+saveTagsButton.addEventListener('click', () => {
+  const tagFilename = deriveTagFilename(currentFilename)
+  if (!tagFilename || !hasAnyLabel(currentNodes)) return
+  download(writeGvTagCsv(currentNodes), tagFilename)
 })
 
 function showMessages(errors: string[], warnings: string[]) {
@@ -312,6 +362,9 @@ function cycleGridSelection() {
 // --- Bulk selection + visibility (desktop's Select By / Visibility groups) ---
 
 let showHidden = false
+// Tag labels are off by default, matching the desktop ("press T to see labels").
+let showTags = false
+let tagsSelectedOnly = false
 
 function selectAllToggle() {
   // Ctrl+A: select all when nothing (or only part) is selected; clear otherwise.
@@ -367,10 +420,48 @@ const selectionCommands = {
     showHidden = value
     rebuildScene(false)
   },
+  setShowTags(value: boolean) {
+    showTags = value
+    status(value ? 'Tag labels on.' : 'Tag labels off.')
+  },
+  setTagsSelectedOnly(value: boolean) {
+    tagsSelectedOnly = value
+  },
 }
 
 const selectionPanel = new SelectionPanel(selectionCommands)
 panelsLeft.appendChild(selectionPanel.panel.element)
+
+function toggleTags() {
+  selectionCommands.setShowTags(!showTags)
+  selectionPanel.setShowTagsChecked(showTags)
+}
+
+/**
+ * Open a node's `link`, the desktop's U key / Alt+click.
+ *
+ * Divergence, unavoidable: the desktop treats a non-URL link as a local file
+ * path and hands it to the OS to launch. A browser cannot, so the value is
+ * reported instead of being silently ignored.
+ */
+function openLinkOf(node: GvNode | null) {
+  if (!node) return status('Select a single node to open its link.')
+  const link = node.link.trim()
+  if (link === '') return status(`Node ${node.id} has no link.`)
+  const url = /^(https?|ftp):\/\//i.test(link)
+    ? link
+    : link.startsWith('www.')
+      ? `https://${link}`
+      : null
+  if (!url) return status(`Node ${node.id} link is a local path, which a browser cannot open: ${link}`)
+  window.open(url, '_blank', 'noopener')
+  status(`Opened ${url}`)
+}
+
+function openSelectedLink() {
+  // Desktop: exactly one node selected.
+  openLinkOf(selection.size === 1 ? selectedNode() : null)
+}
 
 // --- Scene loading -----------------------------------------------------------
 
@@ -382,19 +473,78 @@ let currentDisplayName = ''
 let currentFilename = 'scene_gv_node.csv'
 let parseErrorLines: string[] = []
 let parseWarningLines: string[] = []
+/** True when labels came from a companion gv_tag.csv rather than inline columns. */
+let labelsFromTagFile = false
+/** Resolved media for the loaded scene — texture_id → file. Consumed by the textures step. */
+let currentMedia: { index: MediaIndex; fileById: Map<number, File> } | null = null
+let labelNote = ''
 
-function loadCsv(text: string, displayName: string, filename: string) {
-  const parsed = parseGvNodeCsv(text)
+interface SceneSource {
+  nodeText: string
+  /** Companion tag file contents, when the scene has one. */
+  tagText?: string
+  displayName: string
+  filename: string
+  media?: { index: MediaIndex; fileById: Map<number, File> }
+}
+
+function loadScene(source: SceneSource) {
+  const parsed = parseGvNodeCsv(source.nodeText)
   if (parsed.errors.length > 0 && parsed.nodes.length === 0) {
     showMessages(parsed.errors.map(issueText), [])
     return
   }
   currentNodes = parsed.nodes
-  currentDisplayName = displayName
-  currentFilename = filename
+  currentDisplayName = source.displayName
+  currentFilename = source.filename
+  currentMedia = source.media ?? null
   parseErrorLines = parsed.errors.map(issueText)
   parseWarningLines = parsed.warnings.map(issueText)
+  labelsFromTagFile = false
+  labelNote = ''
+
+  // Precedence is absolute: inline text/link columns mean the companion file
+  // is never consulted (tags-and-labels.md).
+  const labeledInline = parsed.nodes.filter((n) => n.text !== '' || n.link !== '').length
+  if (parsed.hasInlineLabelColumns) {
+    if (labeledInline > 0) labelNote = `${labeledInline} inline label(s)`
+  } else if (source.tagText !== undefined) {
+    const tags = parseGvTagCsv(source.tagText)
+    const applied = applyTags(currentNodes, tags.byRecordId)
+    labelsFromTagFile = true
+    labelNote = `${applied} label(s) from ${deriveTagFilename(source.filename) ?? 'tag file'}`
+    parseWarningLines.push(...tags.warnings.map(issueText))
+    if (applied === 0 && tags.byRecordId.size > 0) {
+      parseWarningLines.push(
+        `Tag file has ${tags.byRecordId.size} label(s) but none matched a node id or record_id.`,
+      )
+    }
+  }
+
+  if (currentMedia && currentMedia.index.entries.length > 0) {
+    const unsupported = currentMedia.index.entries.filter((e) => e.support === 'unsupported')
+    if (unsupported.length > 0) {
+      parseWarningLines.push(
+        `${unsupported.length} media file(s) no browser can decode (${unsupported
+          .map((e) => e.name)
+          .join(', ')}) — their texture_ids stay reserved.`,
+      )
+    }
+  }
+
+  saveTagsButton.hidden = !hasAnyLabel(currentNodes) || deriveTagFilename(currentFilename) === null
   rebuildScene(true)
+}
+
+function loadBuiltIn(name: string) {
+  const builtIn = BUILT_IN_SCENES[name]
+  exampleSelect.value = name
+  loadScene({
+    nodeText: builtIn.csv,
+    tagText: builtIn.tag,
+    displayName: name,
+    filename: builtIn.filename,
+  })
 }
 
 function rebuildScene(fitCamera: boolean) {
@@ -419,8 +569,15 @@ function rebuildScene(fitCamera: boolean) {
   // of reference (its lattice has meaningful spacing; the backdrop's not).
   backdrop.showReferenceGrid = !currentNodes.some((n) => n.type === NodeType.WorldGrid)
 
-  const linkNote = currentLinks.count > 0 ? `, ${currentLinks.count} link edge(s)` : ''
-  hudScene.textContent = `${currentDisplayName} — ${currentNodes.length} node(s), ${built.drawnCount} drawn${linkNote}`
+  const mediaCount = currentMedia?.index.entries.length ?? 0
+  const notes = [
+    `${currentNodes.length} node(s)`,
+    `${built.drawnCount} drawn`,
+    ...(currentLinks.count > 0 ? [`${currentLinks.count} link edge(s)`] : []),
+    ...(labelNote ? [labelNote] : []),
+    ...(mediaCount > 0 ? [`${mediaCount} media file(s)`] : []),
+  ]
+  hudScene.textContent = `${currentDisplayName} — ${notes.join(', ')}`
   showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
 
   if (fitCamera) {
@@ -452,18 +609,81 @@ function fitCameraTo(root: THREE.Object3D) {
 }
 
 // --- File open / drag & drop -------------------------------------------------
+//
+// A GlyphViz scene is a folder, not a file: the node CSV, its companion
+// gv_tag.csv and its media/ folder all matter. Dropping a folder (or picking
+// one) collects the lot; bundle.ts resolves which files belong to which scene.
+// A dropped parent folder can hold several scenes — those go in a picker.
 
-function loadFile(file: File) {
-  file
-    .text()
-    .then((text) => loadCsv(text, file.name, file.name))
-    .catch((err: unknown) => showMessages([`Could not read ${file.name}: ${String(err)}`], []))
+/** Scenes found in the last opened file set, with their files by path. */
+let openedScenes: SceneCandidate[] = []
+let openedFiles = new Map<string, File>()
+
+async function loadSceneCandidate(scene: SceneCandidate) {
+  const nodeFile = openedFiles.get(scene.nodePath)
+  if (!nodeFile) return
+  try {
+    const nodeText = await nodeFile.text()
+    const tagFile = scene.tagPath ? openedFiles.get(scene.tagPath) : undefined
+    const tagText = tagFile ? await tagFile.text() : undefined
+    const fileById = new Map<number, File>()
+    for (const [textureId, path] of scene.mediaPathById) {
+      const file = openedFiles.get(path)
+      if (file) fileById.set(textureId, file)
+    }
+    exampleSelect.value = OPENED_SCENE_OPTION
+    loadScene({
+      nodeText,
+      tagText,
+      displayName: scene.label,
+      filename: scene.nodePath.split('/').pop()!,
+      media: { index: scene.media, fileById },
+    })
+  } catch (err: unknown) {
+    showMessages([`Could not read ${scene.nodePath}: ${String(err)}`], [])
+  }
 }
 
+function openFileSet(files: PathedFile[]) {
+  openedFiles = new Map(files.map((f) => [normalizePath(f.path), f.file]))
+  openedScenes = findScenes(files.map((f) => f.path))
+
+  sceneSelect.textContent = ''
+  sceneSelect.hidden = openedScenes.length < 2
+  for (const [i, scene] of openedScenes.entries()) {
+    const option = document.createElement('option')
+    option.value = String(i)
+    option.textContent = scene.dir === '' ? scene.nodePath : scene.dir
+    sceneSelect.appendChild(option)
+  }
+
+  if (openedScenes.length === 0) {
+    showMessages(
+      [
+        files.length === 0
+          ? 'Nothing to open.'
+          : `No gv_node.csv found in ${files.length} file(s). Drop a scene folder, or the node CSV itself.`,
+      ],
+      [],
+    )
+    return
+  }
+  void loadSceneCandidate(openedScenes[0])
+}
+
+sceneSelect.addEventListener('change', () => {
+  const scene = openedScenes[Number(sceneSelect.value)]
+  if (scene) void loadSceneCandidate(scene)
+})
+
 fileInput.addEventListener('change', () => {
-  const file = fileInput.files?.[0]
-  if (file) loadFile(file)
+  openFileSet(filesFromInput(fileInput))
   fileInput.value = ''
+})
+
+folderInput.addEventListener('change', () => {
+  openFileSet(filesFromInput(folderInput))
+  folderInput.value = ''
 })
 
 window.addEventListener('dragover', (e) => {
@@ -472,8 +692,10 @@ window.addEventListener('dragover', (e) => {
 })
 window.addEventListener('drop', (e) => {
   e.preventDefault()
-  const file = e.dataTransfer?.files?.[0]
-  if (file) loadFile(file)
+  if (!e.dataTransfer) return
+  filesFromDataTransfer(e.dataTransfer)
+    .then(openFileSet)
+    .catch((err: unknown) => showMessages([`Could not read the drop: ${String(err)}`], []))
 })
 
 // --- Picking -------------------------------------------------------------------
@@ -599,6 +821,8 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     toggleInSelection(nodeId)
   } else {
     setSelection(nodeId)
+    // Alt+click is the desktop's one-gesture "select it, then open its link".
+    if (e.altKey) openLinkOf(nodesById.get(nodeId) ?? null)
   }
 })
 renderer.domElement.addEventListener('pointercancel', () => {
@@ -646,6 +870,8 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'h') selectionCommands.hideSelected()
   else if (e.key === 'H') selectionCommands.showAll()
   else if (e.key === 'i' || e.key === 'I') selectionCommands.isolateSelected()
+  else if (e.key === 't' || e.key === 'T') toggleTags()
+  else if (e.key === 'u' || e.key === 'U') openSelectedLink()
   else if (e.key === 'w' || e.key === 'W') setGizmoMode('translate')
   else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate')
   else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
@@ -1041,13 +1267,25 @@ deleteButton.addEventListener('click', deleteSelection)
     ? Object.keys(BUILT_IN_SCENES).find((name) => name.toLowerCase().includes(wanted))
     : undefined
   if (match) exampleSelect.value = match
-  const builtIn = BUILT_IN_SCENES[exampleSelect.value]
-  loadCsv(builtIn.csv, exampleSelect.value, builtIn.filename)
+  loadBuiltIn(exampleSelect.value)
   if (csvUrl) {
     const filename = csvUrl.split('/').pop() || 'scene_gv_node.csv'
-    fetch(csvUrl)
-      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((text) => loadCsv(text, filename, filename))
+    // The companion tag file lives next to the node CSV on disk, so try the
+    // derived sibling URL too — one speculative GET, and a 404 just means the
+    // scene has no labels (or keeps them inline).
+    const tagName = deriveTagFilename(filename)
+    const tagUrl = tagName ? csvUrl.slice(0, csvUrl.length - filename.length) + tagName : null
+    const fetchText = (url: string) =>
+      fetch(url).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+
+    Promise.all([
+      fetchText(csvUrl),
+      tagUrl ? fetchText(tagUrl).catch(() => undefined) : Promise.resolve(undefined),
+    ])
+      .then(([nodeText, tagText]) => {
+        exampleSelect.value = OPENED_SCENE_OPTION
+        loadScene({ nodeText, tagText, displayName: filename, filename })
+      })
       .catch((err: unknown) => showMessages([`Could not fetch ${csvUrl}: ${String(err)}`], []))
   }
 }
@@ -1056,6 +1294,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight
   camera.updateProjectionMatrix()
   renderer.setSize(window.innerWidth, window.innerHeight)
+  labels.setSize(window.innerWidth, window.innerHeight, window.devicePixelRatio)
   currentLinks?.setResolution(
     window.innerWidth * window.devicePixelRatio,
     window.innerHeight * window.devicePixelRatio,
@@ -1069,4 +1308,14 @@ renderer.setAnimationLoop(() => {
   // rebuilds), so refresh them every frame like the desktop's redraw.
   currentLinks?.update()
   renderer.render(scene, camera)
+  // After render: world matrices are the ones just drawn, so labels track
+  // gizmo drags without a scene rebuild.
+  if (currentFrames) {
+    labels.render(currentNodes, currentFrames, camera, {
+      showTags,
+      selectedOnly: tagsSelectedOnly,
+      showHidden,
+      isSelected: (id) => selection.has(id),
+    })
+  }
 })
