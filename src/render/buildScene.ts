@@ -138,7 +138,16 @@ export interface SceneBuildResult {
   warnings: string[]
 }
 
-export function buildScene(nodes: GvNode[]): SceneBuildResult {
+export interface BuildSceneOptions {
+  /**
+   * Draw (and therefore make pickable) nodes whose hide flag is set — the
+   * desktop's "Show Hidden Nodes" display toggle. Without it, hiding a node
+   * is only undoable through the selection you kept, Show All, or the CSV.
+   */
+  showHidden?: boolean
+}
+
+export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): SceneBuildResult {
   const warnings = new Set<string>()
   const root = new THREE.Group()
   root.name = 'gv-root'
@@ -206,7 +215,9 @@ export function buildScene(nodes: GvNode[]): SceneBuildResult {
 
     // Links draw as overlay edges (below), never as a glyph at their frame.
     const drawable =
-      !NON_VISUAL_TYPES.has(node.type) && node.type !== NodeType.Link && node.hide === 0
+      !NON_VISUAL_TYPES.has(node.type) &&
+      node.type !== NodeType.Link &&
+      (node.hide === 0 || options.showHidden === true)
 
     if (drawable && node.type === NodeType.WorldGrid) {
       // Bespoke draw path: ±1-unit plate/globe scaled by the RAW node scale

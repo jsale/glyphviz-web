@@ -4,7 +4,18 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
+import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
+import type { DragMode, DragSnapshot } from './gv/multiEdit'
 import { parseGvNodeCsv } from './gv/nodeCsv'
+import {
+  invertSelection,
+  isolateSelection,
+  selectAllIds,
+  selectByCriterion,
+  setHidden,
+  showAll,
+} from './gv/selectionOps'
+import type { SelectCriterion } from './gv/selectionOps'
 import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOps'
 import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
 import { GEOMETRY_NAMES, Geometry, NodeType, TOPO_NAMES, Topo } from './gv/types'
@@ -13,10 +24,13 @@ import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
-import { pickNodeId, Selection } from './render/picking'
+import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
+import { nodeIdsInRect } from './render/rectSelect'
 import { invertLocalRotation } from './render/rotationInverse'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { Inspector } from './ui/inspector'
+import { Panel } from './ui/panel'
+import { SelectionPanel } from './ui/selectionPanel'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import linkCsv from './examples/link_example_gv_node.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
@@ -24,10 +38,17 @@ import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 
 // Parse a gv_node.csv, render it with the full topology placement math and
 // World Grid geographic placement (verified against the desktop engine by
-// src/render/parity.test.ts), orbit camera, click-to-select with an editable
-// inspector, gizmo dragging (move/rotate/scale), save back to CSV. Grids are
-// selected with the G key, never by click. Still to come: Link edges,
-// Plot/Surface overlays, textures, tags.
+// src/render/parity.test.ts), orbit camera, select with an editable inspector,
+// gizmo dragging (move/rotate/scale), save back to CSV. Grids are selected
+// with the G key, never by click.
+//
+// Selection is a set: click replaces, Ctrl+click toggles, Shift+drag sweeps a
+// region (Ctrl+Shift+drag adds it), and the Selection panel matches on branch
+// level / geometry / topology, inverts, and drives the per-node hide flag.
+// Edits and gizmo drags apply across the whole set — see src/gv/multiEdit.ts.
+//
+// Still to come: select by tag text, a Node Table panel, Plot/Surface
+// overlays, textures, tags/labels, Channels animation.
 
 const BUILT_IN_SCENES: Record<string, { csv: string; filename: string }> = {
   'Topology example (all 18 topologies)': {
@@ -75,10 +96,20 @@ scene.add(backdrop.group)
 
 // --- HUD -------------------------------------------------------------------
 
-const hud = document.createElement('div')
-hud.id = 'hud'
+// Panels live in a left column (Scene, Selection) and a right one
+// (Properties). Each collapses to its header bar — never disappears — by
+// click or keyboard, so the viewport can be cleared without losing the way
+// back. Ctrl+N, which would have suited a future Node Table, is reserved by
+// the browser and cannot be intercepted; Alt+N is free when that panel lands.
+const panelsLeft = document.createElement('div')
+panelsLeft.id = 'panels-left'
+app.appendChild(panelsLeft)
+
+const scenePanel = new Panel({ id: 'hud', title: 'GlyphViz Web', hotkey: 'Ctrl+B' })
+panelsLeft.appendChild(scenePanel.element)
+
+const hud = scenePanel.body
 hud.innerHTML = `
-  <div id="hud-title">GlyphViz Web</div>
   <select id="hud-examples"></select>
   <div id="hud-scene"></div>
   <div id="hud-warnings"></div>
@@ -102,7 +133,6 @@ hud.innerHTML = `
   </div>
   <div id="hud-hint">or drop a CSV anywhere</div>
 `
-app.appendChild(hud)
 const hudScene = hud.querySelector<HTMLDivElement>('#hud-scene')!
 const hudWarnings = hud.querySelector<HTMLDivElement>('#hud-warnings')!
 const fileInput = hud.querySelector<HTMLInputElement>('input[type=file]')!
@@ -165,13 +195,25 @@ const selection = new Selection()
 let nodesById = new Map<number, GvNode>()
 
 const inspector = new Inspector({
-  onNodeEdited() {
-    // The mutated node lives in currentNodes; rebuild in place, keeping the
+  onNodesEdited() {
+    // The mutated nodes live in currentNodes; rebuild in place, keeping the
     // camera and reattaching the selection + inspector.
     rebuildScene(false)
   },
 })
 app.appendChild(inspector.element)
+
+const statusBar = document.createElement('div')
+statusBar.id = 'status-bar'
+app.appendChild(statusBar)
+
+let statusTimer = 0
+/** Transient message line, standing in for the desktop's status bar. */
+function status(message: string) {
+  statusBar.textContent = message
+  window.clearTimeout(statusTimer)
+  statusTimer = window.setTimeout(() => (statusBar.textContent = ''), 4000)
+}
 
 function worldPosOf(nodeId: number): THREE.Vector3 | null {
   // Called per gizmo tick — must stay O(depth): frames map lookup, and
@@ -184,28 +226,76 @@ function parentOf(node: GvNode): GvNode | null {
   return node.parentId !== 0 ? (nodesById.get(node.parentId) ?? null) : null
 }
 
-function setSelected(nodeId: number | null) {
-  if (!currentRoot) return
-  selection.set(currentRoot, nodeId)
-  const node = selection.id !== null ? nodesById.get(selection.id) : undefined
-  newChildButton.disabled = !node
-  deleteButton.disabled = !node
-  if (!node) {
+/**
+ * Scene row order for a set of ids. The desktop's inspector reads
+ * `_selected_nodes[0]` from a row-ordered table selection, so ordering here
+ * is what makes "primary" mean the same thing in both apps.
+ */
+function orderedIds(ids: ReadonlySet<number>): number[] {
+  const out: number[] = []
+  for (const node of currentNodes) {
+    if (ids.has(node.id)) out.push(node.id)
+  }
+  return out
+}
+
+function selectedNodes(): GvNode[] {
+  const out: GvNode[] = []
+  for (const id of selection.ids) {
+    const node = nodesById.get(id)
+    if (node) out.push(node)
+  }
+  return out
+}
+
+/** Replace the selection with these ids (any order; row order is applied). */
+function setSelection(ids: ReadonlySet<number> | number | null) {
+  if (!currentFrames) return
+  const set =
+    ids === null ? new Set<number>() : typeof ids === 'number' ? new Set([ids]) : ids
+  selection.set(currentFrames, orderedIds(set))
+  refreshSelectionUi()
+}
+
+/** Ctrl+click / Ctrl+Shift+drag: add these ids to what is already selected. */
+function addToSelection(ids: ReadonlySet<number>) {
+  const merged = selection.asSet()
+  for (const id of ids) merged.add(id)
+  setSelection(merged)
+}
+
+function toggleInSelection(nodeId: number) {
+  const merged = selection.asSet()
+  if (!merged.delete(nodeId)) merged.add(nodeId)
+  setSelection(merged)
+}
+
+/** Re-point the gizmo, inspector, and selection-sensitive buttons. */
+function refreshSelectionUi() {
+  const nodes = selectedNodes()
+  const primary = nodes[0]
+  newChildButton.disabled = !primary
+  deleteButton.disabled = !primary
+  selectionPanel.update(currentNodes, selection.size)
+  if (!primary) {
     gizmo.detach()
-    inspector.hide()
+    inspector.clear()
     return
   }
   // No gizmo on World Grids (their frame deliberately carries no scale, so
   // gizmo modes would fight it) or Links (their own transform is inert —
   // the edge follows its endpoints) — edit those through the inspector,
   // like the desktop's panel/table. Simplest defaults.
-  if (node.type === NodeType.WorldGrid || node.type === NodeType.Link) {
+  const frame = currentFrames?.get(primary.id)
+  if (primary.type === NodeType.WorldGrid || primary.type === NodeType.Link || !frame) {
     gizmo.detach()
   } else {
-    const frame = currentFrames?.get(node.id)
-    if (frame) gizmo.attach(frame)
+    gizmo.attach(frame)
   }
-  inspector.show(node, worldPosOf(node.id))
+  inspector.show(nodes, nodes.length === 1 ? worldPosOf(primary.id) : null)
+  if (selection.haloOverflow > 0) {
+    status(`${selection.size} selected — halos drawn for the first ${MAX_HALOS}.`)
+  }
 }
 
 /** G key, desktop-style: select the first World Grid, or cycle to the next. */
@@ -213,8 +303,71 @@ function cycleGridSelection() {
   const grids = currentNodes.filter((n) => n.type === NodeType.WorldGrid)
   if (grids.length === 0) return
   const at = grids.findIndex((n) => n.id === selection.id)
-  setSelected(grids[(at + 1) % grids.length].id)
+  setSelection(grids[(at + 1) % grids.length].id)
 }
+
+// --- Bulk selection + visibility (desktop's Select By / Visibility groups) ---
+
+let showHidden = false
+
+function selectAllToggle() {
+  // Ctrl+A: select all when nothing (or only part) is selected; clear otherwise.
+  const all = selectAllIds(currentNodes)
+  setSelection(selection.size < all.size ? all : new Set())
+}
+
+function applyVisibility(changed: number[], message: string) {
+  if (changed.length > 0) rebuildScene(false)
+  status(message)
+}
+
+// The panel buttons and the H / Shift+H / I keys run the same commands, so
+// the host object is a named value rather than an inline literal.
+const selectionCommands = {
+  selectAll: () => setSelection(selectAllIds(currentNodes)),
+  deselectAll: () => setSelection(null),
+  invertSelection: () => setSelection(invertSelection(currentNodes, selection.asSet())),
+  selectMatching(criterion: SelectCriterion, value: number, additive: boolean) {
+    const ids = selectByCriterion(currentNodes, criterion, value)
+    if (additive) addToSelection(ids)
+    else setSelection(ids)
+    status(`${ids.size} node(s) matched.`)
+  },
+  hideSelected() {
+    if (selection.size === 0) return status('No selection to hide.')
+    // The selection is deliberately kept: hidden-but-selected nodes stay
+    // manipulable (matching ANTz), so Show Selected undoes this immediately.
+    applyVisibility(
+      setHidden(currentNodes, selection.asSet(), true),
+      `${selection.size} node(s) hidden.`,
+    )
+  },
+  showSelected() {
+    if (selection.size === 0) return status('No selection to show.')
+    applyVisibility(
+      setHidden(currentNodes, selection.asSet(), false),
+      `${selection.size} node(s) shown.`,
+    )
+  },
+  isolateSelected() {
+    if (selection.size === 0) return status('No selection to isolate.')
+    applyVisibility(
+      isolateSelection(currentNodes, selection.asSet()),
+      `Showing only the ${selection.size} selected node(s).`,
+    )
+  },
+  showAll() {
+    const changed = showAll(currentNodes)
+    applyVisibility(changed, `All nodes shown (${changed.length} unhidden).`)
+  },
+  setShowHidden(value: boolean) {
+    showHidden = value
+    rebuildScene(false)
+  },
+}
+
+const selectionPanel = new SelectionPanel(selectionCommands)
+panelsLeft.appendChild(selectionPanel.panel.element)
 
 // --- Scene loading -----------------------------------------------------------
 
@@ -242,11 +395,11 @@ function loadCsv(text: string, displayName: string, filename: string) {
 }
 
 function rebuildScene(fitCamera: boolean) {
-  const prevSelected = selection.id
-  const built = buildScene(currentNodes)
+  const prevSelected = new Set(selection.ids)
+  const built = buildScene(currentNodes, { showHidden })
   if (currentRoot) {
     gizmo.detach()
-    selection.set(currentRoot, null)
+    selection.set(built.frames, null)
     scene.remove(currentRoot)
   }
   currentRoot = built.root
@@ -268,10 +421,11 @@ function rebuildScene(fitCamera: boolean) {
   showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
 
   if (fitCamera) {
-    inspector.hide()
+    setSelection(null)
     fitCameraTo(currentRoot)
   } else {
-    setSelected(prevSelected)
+    // Ids deleted or filtered out of the rebuilt scene simply drop.
+    setSelection(prevSelected)
   }
 }
 
@@ -320,13 +474,73 @@ window.addEventListener('drop', (e) => {
 })
 
 // --- Picking -------------------------------------------------------------------
-// Plain left-click on a node selects it (replacing the selection); clicking
-// empty space clears — matching the desktop viewport. A small movement
-// threshold separates clicks from orbit drags.
+// Plain left-click on a node selects it (replacing the selection); Ctrl+click
+// toggles it in or out of the current selection; clicking empty space clears,
+// unless Ctrl is held (so a stray miss can't wipe a set you're building) —
+// all matching the desktop viewport. A small movement threshold separates
+// clicks from orbit drags.
+//
+// Shift+drag sweeps a rectangle (Ctrl+Shift+drag adds the region to the
+// selection). The band itself is a plain absolutely-positioned div rather
+// than a GL overlay — nothing about it needs to be in the scene.
 
 const raycaster = new THREE.Raycaster()
 const CLICK_SLOP_PX = 5
+const RUBBER_SLOP_PX = 2 // desktop's dx/dy > 2 test: a sweep, not a click
 let downAt: { x: number; y: number } | null = null
+
+const rubberBand = document.createElement('div')
+rubberBand.id = 'rubber-band'
+rubberBand.hidden = true
+app.appendChild(rubberBand)
+
+let rubberStart: { x: number; y: number } | null = null
+let rubberEnd = { x: 0, y: 0 }
+
+function drawRubberBand() {
+  if (!rubberStart) return
+  const left = Math.min(rubberStart.x, rubberEnd.x)
+  const top = Math.min(rubberStart.y, rubberEnd.y)
+  rubberBand.style.left = `${left}px`
+  rubberBand.style.top = `${top}px`
+  rubberBand.style.width = `${Math.abs(rubberEnd.x - rubberStart.x)}px`
+  rubberBand.style.height = `${Math.abs(rubberEnd.y - rubberStart.y)}px`
+  rubberBand.hidden = false
+}
+
+function finishRubberBand(additive: boolean) {
+  if (!rubberStart) return
+  const start = rubberStart
+  rubberStart = null
+  rubberBand.hidden = true
+  controls.enabled = true
+  if (
+    Math.abs(rubberEnd.x - start.x) <= RUBBER_SLOP_PX &&
+    Math.abs(rubberEnd.y - start.y) <= RUBBER_SLOP_PX
+  ) {
+    return // a shift-click, not a sweep
+  }
+  if (!currentRoot || !currentFrames) return
+  const rect = renderer.domElement.getBoundingClientRect()
+  // Gizmo drags mutate frames between rebuilds, so refresh before projecting.
+  currentRoot.updateMatrixWorld(true)
+  const ids = nodeIdsInRect(
+    currentNodes,
+    currentFrames,
+    camera,
+    {
+      x1: start.x - rect.left,
+      y1: start.y - rect.top,
+      x2: rubberEnd.x - rect.left,
+      y2: rubberEnd.y - rect.top,
+    },
+    { width: rect.width, height: rect.height },
+    { showHidden },
+  )
+  if (additive) addToSelection(ids)
+  else setSelection(ids)
+  status(`${ids.size} node(s) in region.`)
+}
 
 function pickAt(clientX: number, clientY: number): number | null {
   if (!currentRoot) return null
@@ -340,10 +554,31 @@ function pickAt(clientX: number, clientY: number): number | null {
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
-  if (e.button === 0) downAt = { x: e.clientX, y: e.clientY }
+  if (e.button !== 0) return
+  // Shift over a gizmo handle stays a gizmo drag — TransformControls owns
+  // the pointer there.
+  if (e.shiftKey && !gizmo.dragging && gizmo.axis === null) {
+    rubberStart = { x: e.clientX, y: e.clientY }
+    rubberEnd = { x: e.clientX, y: e.clientY }
+    controls.enabled = false
+    renderer.domElement.setPointerCapture(e.pointerId)
+    drawRubberBand()
+    return
+  }
+  downAt = { x: e.clientX, y: e.clientY }
+})
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (!rubberStart) return
+  rubberEnd = { x: e.clientX, y: e.clientY }
+  drawRubberBand()
 })
 renderer.domElement.addEventListener('pointerup', (e) => {
-  if (e.button !== 0 || !downAt) return
+  if (e.button !== 0) return
+  if (rubberStart) {
+    finishRubberBand(e.ctrlKey || e.metaKey)
+    return
+  }
+  if (!downAt) return
   const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y)
   downAt = null
   // A press that became a Left+Right camera combo is never a selection click,
@@ -352,7 +587,23 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   // Clicks on (or releases over) a gizmo arrow are drag interactions, not
   // selection changes.
   if (gizmo.dragging || gizmo.axis !== null) return
-  setSelected(pickAt(e.clientX, e.clientY))
+  const nodeId = pickAt(e.clientX, e.clientY)
+  const additive = e.ctrlKey || e.metaKey
+  if (nodeId === null) {
+    // A Ctrl+click that misses leaves the set you are building alone.
+    if (!additive) setSelection(null)
+  } else if (additive) {
+    toggleInSelection(nodeId)
+  } else {
+    setSelection(nodeId)
+  }
+})
+renderer.domElement.addEventListener('pointercancel', () => {
+  // Aborted press: drop the band without changing the selection.
+  if (!rubberStart) return
+  rubberStart = null
+  rubberBand.hidden = true
+  controls.enabled = true
 })
 renderer.domElement.addEventListener('dblclick', (e) => {
   // Recenter the orbit pivot on the node under the cursor (falls back to
@@ -366,9 +617,32 @@ renderer.domElement.addEventListener('dblclick', (e) => {
 })
 window.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName
-  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
-  if (e.key === 'Escape') setSelected(null)
+  const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA'
+
+  // Panel toggles are window commands and fire even mid-edit; the selection
+  // chords stand down while a field has focus, so Ctrl+A there still means
+  // "select this text". Ctrl+N — which would have suited a future Node Table
+  // — is reserved by the browser and cannot be intercepted, hence P/E/B;
+  // Alt+N stays free for when that panel arrives.
+  if (e.ctrlKey || e.metaKey) {
+    const key = e.key.toLowerCase()
+    if (key === 'p') inspector.panel.toggle()
+    else if (key === 'e') selectionPanel.panel.toggle()
+    else if (key === 'b') scenePanel.toggle()
+    else if (typing) return
+    else if (key === 'a') selectAllToggle()
+    else if (key === 'i') selectionCommands.invertSelection()
+    else return
+    e.preventDefault()
+    return
+  }
+
+  if (typing) return
+  if (e.key === 'Escape') setSelection(null)
   else if (e.key === 'g' || e.key === 'G') cycleGridSelection()
+  else if (e.key === 'h') selectionCommands.hideSelected()
+  else if (e.key === 'H') selectionCommands.showAll()
+  else if (e.key === 'i' || e.key === 'I') selectionCommands.isolateSelected()
   else if (e.key === 'w' || e.key === 'W') setGizmoMode('translate')
   else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate')
   else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
@@ -413,6 +687,7 @@ let manualLast = { x: 0, y: 0 }
 let comboUsedInPress = false
 
 function updateManualDragState(e: PointerEvent) {
+  if (rubberStart !== null) return // a region sweep owns the pointer
   const left = (e.buttons & 1) !== 0
   const right = (e.buttons & 2) !== 0
   const next: typeof manualDrag =
@@ -515,11 +790,39 @@ let dragStartTranslate: Vec3 | null = null
 let dragStartOffset = new THREE.Vector3()
 let dragField: 'x' | 'y' | 'z' | null | 'undecided' = 'undecided'
 
+// --- Dragging a multi-selection ------------------------------------------------
+// The gizmo is attached to the primary node, and only the primary goes through
+// the inverse topology math. Every other selected node then receives the same
+// per-field change the primary just took, in its own topology coordinates —
+// the desktop's _apply_axis_deltas rule, see src/gv/multiEdit.ts.
+
+let followerStart = new Map<number, DragSnapshot>()
+let primaryStart: DragSnapshot | null = null
+
+/** Push the primary's change onto every other selected node. */
+function applyDragToFollowers(primary: GvNode) {
+  if (followerStart.size === 0 || !primaryStart) return
+  const mode = gizmo.mode as DragMode
+  for (const [id, start] of followerStart) {
+    const node = nodesById.get(id)
+    if (!node) continue
+    applyDragDelta(mode, primary, primaryStart, node, start)
+    const frame = currentFrames?.get(id)
+    if (frame) applyFrameTransform(frame, node, parentOf(node))
+  }
+}
+
 gizmo.addEventListener('dragging-changed', (e) => {
   const dragging = (e as unknown as { value: boolean }).value
   controls.enabled = !dragging
   const node = selection.id !== null ? nodesById.get(selection.id) : undefined
   if (dragging && node && gizmo.object) {
+    primaryStart = snapshotTransform(node)
+    followerStart = new Map(
+      selectedNodes()
+        .filter((n) => n.id !== node.id)
+        .map((n) => [n.id, snapshotTransform(n)]),
+    )
     if (gizmo.mode === 'translate') {
       dragStartTranslate = { ...node.translate }
       dragStartOffset = gizmo.object.position.clone()
@@ -527,6 +830,8 @@ gizmo.addEventListener('dragging-changed', (e) => {
     }
   } else if (!dragging) {
     dragStartTranslate = null
+    primaryStart = null
+    followerStart = new Map()
     // Final commit: full rebuild refreshes glyph draw scale, HUD, halo.
     if (node) rebuildScene(false)
   }
@@ -560,11 +865,18 @@ gizmo.addEventListener('objectChange', () => {
   const parentRatio = gridParent ? 0 : (parentGv?.ratio ?? 0)
   const baseScale = gridGlobe ? GRID_GLOBE_RADIUS : BASE_SCALE
 
+  // Live re-read of the primary + followers while a drag is in flight.
+  const showDragged = () => {
+    applyDragToFollowers(node)
+    const nodes = selectedNodes()
+    inspector.show(nodes, nodes.length === 1 ? worldPosOf(node.id) : null)
+  }
+
   if (gizmo.mode === 'scale') {
     node.scale.x = frame.scale.x
     node.scale.y = frame.scale.y
     node.scale.z = frame.scale.z
-    inspector.show(node, worldPosOf(node.id))
+    showDragged()
     return
   }
 
@@ -580,7 +892,7 @@ gizmo.addEventListener('objectChange', () => {
     node.rotate.z = r.z
     // Snap the frame to the exact CSV-representable rotation.
     applyFrameTransform(frame, node, parentGv)
-    inspector.show(node, worldPosOf(node.id))
+    showDragged()
     return
   }
 
@@ -621,7 +933,7 @@ gizmo.addEventListener('objectChange', () => {
   node.translate.z = t.z
   // Reproject onto the topology surface and track outward orientation.
   applyFrameTransform(frame, node, parentGv)
-  inspector.show(node, worldPosOf(node.id))
+  showDragged()
 })
 
 // --- Node creation (N / Shift+N / Create panel) --------------------------------
@@ -678,7 +990,7 @@ function addNode() {
   const node = createRootNode(currentNodes, readNewObjectDefaults())
   currentNodes.push(node)
   rebuildScene(false)
-  setSelected(node.id)
+  setSelection(node.id)
 }
 
 newNodeButton.addEventListener('click', addNode)
@@ -695,16 +1007,21 @@ function selectedNode(): GvNode | null {
 }
 
 function deleteSelection() {
-  const node = selectedNode()
-  if (!node) return
-  currentNodes = deleteSubtree(currentNodes, node.id)
-  // rebuildScene re-selects the previous id, finds it gone, and cleanly
-  // detaches the gizmo + hides the inspector.
+  // Copy: `selection.ids` is the live internal array, and the rebuild below
+  // refills it — the count in the status message would read the new one.
+  const ids = [...selection.ids]
+  if (ids.length === 0) return
+  // Each subtree in turn; an id already swept away as somebody else's
+  // descendant just doesn't match anything the second time.
+  for (const id of ids) currentNodes = deleteSubtree(currentNodes, id)
+  // rebuildScene re-selects the previous ids, finds them gone, and cleanly
+  // detaches the gizmo + empties the inspector.
   rebuildScene(false)
+  status(`${ids.length} node(s) and their descendants deleted.`)
 }
 
 function navTo(node: GvNode | null) {
-  if (node) setSelected(node.id)
+  if (node) setSelection(node.id)
 }
 
 deleteButton.addEventListener('click', deleteSelection)

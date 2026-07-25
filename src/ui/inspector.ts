@@ -1,20 +1,31 @@
-// Editable node inspector panel (interaction phase 6b). Read-only identity
-// rows on top; every CSV-backed visual field below is a live control that
-// mutates the parsed node on commit ('change' event = blur/Enter) and asks
-// the host to rebuild the scene. Structural fields (id, parent, branch
-// level) stay read-only — reparenting is a later, deliberate feature.
+// Editable node inspector panel (interaction phase 6b, multi-select 6f).
+// Read-only identity rows on top; every CSV-backed visual field below is a
+// live control that mutates the parsed node(s) on commit ('change' event =
+// blur/Enter) and asks the host to rebuild the scene. Structural fields (id,
+// parent, branch level) stay read-only — reparenting is a later, deliberate
+// feature.
+//
+// Multi-selection follows the desktop (main_window.py _on_insp_* handlers):
+// the fields show the PRIMARY node's values (first selected in scene row
+// order), and editing one applies to every selected node —
+//
+//   - translate and rotate apply the DELTA from the value the field was
+//     showing, so a mixed selection keeps its relative arrangement and just
+//     shifts/turns as a group;
+//   - every other field applies its new value ABSOLUTELY to all of them.
+//
+// A single selection is the same code path: the anchor equals the node's own
+// value, so `+= (new − anchor)` is just `= new`.
 
-import type { GvNode } from '../gv/types'
-import {
-  GEOMETRY_NAMES,
-  NODE_TYPE_NAMES,
-  RotationMode,
-  TOPO_NAMES,
-} from '../gv/types'
+import { shiftAxis } from '../gv/multiEdit'
+import type { VectorField } from '../gv/multiEdit'
+import type { GvNode, Vec3 } from '../gv/types'
+import { GEOMETRY_NAMES, NODE_TYPE_NAMES, RotationMode, TOPO_NAMES } from '../gv/types'
+import { Panel } from './panel'
 
 export interface InspectorHost {
-  /** Called after an edit mutates the node: rebuild scene, then re-show. */
-  onNodeEdited(node: GvNode): void
+  /** Called after an edit mutates the selection: rebuild scene, then re-show. */
+  onNodesEdited(nodes: GvNode[]): void
 }
 
 export interface WorldPos {
@@ -50,38 +61,59 @@ function toHex(r: number, g: number, b: number): string {
   return `#${h(r)}${h(g)}${h(b)}`
 }
 
-export class Inspector {
-  readonly element: HTMLDivElement
+/** Read-only rows show the shared value, or "(multiple)" when they differ. */
+function shared<T>(nodes: GvNode[], get: (n: GvNode) => T, render: (v: T) => string): string {
+  const first = get(nodes[0])
+  return nodes.every((n) => get(n) === first) ? render(first) : '(multiple)'
+}
 
-  private node: GvNode | null = null
+export class Inspector {
+  readonly panel: Panel
+
+  private nodes: GvNode[] = []
   private host: InspectorHost
+  /** Values the translate/rotate fields are currently showing (see header). */
+  private anchorTranslate: Vec3 = { x: 0, y: 0, z: 0 }
+  private anchorRotate: Vec3 = { x: 0, y: 0, z: 0 }
 
   constructor(host: InspectorHost) {
     this.host = host
-    this.element = el('div', { id: 'inspector', hidden: true })
+    this.panel = new Panel({ id: 'inspector', title: 'Properties', hotkey: 'Ctrl+P' })
+    this.clear()
   }
 
-  hide(): void {
-    this.element.hidden = true
-    this.node = null
+  get element(): HTMLDivElement {
+    return this.panel.element
   }
 
-  show(node: GvNode, worldPos: WorldPos | null): void {
-    this.node = node
-    this.element.replaceChildren(...this.build(node, worldPos))
-    this.element.hidden = false
+  /** No selection: keep the panel (and its shortcut) on screen, just empty. */
+  clear(): void {
+    this.nodes = []
+    this.panel.body.replaceChildren(el('div', { className: 'ins-empty', textContent: 'No selection' }))
   }
 
-  /** Mutate the current node and hand off to the host for rebuild+refresh. */
+  show(nodes: GvNode[], worldPos: WorldPos | null): void {
+    if (nodes.length === 0) {
+      this.clear()
+      return
+    }
+    this.nodes = nodes
+    const primary = nodes[0]
+    this.anchorTranslate = { ...primary.translate }
+    this.anchorRotate = { ...primary.rotate }
+    this.panel.body.replaceChildren(...this.build(nodes, worldPos))
+  }
+
+  /** Mutate every selected node and hand off to the host for rebuild+refresh. */
   private commit(mutate: (n: GvNode) => void): void {
-    if (!this.node) return
-    mutate(this.node)
-    this.host.onNodeEdited(this.node)
+    if (this.nodes.length === 0) return
+    for (const node of this.nodes) mutate(node)
+    this.host.onNodesEdited(this.nodes)
   }
 
   private numberInput(
     value: number,
-    apply: (n: GvNode, v: number) => void,
+    apply: (v: number) => void,
     opts: { min?: number; max?: number; integer?: boolean; width?: string } = {},
   ): HTMLInputElement {
     const input = el('input', { type: 'number', value: fmt(value) })
@@ -98,22 +130,26 @@ export class Inspector {
       if (opts.integer) v = Math.trunc(v)
       if (opts.min !== undefined) v = Math.max(opts.min, v)
       if (opts.max !== undefined) v = Math.min(opts.max, v)
-      this.commit((n) => apply(n, v))
+      apply(v)
     })
     return input
   }
 
-  private vec3Row(
-    label: string,
-    get: (n: GvNode) => { x: number; y: number; z: number },
-  ): HTMLDivElement {
-    const node = this.node!
-    return row(
-      label,
-      this.numberInput(get(node).x, (n, v) => (get(n).x = v)),
-      this.numberInput(get(node).y, (n, v) => (get(n).y = v)),
-      this.numberInput(get(node).z, (n, v) => (get(n).z = v)),
-    )
+  /** translate/rotate: shift the whole selection by the field's change. */
+  private deltaVec3Row(label: string, field: VectorField, anchor: Vec3): HTMLDivElement {
+    const axisInput = (axis: 'x' | 'y' | 'z') =>
+      this.numberInput(field(this.nodes[0])[axis], (v) => {
+        shiftAxis(this.nodes, field, axis, anchor, v)
+        this.host.onNodesEdited(this.nodes)
+      })
+    return row(label, axisInput('x'), axisInput('y'), axisInput('z'))
+  }
+
+  /** scale and the other vectors: the typed value lands on every node as-is. */
+  private absoluteVec3Row(label: string, field: VectorField): HTMLDivElement {
+    const axisInput = (axis: 'x' | 'y' | 'z') =>
+      this.numberInput(field(this.nodes[0])[axis], (v) => this.commit((n) => (field(n)[axis] = v)))
+    return row(label, axisInput('x'), axisInput('y'), axisInput('z'))
   }
 
   private idSelect(
@@ -130,7 +166,9 @@ export class Inspector {
       select.appendChild(el('option', { value: String(value), textContent: `Unknown (${value})` }))
     }
     select.value = String(value)
-    select.addEventListener('change', () => this.commit((n) => apply(n, Number(select.value))))
+    select.addEventListener('change', () =>
+      this.commit((n) => apply(n, Number(select.value))),
+    )
     return select
   }
 
@@ -140,40 +178,59 @@ export class Inspector {
     return input
   }
 
-  private build(node: GvNode, worldPos: WorldPos | null): HTMLElement[] {
-    const swatch = el('span', { id: 'ins-swatch' })
-    swatch.style.background = toHex(node.color.r, node.color.g, node.color.b)
-    const title = el('div', { id: 'ins-title' })
-    title.append(swatch, `Node ${node.id}`)
+  private build(nodes: GvNode[], worldPos: WorldPos | null): HTMLElement[] {
+    const primary = nodes[0]
+    const multi = nodes.length > 1
 
-    const typeName = NODE_TYPE_NAMES[node.type] ?? 'Glyph-like'
+    const swatch = el('span', { id: 'ins-swatch' })
+    swatch.style.background = toHex(primary.color.r, primary.color.g, primary.color.b)
+    const title = el('div', { id: 'ins-title' })
+    title.append(swatch, multi ? `${nodes.length} nodes selected` : `Node ${primary.id}`)
+
     const parts: HTMLElement[] = [
       title,
-      row('type', `${typeName} (${node.type})`),
-      row('parent', node.parentId === 0 ? 'root (0)' : String(node.parentId)),
-      row('branch level', String(node.branchLevel)),
+      row('type', shared(nodes, (n) => n.type, (t) => `${NODE_TYPE_NAMES[t] ?? 'Glyph-like'} (${t})`)),
+      row('parent', shared(nodes, (n) => n.parentId, (p) => (p === 0 ? 'root (0)' : String(p)))),
+      row('branch level', shared(nodes, (n) => n.branchLevel, String)),
     ]
-    if (worldPos) {
+    if (multi) {
       parts.push(
-        row('world pos', `${worldPos.x.toFixed(4)}, ${worldPos.y.toFixed(4)}, ${worldPos.z.toFixed(4)}`),
+        row('editing', `primary: node ${primary.id}`),
+        el('div', {
+          className: 'ins-note',
+          textContent: 'translate/rotate shift the whole selection; other fields apply to all',
+        }),
+      )
+    } else if (worldPos) {
+      parts.push(
+        row(
+          'world pos',
+          `${worldPos.x.toFixed(4)}, ${worldPos.y.toFixed(4)}, ${worldPos.z.toFixed(4)}`,
+        ),
       )
     }
 
     parts.push(
-      this.vec3Row('translate', (n) => n.translate),
-      this.vec3Row('rotate', (n) => n.rotate),
+      this.deltaVec3Row('translate', (n) => n.translate, this.anchorTranslate),
+      this.deltaVec3Row('rotate', (n) => n.rotate, this.anchorRotate),
       row(
         'rot. mode',
         this.idSelect(
-          { [RotationMode.EulerXYZ]: 'Euler XYZ', [RotationMode.HeadingTiltRoll]: 'Heading/Tilt/Roll' },
-          node.rotationMode,
+          {
+            [RotationMode.EulerXYZ]: 'Euler XYZ',
+            [RotationMode.HeadingTiltRoll]: 'Heading/Tilt/Roll',
+          },
+          primary.rotationMode,
           (n, v) => (n.rotationMode = v),
         ),
       ),
-      this.vec3Row('scale', (n) => n.scale),
+      this.absoluteVec3Row('scale', (n) => n.scale),
     )
 
-    const colorPicker = el('input', { type: 'color', value: toHex(node.color.r, node.color.g, node.color.b) })
+    const colorPicker = el('input', {
+      type: 'color',
+      value: toHex(primary.color.r, primary.color.g, primary.color.b),
+    })
     colorPicker.addEventListener('change', () => {
       const hex = colorPicker.value
       this.commit((n) => {
@@ -186,22 +243,22 @@ export class Inspector {
       row(
         'color / alpha',
         colorPicker,
-        this.numberInput(node.color.a, (n, v) => (n.color.a = v), {
+        this.numberInput(primary.color.a, (v) => this.commit((n) => (n.color.a = v)), {
           min: 0,
           max: 255,
           integer: true,
           width: '54px',
         }),
       ),
-      row('geometry', this.idSelect(GEOMETRY_NAMES, node.geometry, (n, v) => (n.geometry = v))),
-      row('topo', this.idSelect(TOPO_NAMES, node.topo, (n, v) => (n.topo = v))),
+      row('geometry', this.idSelect(GEOMETRY_NAMES, primary.geometry, (n, v) => (n.geometry = v))),
+      row('topo', this.idSelect(TOPO_NAMES, primary.topo, (n, v) => (n.topo = v))),
       row(
         'ratio',
-        this.numberInput(node.ratio, (n, v) => (n.ratio = v), { width: '70px' }),
+        this.numberInput(primary.ratio, (v) => this.commit((n) => (n.ratio = v)), { width: '70px' }),
       ),
       row(
         'facet',
-        this.numberInput(node.subspace + 1, (n, v) => (n.subspace = v - 1), {
+        this.numberInput(primary.subspace + 1, (v) => this.commit((n) => (n.subspace = v - 1)), {
           min: 1,
           max: 6,
           integer: true,
@@ -210,17 +267,19 @@ export class Inspector {
       ),
     )
 
-    const hide = el('input', { type: 'checkbox', checked: node.hide !== 0 })
+    const hide = el('input', { type: 'checkbox', checked: primary.hide !== 0 })
     hide.addEventListener('change', () => this.commit((n) => (n.hide = hide.checked ? 1 : 0)))
     parts.push(
       row('hide', hide),
-      row('text', this.textInput(node.text, (n, v) => (n.text = v))),
-      row('link', this.textInput(node.link, (n, v) => (n.link = v))),
+      row('text', this.textInput(primary.text, (n, v) => (n.text = v))),
+      row('link', this.textInput(primary.link, (n, v) => (n.link = v))),
     )
 
-    const extras = Object.keys(node.extras)
-    if (extras.length > 0) {
-      parts.push(row('extras', `${extras.length} column(s): ${extras.join(', ')}`))
+    if (!multi) {
+      const extras = Object.keys(primary.extras)
+      if (extras.length > 0) {
+        parts.push(row('extras', `${extras.length} column(s): ${extras.join(', ')}`))
+      }
     }
     parts.push(
       el('div', {

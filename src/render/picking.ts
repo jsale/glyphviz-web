@@ -55,32 +55,93 @@ export function createSelectionBox(): THREE.LineSegments {
   return box
 }
 
+/** id → frame, as returned by buildScene. */
+export type FrameLookup = ReadonlyMap<number, THREE.Object3D>
+
 /**
- * Single-selection holder: moves one shared halo onto the selected node's
- * glyph. (Desktop supports multi-select; single is the Tier-1 scope.)
+ * Halos are one LineSegments each, parented to the node's glyph so the draw
+ * matrix (including the 0.2 scale floor) makes them track rendered size — but
+ * that means one extra draw call per selected node. Select All on the 65k-node
+ * Org_Event_Network would grind, so past this many the selection stays
+ * complete and only the halos stop being drawn (see `haloOverflow`).
+ */
+export const MAX_HALOS = 1000
+
+/**
+ * Multi-selection holder: parks a yellow halo on each selected node's glyph.
  *
- * Nodes without a glyph (Links, hidden nodes) are still selectable when
- * their frame exists — keyboard navigation reaches them and the inspector
- * shows them, just with no halo. Same as the desktop, whose nav/table
- * selects them while the outline pass skips them.
+ * The *primary* node — the one the gizmo attaches to and the inspector reads
+ * its field values from — is the first selected node in scene row order,
+ * matching the desktop, where the inspector reads `_selected_nodes[0]` from
+ * the node table's row-ordered selection.
+ *
+ * Nodes without a glyph (Links, hidden nodes) are still selectable when their
+ * frame exists — keyboard navigation reaches them and the inspector shows
+ * them, just with no halo. Same as the desktop, whose nav/table selects them
+ * while the outline pass skips them.
  */
 export class Selection {
-  private box = createSelectionBox()
-  private selectedId: number | null = null
+  private pool: THREE.LineSegments[] = []
+  private attached: THREE.LineSegments[] = []
+  private order: number[] = []
+  private members = new Set<number>()
+  private overflow = 0
 
-  get id(): number | null {
-    return this.selectedId
+  /** Selected ids in scene row order; `[0]` is the primary. */
+  get ids(): readonly number[] {
+    return this.order
   }
 
-  /** Select the node (attaching the halo to its glyph), or clear with null. */
-  set(root: THREE.Object3D, nodeId: number | null): void {
-    this.box.removeFromParent()
-    this.selectedId = null
-    if (nodeId === null) return
-    const frame = root.getObjectByName(`gv:${nodeId}`)
-    if (!frame) return // not in the scene at all
-    this.selectedId = nodeId
-    const glyph = frame.children.find((c) => c.userData.isGlyph)
-    if (glyph) glyph.add(this.box)
+  /** The primary node id (gizmo target, inspector anchor), or null. */
+  get id(): number | null {
+    return this.order.length > 0 ? this.order[0] : null
+  }
+
+  get size(): number {
+    return this.order.length
+  }
+
+  /** Selected nodes beyond MAX_HALOS, which are drawn without a halo. */
+  get haloOverflow(): number {
+    return this.overflow
+  }
+
+  has(nodeId: number): boolean {
+    return this.members.has(nodeId)
+  }
+
+  asSet(): Set<number> {
+    return new Set(this.order)
+  }
+
+  /**
+   * Select exactly these ids, in the order given (so the caller decides the
+   * primary by passing scene row order). Ids with no frame in the scene are
+   * dropped. `null` or an empty list clears.
+   */
+  set(frames: FrameLookup, ids: number | null | Iterable<number>): void {
+    for (const box of this.attached) box.removeFromParent()
+    this.attached.length = 0
+    this.order.length = 0
+    this.members.clear()
+    this.overflow = 0
+    if (ids === null) return
+
+    for (const nodeId of typeof ids === 'number' ? [ids] : ids) {
+      const frame = frames.get(nodeId)
+      if (!frame || this.members.has(nodeId)) continue // not in the scene at all
+      this.members.add(nodeId)
+      this.order.push(nodeId)
+      const glyph = frame.children.find((c) => c.userData.isGlyph)
+      if (!glyph) continue
+      if (this.attached.length >= MAX_HALOS) {
+        this.overflow++
+        continue
+      }
+      const box = this.pool[this.attached.length] ?? createSelectionBox()
+      this.pool[this.attached.length] = box
+      this.attached.push(box)
+      glyph.add(box)
+    }
   }
 }

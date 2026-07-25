@@ -91,6 +91,40 @@ something to decide now).
       (children never reparented); Up/Down walk parent/first-child,
       Tab/Shift+Tab cycle visual siblings in row order (all roots at
       level 0), wrapping. `src/gv/treeOps.ts`.
+   f. Advanced selection (shipped 2026-07-25), desktop parity: the
+      selection is now a SET. Ctrl+click toggles one node, Shift+drag
+      sweeps a rectangle (Ctrl+Shift+drag adds it), Ctrl+A selects
+      all/none, Ctrl+I inverts. A Selection panel ports the desktop's
+      Select By group (Branch Level / Geometry / Topology + "Add to
+      Selection") and Visibility group (Hide/Show Selected, Show Only
+      Selected [I], Show All [Shift+H], Hide Selected [H], plus a Show
+      Hidden Nodes display toggle). Rules live in `src/gv/selectionOps.ts`.
+      - Multi-edit is full desktop parity (`src/gv/multiEdit.ts`): the
+        PRIMARY node is the first selected in scene row order (matching
+        the desktop reading `_selected_nodes[0]` off a row-ordered
+        table); inspector translate/rotate fields apply the DELTA from
+        the shown value to every selected node, all other fields apply
+        absolutely, and a gizmo drag pushes the primary's per-field
+        change onto the rest (additive for translate/rotate, a ratio for
+        scale, per `_apply_axis_deltas`) — each in its OWN topology
+        coordinates, never world space, so it round-trips to CSV.
+      - Region select projects node CENTERS instead of porting the
+        desktop's color-ID pick pass (`_pick_nodes_in_rect`): a glyph
+        straddling the box is missed unless its center is inside, and
+        nothing occludes. A pure math pass, no second render path. This
+        is NOT a divergence to reconcile in this direction — Jeff intends
+        to change desktop GlyphViz to match this behavior when he gets to
+        it (2026-07-25), so the web app is the reference here.
+      - Halos are one draw call each, so past `MAX_HALOS` (1000) the
+        selection stays complete and only the highlight stops drawing.
+      - Panels (Scene / Selection / Properties) collapse to their header
+        bar by click or Ctrl+B / Ctrl+E / Ctrl+P. Ctrl+N is reserved by
+        browsers and cannot be intercepted — Alt+N is free for the Node
+        Table panel when it lands.
+      - TO DO from this round: select by tag text (deferred until this
+        app has a story for scenes whose labels live in a companion
+        gv_tag.csv rather than inline text columns), and a Node Table
+        panel (desktop `node_table.py`).
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

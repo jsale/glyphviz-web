@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { buildScene } from './buildScene'
-import { createSelectionBox, pickNodeId, Selection, SELECTION_BOX_HALF } from './picking'
+import { createSelectionBox, MAX_HALOS, pickNodeId, Selection, SELECTION_BOX_HALF } from './picking'
 import { Geometry, NodeType } from '../gv/types'
 import type { GvNode } from '../gv/types'
 
@@ -131,12 +131,12 @@ describe('selection box', () => {
   })
 
   it('attaches to the selected node glyph and tracks its rendered size', () => {
-    const { root } = buildAndUpdate([
+    const { root, frames } = buildAndUpdate([
       makeNode({ id: 1 }),
       makeNode({ id: 2, translate: { x: 5, y: 0, z: 0 }, scale: { x: 0.1, y: 0.1, z: 0.1 } }),
     ])
     const sel = new Selection()
-    sel.set(root, 2)
+    sel.set(frames, 2)
     expect(sel.id).toBe(2)
     root.updateMatrixWorld(true)
     const box = root.getObjectByName('selection-box')!
@@ -145,23 +145,83 @@ describe('selection box', () => {
     const ws = box.getWorldScale(new THREE.Vector3())
     expect(ws.x).toBeCloseTo(0.2)
 
-    sel.set(root, null)
+    sel.set(frames, null)
     expect(sel.id).toBeNull()
     expect(root.getObjectByName('selection-box')).toBeUndefined()
   })
 
   it('selects glyph-less nodes (hidden, links) without a halo — nav/inspector reach them', () => {
-    const { root } = buildAndUpdate([makeNode({ id: 1, hide: 1 })])
+    const { root, frames } = buildAndUpdate([makeNode({ id: 1, hide: 1 })])
     const sel = new Selection()
-    sel.set(root, 1)
+    sel.set(frames, 1)
     expect(sel.id).toBe(1)
     expect(root.getObjectByName('selection-box')).toBeUndefined()
   })
 
   it('refuses to select ids with no frame in the scene', () => {
-    const { root } = buildAndUpdate([makeNode({ id: 1 })])
+    const { frames } = buildAndUpdate([makeNode({ id: 1 })])
     const sel = new Selection()
-    sel.set(root, 99)
+    sel.set(frames, 99)
     expect(sel.id).toBeNull()
+  })
+})
+
+describe('multi-selection', () => {
+  const threeNodes = () => [
+    makeNode({ id: 1 }),
+    makeNode({ id: 2, translate: { x: 5, y: 0, z: 0 } }),
+    makeNode({ id: 3, translate: { x: 10, y: 0, z: 0 } }),
+  ]
+
+  function haloCount(root: THREE.Object3D): number {
+    let n = 0
+    root.traverse((o) => {
+      if (o.userData.isSelectionBox) n++
+    })
+    return n
+  }
+
+  it('halos every selected node and keeps the first as primary', () => {
+    const { root, frames } = buildAndUpdate(threeNodes())
+    const sel = new Selection()
+    sel.set(frames, [2, 3])
+    expect(sel.id).toBe(2)
+    expect(sel.size).toBe(2)
+    expect([...sel.ids]).toEqual([2, 3])
+    expect(sel.has(3)).toBe(true)
+    expect(sel.has(1)).toBe(false)
+    expect(haloCount(root)).toBe(2)
+  })
+
+  it('reuses halos and detaches the ones no longer selected', () => {
+    const { root, frames } = buildAndUpdate(threeNodes())
+    const sel = new Selection()
+    sel.set(frames, [1, 2, 3])
+    expect(haloCount(root)).toBe(3)
+    sel.set(frames, [3])
+    expect(haloCount(root)).toBe(1)
+    expect(sel.id).toBe(3)
+    sel.set(frames, [])
+    expect(haloCount(root)).toBe(0)
+    expect(sel.id).toBeNull()
+  })
+
+  it('ignores duplicates and ids absent from the scene', () => {
+    const { frames } = buildAndUpdate(threeNodes())
+    const sel = new Selection()
+    sel.set(frames, [2, 2, 99, 1])
+    expect([...sel.ids]).toEqual([2, 1])
+  })
+
+  it('caps halos past MAX_HALOS while keeping the selection complete', () => {
+    const nodes = Array.from({ length: MAX_HALOS + 5 }, (_, i) =>
+      makeNode({ id: i + 1, translate: { x: i * 3, y: 0, z: 0 } }),
+    )
+    const { root, frames } = buildAndUpdate(nodes)
+    const sel = new Selection()
+    sel.set(frames, nodes.map((n) => n.id))
+    expect(sel.size).toBe(MAX_HALOS + 5)
+    expect(haloCount(root)).toBe(MAX_HALOS)
+    expect(sel.haloOverflow).toBe(5)
   })
 })
