@@ -27,6 +27,12 @@ export const NodeType = {
   Link: 7,
 } as const
 
+/**
+ * Viewport background used when a scene has no World (type 0) row — the
+ * desktop's WORLD_DEFAULT_BG_RGB. A scene WITH one takes its color_r/g/b.
+ */
+export const WORLD_DEFAULT_BG: Readonly<Rgba> = { r: 20, g: 20, b: 31, a: 255 }
+
 /** Topology ids (`topo` column) — how *children* of this node are placed. */
 export const Topo = {
   None: 0,

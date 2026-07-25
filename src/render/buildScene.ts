@@ -16,8 +16,9 @@
 
 import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
-import { NodeType, Topo } from '../gv/types'
+import { NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
+import { worldNodeOf } from '../gv/worldNode'
 import { createGlyphObject, createPickProxy } from './glyphGeometry'
 import { buildLinkOverlay, LinkOverlay } from './linkOverlay'
 import { localRotationMatrix } from './rotation'
@@ -30,7 +31,11 @@ export const BASE_SCALE = 1.0
 /** Draw-time per-axis floor on world scale (placement always uses raw scale). */
 export const RENDER_SCALE_FLOOR = 0.2
 /** Background when no World (type 0) row is present. */
-export const DEFAULT_BACKGROUND = new THREE.Color(20 / 255, 20 / 255, 31 / 255)
+export const DEFAULT_BACKGROUND = new THREE.Color(
+  WORLD_DEFAULT_BG.r / 255,
+  WORLD_DEFAULT_BG.g / 255,
+  WORLD_DEFAULT_BG.b / 255,
+)
 
 /** Node types that are never drawn (their children still are). */
 const NON_VISUAL_TYPES = new Set<number>([NodeType.World, NodeType.Camera])
@@ -162,7 +167,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   root.name = 'gv-root'
 
   let background = DEFAULT_BACKGROUND.clone()
-  const worldNode = nodes.find((n) => n.type === NodeType.World)
+  const worldNode = worldNodeOf(nodes)
   if (worldNode) {
     background = new THREE.Color(
       worldNode.color.r / 255,

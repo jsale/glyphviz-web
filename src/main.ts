@@ -2,6 +2,7 @@ import './style.css'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
+import { cycleGeometry, cycleTargets, cycleTopology } from './gv/attrCycle'
 import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
@@ -40,6 +41,7 @@ import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOp
 import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
 import { GEOMETRY_NAMES, Geometry, NodeType, TOPO_NAMES, Topo } from './gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
+import { backgroundRgb, ensureWorldNode, toggledBwBackground, worldNodeOf } from './gv/worldNode'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
@@ -217,6 +219,16 @@ hud.innerHTML = `
     <div class="hud-create-row"><span>Color</span><input id="hud-new-color" type="color" value="#c8c8c8"></div>
     <button id="hud-delete" title="Delete the selected node and all of its descendants — children are never reparented." disabled>Delete (Del)</button>
   </div>
+  <div id="hud-world">
+    <div class="hud-create-row" title="Viewport background — the World row's color. A scene without a World row gets one the first time this changes.">
+      <span>Background</span>
+      <input id="hud-bg-color" type="color" value="#14141f">
+      <button id="hud-bg-bw" title="Flip the background between black and white  [B]">B/W</button>
+    </div>
+    <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
+      <input type="checkbox">Follow Selected (F)
+    </label>
+  </div>
   <div id="hud-hint">or drop a scene folder, .zip or CSV anywhere</div>
 `
 const hudScene = hud.querySelector<HTMLDivElement>('#hud-scene')!
@@ -234,6 +246,9 @@ const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
 const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
+const bgColorInput = hud.querySelector<HTMLInputElement>('#hud-bg-color')!
+const bgBwButton = hud.querySelector<HTMLButtonElement>('#hud-bg-bw')!
+const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
 
 // Selected while an opened file/folder scene is showing, so the combo never
 // claims a built-in that isn't on screen.
@@ -929,6 +944,7 @@ function rebuildScene(fitCamera: boolean) {
   currentOverlays.setResolution(pixelWidth, pixelHeight)
   scene.add(currentRoot)
   scene.background = built.background
+  syncBackgroundInput() // the loaded scene's World row may set its own
   nodesById = new Map(currentNodes.map((n) => [n.id, n]))
   // Before any setSelection below: orderedIds resolves the primary through the
   // table's display order, which has to be describing THIS node list.
@@ -1351,6 +1367,10 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'i' || e.key === 'I') selectionCommands.isolateSelected()
   else if (e.key === 't' || e.key === 'T') toggleTags()
   else if (e.key === 'u' || e.key === 'U') openSelectedLink()
+  else if (e.key === 'j' || e.key === 'J') cycleAttribute('topo', e.shiftKey ? -1 : 1)
+  else if (e.key === 'o' || e.key === 'O') cycleAttribute('geometry', e.shiftKey ? -1 : 1)
+  else if (e.key === 'f' || e.key === 'F') setFollowSelected(!followSelected)
+  else if (e.key === 'b' || e.key === 'B') toggleBackgroundBw()
   else if (e.key === 'w' || e.key === 'W') setGizmoMode('translate')
   else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate')
   else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
@@ -1734,6 +1754,135 @@ function navTo(node: GvNode | null) {
 
 deleteButton.addEventListener('click', deleteSelection)
 
+// --- ANTz attribute cycling (J = topology, O = geometry) ------------------------
+// Desktop parity — the rules live in src/gv/attrCycle.ts. The step applies PER
+// NODE, so a selection holding two different topologies keeps holding two
+// different topologies; Shift reverses the direction.
+
+function cycleAttribute(kind: 'geometry' | 'topo', step: number) {
+  const targets = cycleTargets(selectedNodes())
+  if (targets.length === 0) return status('No selection to cycle.')
+  const isGeometry = kind === 'geometry'
+  if (isGeometry) cycleGeometry(targets, step)
+  else cycleTopology(targets, step)
+  // The desktop's _after_attr_cycle tail — refresh the table rows, the
+  // Select-By value combo and the inspector's now-stale combos — is one
+  // rebuild here, which does all three and redraws the changed glyphs.
+  rebuildScene(false)
+  const label = isGeometry ? 'Geometry' : 'Topology'
+  if (targets.length === 1) {
+    const node = targets[0]
+    const id = isGeometry ? node.geometry : node.topo
+    status(`${label} → ${id}: ${(isGeometry ? GEOMETRY_NAMES : TOPO_NAMES)[id] ?? id}`)
+  } else {
+    const sign = step > 0 ? '+1' : '−1'
+    status(`Cycled ${label.toLowerCase()} ${sign} on ${targets.length} node(s).`)
+  }
+}
+
+// --- Scene background (B / the Background row) ----------------------------------
+// The background IS the World row's color (node.py), so changing it edits a
+// real CSV field that saves and round-trips — and a scene with no World row
+// gets one synthesized, the desktop's _ensure_world_node rule.
+
+function hexOfRgb(rgb: { r: number; g: number; b: number }): string {
+  const channel = (c: number) =>
+    Math.round(Math.min(255, Math.max(0, c)))
+      .toString(16)
+      .padStart(2, '0')
+  return `#${channel(rgb.r)}${channel(rgb.g)}${channel(rgb.b)}`
+}
+
+/** Point the colour input at the scene's current background. */
+function syncBackgroundInput() {
+  bgColorInput.value = hexOfRgb(backgroundRgb(currentNodes))
+}
+
+function setBackground(r: number, g: number, b: number) {
+  const hadWorldRow = worldNodeOf(currentNodes) !== null
+  const world = ensureWorldNode(currentNodes)
+  world.color.r = r
+  world.color.g = g
+  world.color.b = b
+  syncBackgroundInput()
+  if (!hadWorldRow) {
+    // A row that did not exist a moment ago has to reach nodesById and the
+    // Node Table, which only a rebuild does.
+    rebuildScene(false)
+    return
+  }
+  // Otherwise this is one uniform: repaint without rebuilding the graph, so
+  // dragging the colour picker stays smooth on a 200k-node scene.
+  scene.background = new THREE.Color(r / 255, g / 255, b / 255)
+  nodeTable.refreshVisible() // the World row's colour cell
+}
+
+function toggleBackgroundBw() {
+  const value = toggledBwBackground(backgroundRgb(currentNodes))
+  setBackground(value, value, value)
+  status(value === 0 ? 'Background black.' : 'Background white.')
+}
+
+bgColorInput.addEventListener('input', () => {
+  const hex = bgColorInput.value
+  setBackground(
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  )
+})
+bgBwButton.addEventListener('click', toggleBackgroundBw)
+
+// --- Follow Selected (F) --------------------------------------------------------
+// Desktop View ▸ Follow Selected Node: the orbit pivot re-centres on the
+// followed node every frame, so the camera jumps as the selection moves from
+// node to node AND tracks one that is animating under Channels or a rate field.
+
+let followSelected = false
+const followDelta = new THREE.Vector3()
+
+/** The node the camera follows: the first selected VISUAL node in row order
+ *  (desktop follow_node — World/Camera rows are settings, not places). */
+function followNode(): GvNode | null {
+  for (const node of selectedNodes()) {
+    if (node.type !== NodeType.World && node.type !== NodeType.Camera) return node
+  }
+  return null
+}
+
+function applyFollowTarget() {
+  if (!followSelected) return
+  // Suspended mid-gizmo-drag, the same reason the rate integrator is: both
+  // would be moving the node at once. TransformControls projects the pointer
+  // onto a world-space plane, so a camera chasing the node it is dragging
+  // feeds back into the drag and runs away. The desktop drags from screen-space
+  // deltas and doesn't have that coupling, so it can follow throughout.
+  if (gizmo.dragging) return
+  const node = followNode()
+  if (!node) return
+  const pos = worldPosOf(node.id)
+  if (!pos) return
+  // Move the pivot AND the camera by the same delta, leaving distance, azimuth
+  // and elevation alone — the desktop only re-centres _cam_target and keeps its
+  // spherical camera parameters, so orbit and zoom stay live while following.
+  // Panning is overridden as a consequence: the pivot snaps back next frame.
+  followDelta.copy(pos).sub(controls.target)
+  if (followDelta.lengthSq() === 0) return
+  controls.target.add(followDelta)
+  camera.position.add(followDelta)
+}
+
+function setFollowSelected(value: boolean) {
+  followSelected = value
+  followCheckbox.checked = value
+  if (!value) return status('Follow off.')
+  const node = followNode()
+  applyFollowTarget() // jump now rather than on the next animation frame
+  status(node ? `Following node ${node.id}.` : 'Follow on — select a node to follow.')
+}
+
+followCheckbox.addEventListener('change', () => setFollowSelected(followCheckbox.checked))
+
 // --- Boot ---------------------------------------------------------------------
 
 {
@@ -1814,6 +1963,9 @@ renderer.setAnimationLoop(() => {
   // on screen are touched, and nothing at all while the panel is collapsed.
   if (tickAnimation(dtMs) || gizmo.dragging) nodeTable.refreshVisible()
 
+  // After the animation tick, like the desktop's paintGL: the followed node has
+  // already moved this frame, so the pivot lands on where it actually is.
+  applyFollowTarget()
   controls.update()
   backdrop.update(camera.position.distanceTo(controls.target))
   // Edges, plot lines and surface meshes chase the nodes they connect (gizmo

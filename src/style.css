@@ -276,6 +276,31 @@ canvas {
   cursor: default;
 }
 
+#hud-world {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #2a3040;
+}
+
+#hud-bg-color {
+  flex: 1;
+}
+
+#hud-bg-bw {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-bg-bw:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 #hud-hint {
   color: #6c7488;
   margin-top: 2px;

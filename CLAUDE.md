@@ -168,6 +168,40 @@ something to decide now).
         - Channels frames and gizmo drags rewrite fields without a
           rebuild, so the ~30 on-screen rows repaint from the animation
           loop; collapsed, the panel does no work at all.
+   g. Viewport commands (shipped 2026-07-25), desktop parity:
+      - J / Shift+J cycle the selected nodes' TOPOLOGY, O / Shift+O their
+        GEOMETRY. `src/gv/attrCycle.ts` ports `_cycle_selected_topology` /
+        `_cycle_selected_geometry` / `_cycle_targets`: the step applies PER
+        NODE, so a selection holding two different topologies keeps holding
+        two different ones. Geometry skips Mesh (23, meaningless without a
+        mesh_id) and the link-only ids 27/28, while a Link node cycles
+        between exactly those two. World/Camera rows and World Grids are
+        never targets — a grid's geometry encodes flat-vs-globe. The
+        desktop's `_after_attr_cycle` tail (table rows, Select-By combo,
+        stale inspector combos, redraw) is one `rebuildScene(false)` here.
+      - F toggles Follow Selected: the orbit pivot re-centres on the first
+        selected VISUAL node in row order every frame, so the camera jumps
+        from selection to selection AND tracks a node animating under
+        Channels or a rate field. Pivot and camera move by the SAME delta,
+        so distance/azimuth/elevation are untouched and orbit + zoom stay
+        live (the desktop keeps its spherical params and only moves
+        `_cam_target`); panning is overridden as a consequence. Divergence:
+        following is suspended mid-gizmo-drag. TransformControls projects
+        the pointer onto a world-space plane, so a camera chasing the node
+        it is dragging feeds back into the drag and runs away — the desktop
+        drags from screen-space deltas and has no such coupling.
+      - B (and a Background row in the Scene panel) sets the scene
+        background, which IS the World row's color_r/g/b — so it is a real
+        CSV edit that saves and round-trips, not a viewer preference. A
+        scene with no World row gets one synthesized on first change
+        (`ensureWorldNode`, id = max + 1 and NEVER 0, since parent_id 0 is
+        the root sentinel); that case rebuilds so the new row reaches
+        nodesById and the Node Table, while every later change writes one
+        uniform and skips the rebuild, keeping a colour-picker drag smooth
+        at 200k nodes. B alone flips black↔white on the desktop's red ≥ 128
+        threshold. `src/gv/worldNode.ts` also gave buildScene the desktop's
+        lowest-id-wins rule for picking the World row (it took the first in
+        file order before).
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

@@ -9,7 +9,7 @@
 //   parent's topology, for the same reason.
 
 import type { GvNode, Rgba, Vec3 } from './types'
-import { Geometry, NodeType, RotationMode, Topo } from './types'
+import { Geometry, NodeType, RotationMode, Topo, WORLD_DEFAULT_BG } from './types'
 
 /** The subset of fields the New Object Defaults panel controls. */
 export interface NewObjectDefaults {
@@ -82,6 +82,23 @@ export function createRootNode(
     if (!NON_VISUAL.has(n.type) && n.branchLevel === 0) maxX = Math.max(maxX, n.translate.x)
   }
   node.translate.x = Number.isFinite(maxX) ? maxX + 10 : 0
+  return node
+}
+
+/**
+ * The scene-settings row (type 0) synthesized for a file that has none —
+ * desktop `_ensure_world_node`. It is never drawn; its color is the viewport
+ * background. The id rule matters here for the same reason as above: a World
+ * node at id 0 would silently become the parent of every root-level row.
+ */
+export function createWorldNode(nodes: readonly GvNode[]): GvNode {
+  const node = blankNode(nextNodeId(nodes), {
+    geometry: 0,
+    topo: 0,
+    scale: { x: 1, y: 1, z: 1 },
+    color: { ...WORLD_DEFAULT_BG },
+  })
+  node.type = NodeType.World
   return node
 }
 
