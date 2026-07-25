@@ -6,6 +6,7 @@ import {
   isolateSelection,
   selectAllIds,
   selectByCriterion,
+  selectByTagText,
   setHidden,
   showAll,
 } from './selectionOps'
@@ -91,6 +92,50 @@ describe('select by criterion', () => {
     expect([...selectByCriterion(scene(), 'branchLevel', 1)]).toEqual([4, 5])
     expect([...selectByCriterion(scene(), 'geometry', Geometry.SphereSolid)]).toEqual([3, 4])
     expect([...selectByCriterion(scene(), 'topo', Topo.Cube)]).toEqual([3])
+  })
+})
+
+describe('select by tag text', () => {
+  /** The same scene, with labels of the kind a gv_tag.csv supplies. */
+  function tagged(): GvNode[] {
+    const nodes = scene()
+    nodes[0].text = 'World Root' // World row: never bulk-selectable
+    nodes[1].text = 'Ground Grid'
+    nodes[2].text = 'Boston, MA'
+    nodes[3].text = 'boston harbour'
+    nodes[4].text = 'New York'
+    return nodes
+  }
+
+  it('matches a case-insensitive substring of the tag text', () => {
+    expect([...selectByTagText(tagged(), 'boston')]).toEqual([3, 4])
+    expect([...selectByTagText(tagged(), 'BOSTON')]).toEqual([3, 4])
+    expect([...selectByTagText(tagged(), 'York')]).toEqual([5])
+  })
+
+  it('ignores surrounding whitespace in the keyword', () => {
+    expect([...selectByTagText(tagged(), '  harbour ')]).toEqual([4])
+  })
+
+  it('matches nothing for an empty or whitespace-only keyword', () => {
+    expect(selectByTagText(tagged(), '').size).toBe(0)
+    expect(selectByTagText(tagged(), '   ').size).toBe(0)
+  })
+
+  it('never sweeps in World/Camera rows or World Grids', () => {
+    // Both carry a matching label; neither is bulk-selectable.
+    expect(selectByTagText(tagged(), 'World').size).toBe(0)
+    expect(selectByTagText(tagged(), 'Grid').size).toBe(0)
+  })
+
+  it('searches the label only, never the link column', () => {
+    const nodes = tagged()
+    nodes[4].link = 'https://boston.example.com/'
+    expect([...selectByTagText(nodes, 'boston')]).toEqual([3, 4])
+  })
+
+  it('returns an empty set for a scene with no labels at all', () => {
+    expect(selectByTagText(scene(), 'anything').size).toBe(0)
   })
 })
 

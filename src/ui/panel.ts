@@ -11,6 +11,13 @@ export interface PanelOptions {
   /** Shown greyed in the header, e.g. 'Ctrl+P'. */
   hotkey?: string
   collapsed?: boolean
+  /**
+   * Fired whenever the collapsed state changes, however it changed (header
+   * click, hotkey, or a direct assignment). A panel whose body is expensive to
+   * fill — the Node Table's virtualized rows — uses this to do that work only
+   * while it is actually on screen.
+   */
+  onToggle?: (collapsed: boolean) => void
 }
 
 export class Panel {
@@ -20,8 +27,10 @@ export class Panel {
   private header: HTMLButtonElement
   private caret: HTMLSpanElement
   private isCollapsed = false
+  private onToggle?: (collapsed: boolean) => void
 
   constructor(options: PanelOptions) {
+    this.onToggle = options.onToggle
     this.element = document.createElement('div')
     this.element.id = options.id
     this.element.className = 'panel'
@@ -63,6 +72,7 @@ export class Panel {
     this.element.classList.toggle('collapsed', value)
     this.caret.textContent = value ? '▸' : '▾'
     this.header.title = value ? 'Expand' : 'Collapse'
+    this.onToggle?.(value)
   }
 
   toggle(): void {

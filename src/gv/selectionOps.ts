@@ -85,6 +85,30 @@ export function selectByCriterion(
   return ids
 }
 
+/**
+ * Desktop `_on_select_by_tag`: every node whose tag text CONTAINS the keyword,
+ * case-insensitively.
+ *
+ * Matching is against `text` alone — the `link` column is deliberately not
+ * searched, because that is what the desktop searches and because a URL's host
+ * name would otherwise pull in nodes whose visible label says nothing of the
+ * kind. `text` is the same field either authoring style lands in: inline
+ * `text` columns, or the companion gv_tag.csv applyTags() writes into.
+ *
+ * An empty (or whitespace-only) keyword matches nothing rather than
+ * everything — the desktop returns early on it, and "select all" already has
+ * its own command.
+ */
+export function selectByTagText(nodes: GvNode[], keyword: string): Set<number> {
+  const ids = new Set<number>()
+  const needle = keyword.trim().toLowerCase()
+  if (needle === '') return ids
+  for (const node of bulkSelectableNodes(nodes)) {
+    if (node.text.toLowerCase().includes(needle)) ids.add(node.id)
+  }
+  return ids
+}
+
 export function selectAllIds(nodes: GvNode[]): Set<number> {
   return new Set(bulkSelectableNodes(nodes).map((n) => n.id))
 }

@@ -431,7 +431,8 @@ canvas {
   color: #9aa3b5;
 }
 
-.sel-row select {
+.sel-row select,
+.sel-row input[type='text'] {
   flex: 1;
   min-width: 0;
   padding: 1px 4px;
@@ -440,6 +441,10 @@ canvas {
   background: #161a26;
   color: #cfd6e4;
   font: inherit;
+}
+
+.sel-row input[type='text']:disabled {
+  color: #6c7488;
 }
 
 .sel-check {
@@ -527,6 +532,121 @@ canvas {
   color: #9aa3b5;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* --- Node Table panel ---------------------------------------------------- */
+/* Bottom dock, clear of the left panel column and the inspector on the right.
+   Collapsed it is just the header bar, so it costs one line of screen. */
+
+#node-table {
+  position: fixed;
+  left: 324px;
+  right: 324px;
+  bottom: 12px;
+  z-index: 1;
+}
+
+#node-table .panel-body {
+  padding: 0 8px 6px;
+}
+
+.nt-scroll {
+  height: 260px;
+  /* Dragging the corner makes room on a big scene without a layout mode. */
+  resize: vertical;
+  overflow: auto;
+  border: 1px solid #2a3040;
+  border-radius: 4px;
+  background: #0d1018;
+}
+
+.nt-inner {
+  position: relative;
+}
+
+.nt-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  height: 22px;
+  background: #191e2c;
+  border-bottom: 1px solid #2a3040;
+}
+
+.nt-head {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  line-height: 21px;
+  color: #9aa3b5;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.nt-head:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #cfd6e4;
+}
+
+.nt-head.sorted {
+  color: #cfd6e4;
+}
+
+.nt-row {
+  position: absolute;
+  left: 0;
+  display: flex;
+  height: 20px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Desktop setAlternatingRowColors(True). */
+.nt-row.odd {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.nt-row:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.nt-row.selected {
+  background: rgba(77, 179, 255, 0.22);
+}
+
+/* The primary node — the gizmo target and the inspector's anchor — in the
+   viewport's own selection yellow. */
+.nt-row.primary {
+  background: rgba(255, 242, 26, 0.16);
+  box-shadow: inset 2px 0 0 rgba(255, 242, 26, 0.75);
+}
+
+.nt-cell {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  line-height: 20px;
+  color: #cfd6e4;
+  white-space: nowrap;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.nt-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 5px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  vertical-align: -1px;
+}
+
+.nt-footer {
+  margin-top: 5px;
+  color: #6c7488;
 }
 
 /* --- Region select band + status line ------------------------------------ */

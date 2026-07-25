@@ -1,10 +1,6 @@
 // The Select By / Visibility panel, ported from the desktop's side-dock groups
 // of the same names (main_window.py). Everything here is presentation: the
 // matching and hide-flag rules live in src/gv/selectionOps.ts.
-//
-// Not here yet: "Select Matching Tags" (desktop's keyword search over tag
-// text). The companion gv_tag.csv now loads (src/gv/tagCsv.ts), so the reason
-// it was deferred is gone — it is simply the next thing to add here.
 
 import type { GvNode } from '../gv/types'
 import type { CriterionValue, SelectCriterion } from '../gv/selectionOps'
@@ -19,6 +15,8 @@ export interface SelectionPanelHost {
   invertSelection(): void
   /** Select the criterion match, honouring the Add-to-Selection checkbox. */
   selectMatching(criterion: SelectCriterion, value: number, additive: boolean): void
+  /** Select every node whose tag text contains `keyword` (same checkbox). */
+  selectMatchingTags(keyword: string, additive: boolean): void
   hideSelected(): void
   showSelected(): void
   isolateSelected(): void
@@ -60,6 +58,8 @@ export class SelectionPanel {
   private showTags: HTMLInputElement
   private tagsSelectedOnly: HTMLInputElement
   private tagCount = el('div', { className: 'sel-hint' })
+  private tagKeyword = el('input', { type: 'text', placeholder: 'keyword…' })
+  private tagSearchButton: HTMLButtonElement
   private audio = el('select')
   private audioRow: HTMLDivElement
   private selectionButtons: HTMLButtonElement[] = []
@@ -148,6 +148,25 @@ export class SelectionPanel {
       },
     )
 
+    // Tag keyword search — the desktop's "Tag contains:" row, sharing the same
+    // Add-to-Selection checkbox as Select All Matching and reporting through
+    // the same highlight-in-place mechanism (no separate results list).
+    const searchTags = () =>
+      host.selectMatchingTags(this.tagKeyword.value, this.additive.checked)
+    this.tagKeyword.title = "Case-insensitive substring match against each node's tag text."
+    this.tagKeyword.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return
+      e.preventDefault()
+      searchTags()
+    })
+    this.tagSearchButton = button(
+      'Select Matching Tags',
+      'Select every node whose tag text contains the keyword above.\n' +
+        'Uses the same "Add to Selection" checkbox as Select All Matching.\n' +
+        'Labels come from inline text columns or the companion gv_tag.csv.',
+      searchTags,
+    )
+
     const hide = button(
       'Hide Selected',
       'Hide the selected node(s)  [H]\n' +
@@ -185,6 +204,8 @@ export class SelectionPanel {
       this.labelled('Value', this.value),
       matching,
       addCheck.row,
+      this.labelled('Tag', this.tagKeyword),
+      this.tagSearchButton,
       el('div', { className: 'sel-section', textContent: 'Visibility' }),
       pair(hide, show),
       isolate,
@@ -239,6 +260,13 @@ export class SelectionPanel {
           (labelled > MAX_TAGS_PER_FRAME ? ` — over the ${MAX_TAGS_PER_FRAME}/frame cap` : '')
     this.showTags.disabled = labelled === 0
     this.tagsSelectedOnly.disabled = labelled === 0
+    // Small divergence: the desktop leaves the tag search live and answers
+    // "No nodes tagged with …". A scene with no labels at all can never
+    // answer anything else, so the row greys out instead — consistent with
+    // the label checkboxes right below it, which already do this.
+    this.tagKeyword.disabled = labelled === 0
+    this.tagSearchButton.disabled = labelled === 0
+    this.tagKeyword.placeholder = labelled === 0 ? 'no labels in scene' : 'keyword…'
   }
 
   /** Keep the checkbox in step when the T key toggles labels. */

@@ -31,6 +31,7 @@ import {
   isolateSelection,
   selectAllIds,
   selectByCriterion,
+  selectByTagText,
   setHidden,
   showAll,
 } from './gv/selectionOps'
@@ -60,6 +61,7 @@ import { invertLocalRotation } from './render/rotationInverse'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { Inspector } from './ui/inspector'
+import { NodeTable } from './ui/nodeTable'
 import { Panel } from './ui/panel'
 import { SelectionPanel } from './ui/selectionPanel'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
@@ -91,7 +93,9 @@ import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 // Plot (16) polylines and Surface (17) quad meshes draw over their children
 // (src/render/topologyOverlay.ts), refreshed each frame like the Link edges.
 //
-// Still to come: select by tag text, a Node Table panel.
+// The Node Table panel (Alt+N) is the flat, sortable view of every row —
+// including the World/Camera/grid rows the bulk commands skip — and its
+// display order is what decides the primary node, exactly as on the desktop.
 
 interface BuiltInScene {
   csv: string
@@ -334,13 +338,15 @@ function parentOf(node: GvNode): GvNode | null {
 }
 
 /**
- * Scene row order for a set of ids. The desktop's inspector reads
- * `_selected_nodes[0]` from a row-ordered table selection, so ordering here
- * is what makes "primary" mean the same thing in both apps.
+ * Node Table row order for a set of ids. The desktop's inspector reads
+ * `_selected_nodes[0]` from the table's row-ordered selection, so ordering
+ * here is what makes "primary" mean the same thing in both apps — including
+ * the consequence that sorting the table can change which node is primary.
+ * With no sort applied the table's order IS the scene's file order.
  */
 function orderedIds(ids: ReadonlySet<number>): number[] {
   const out: number[] = []
-  for (const node of currentNodes) {
+  for (const node of nodeTable.displayOrder()) {
     if (ids.has(node.id)) out.push(node.id)
   }
   return out
@@ -384,6 +390,7 @@ function refreshSelectionUi() {
   newChildButton.disabled = !primary
   deleteButton.disabled = !primary
   selectionPanel.update(currentNodes, selection.size)
+  nodeTable.setSelection(selection.asSet(), selection.id)
   // "Solo to Selection" mixes by what is selected right now.
   if (audioMode === 'selected') refreshAudio()
   if (!primary) {
@@ -447,6 +454,18 @@ const selectionCommands = {
     if (additive) addToSelection(ids)
     else setSelection(ids)
     status(`${ids.size} node(s) matched.`)
+  },
+  selectMatchingTags(keyword: string, additive: boolean) {
+    const trimmed = keyword.trim()
+    if (trimmed === '') return status('Type a keyword to search the tag labels for.')
+    const ids = selectByTagText(currentNodes, trimmed)
+    if (additive) addToSelection(ids)
+    else setSelection(ids)
+    status(
+      ids.size > 0
+        ? `${ids.size} node(s) tagged with "${trimmed}".`
+        : `No nodes tagged with "${trimmed}".`,
+    )
   },
   hideSelected() {
     if (selection.size === 0) return status('No selection to hide.')
@@ -512,6 +531,24 @@ function refreshAudio() {
 
 const selectionPanel = new SelectionPanel(selectionCommands)
 panelsLeft.appendChild(selectionPanel.panel.element)
+
+// --- Node Table ----------------------------------------------------------------
+// Docked along the bottom rather than in the left column: 20 columns need the
+// width, and the desktop keeps it in its own full-width dock too. Selection is
+// two-way — clicking a row drives the 3D selection, and every other way of
+// selecting scrolls the table to the primary row.
+const nodeTable = new NodeTable({
+  selectIds: (ids) => setSelection(new Set(ids)),
+  addIds: (ids) => addToSelection(new Set(ids)),
+  toggleId: (id) => toggleInSelection(id),
+  orderChanged() {
+    // A new sort can hand "first selected row" to a different node, which is
+    // the gizmo target and the inspector's anchor — re-resolve the selection
+    // through the new order.
+    setSelection(selection.asSet())
+  },
+})
+app.appendChild(nodeTable.element)
 
 // --- Channels playback ---------------------------------------------------------
 // The engine writes absolute attribute values into the node rows each frame
@@ -893,6 +930,9 @@ function rebuildScene(fitCamera: boolean) {
   scene.add(currentRoot)
   scene.background = built.background
   nodesById = new Map(currentNodes.map((n) => [n.id, n]))
+  // Before any setSelection below: orderedIds resolves the primary through the
+  // table's display order, which has to be describing THIS node list.
+  nodeTable.setNodes(currentNodes)
   // A real World Grid replaces the procedural reference grid as the plane
   // of reference (its lattice has meaningful spacing; the backdrop's not).
   backdrop.showReferenceGrid = !currentNodes.some((n) => n.type === NodeType.WorldGrid)
@@ -1286,10 +1326,14 @@ window.addEventListener('keydown', (e) => {
     return
   }
 
-  // Alt+C for the Channels panel: Ctrl+B/E/P are taken, and Ctrl+N — the
-  // obvious fourth — is reserved by the browser.
-  if (e.altKey && (e.key === 'c' || e.key === 'C')) {
-    channelsPanel.panel.toggle()
+  // Alt+C / Alt+N for the Channels and Node Table panels: Ctrl+B/E/P are
+  // taken, and Ctrl+N — the obvious one for the table — is reserved by the
+  // browser and cannot be intercepted.
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    const key = e.key.toLowerCase()
+    if (key === 'c') channelsPanel.panel.toggle()
+    else if (key === 'n') nodeTable.panel.toggle()
+    else return
     e.preventDefault()
     return
   }
@@ -1765,7 +1809,10 @@ renderer.setAnimationLoop(() => {
   const now = performance.now()
   const dtMs = lastTickMs === 0 ? 0 : Math.min(now - lastTickMs, 250)
   lastTickMs = now
-  tickAnimation(dtMs)
+  // A channel frame or a gizmo drag rewrites node fields without a rebuild, so
+  // the table's visible rows have to be repainted from them. Only the ~30 rows
+  // on screen are touched, and nothing at all while the panel is collapsed.
+  if (tickAnimation(dtMs) || gizmo.dragging) nodeTable.refreshVisible()
 
   controls.update()
   backdrop.update(camera.position.distanceTo(controls.target))

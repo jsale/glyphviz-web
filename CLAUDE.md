@@ -118,12 +118,56 @@ something to decide now).
       - Halos are one draw call each, so past `MAX_HALOS` (1000) the
         selection stays complete and only the highlight stops drawing.
       - Panels (Scene / Selection / Properties) collapse to their header
-        bar by click or Ctrl+B / Ctrl+E / Ctrl+P. Ctrl+N is reserved by
-        browsers and cannot be intercepted — Alt+N is free for the Node
-        Table panel when it lands.
-      - TO DO from this round: select by tag text (now unblocked —
-        companion tag files load as of 2026-07-25), and a Node Table
-        panel (desktop `node_table.py`).
+        bar by click or Ctrl+B / Ctrl+E / Ctrl+P; Channels is Alt+C and
+        the Node Table Alt+N. Ctrl+N is reserved by browsers and cannot
+        be intercepted, which is why the last two are Alt chords.
+      - Select by tag text (shipped 2026-07-25), desktop
+        `_on_select_by_tag`: a "Tag" keyword box + Select Matching Tags
+        button in the Selection panel, sharing the Add-to-Selection
+        checkbox and reporting through the same highlight-in-place
+        selection as every other Select By criterion (no results list).
+        `selectByTagText` in `src/gv/selectionOps.ts` is a
+        case-insensitive substring match over `text` ONLY — never
+        `link`, matching the desktop and keeping a URL's host name from
+        pulling in nodes whose visible label says nothing of the kind.
+        `text` is the field both authoring styles land in, so a
+        gv_tag.csv scene searches the same way an inline one does. Small
+        divergence: the row greys out for a scene with zero labels
+        (where the desktop would answer "No nodes tagged with …"),
+        consistent with the label checkboxes below it.
+      - Node Table panel (shipped 2026-07-25), a port of desktop
+        `node_table.py`: `src/ui/nodeTableModel.ts` (its `_COLUMNS`
+        verbatim — 20 columns, raw ids, 3-decimal floats, packed-RGB
+        colour key that excludes alpha) + `src/ui/nodeTable.ts` (the
+        view), docked along the bottom, collapsed by default because it
+        is an inspection tool and 20 columns unrolled over the viewport
+        on every load is in the way of the thing being inspected.
+        - Rows are VIRTUALIZED, which is the point of the port rather
+          than a nicety: QTableView draws only its viewport, and a DOM
+          table with Event_Cloud's 209k rows is not a slower version of
+          that but an unusable one. Only the visible window plus a small
+          overscan exists as elements, pooled and rewritten in place.
+          Sorting is key-based over a COPY (the desktop's own reason:
+          one key extraction per node, not a comparator re-reading whole
+          nodes) — the scene array is the CSV's file order and is never
+          reordered. Ties keep file order in both directions, since
+          `Array.prototype.sort` and Python's `sorted(reverse=True)` are
+          both stable.
+        - Display order IS selection order, so sorting the table changes
+          which node is PRIMARY — the desktop's `_selected_nodes` is
+          literally `self._table.selected_nodes()`, in table row order.
+          `orderedIds` in main.ts now reads `nodeTable.displayOrder()`,
+          which is the scene array itself while no column is sorted.
+        - Row clicks are Qt ExtendedSelection: click replaces, Ctrl+click
+          toggles, Shift+click takes the run from the anchor (which Qt
+          leaves put, so the run can be re-dragged), Ctrl+Shift+click
+          adds it. Selection is two-way — every other way of selecting
+          scrolls the table to the primary row. Non-bulk-selectable rows
+          (World/Camera/World Grid) are listed and directly clickable,
+          which is the documented way to select them.
+        - Channels frames and gizmo drags rewrite fields without a
+          rebuild, so the ~30 on-screen rows repaint from the animation
+          loop; collapsed, the panel does no work at all.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
