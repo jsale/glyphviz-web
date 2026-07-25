@@ -321,6 +321,30 @@ something to decide now).
      picking a mode supplies the gesture. Deferred: the desktop pauses
      videos no node drew this frame; animated-GIF per-frame delays
      (no example uses one — `ImageDecoder` is the eventual path).
+     - Assigning a texture (shipped 2026-07-25): a `texture` row in the
+       Properties panel, where the desktop has a bare `Texture ID`
+       spinbox. Because the web app already knows the folder's contents
+       (`buildMediaIndex`), the row is a MENU of the actual files —
+       `1 · earth.png`, videos and undecodable formats marked — plus
+       ‹ › buttons that step it with wraparound. `textureChoices` /
+       `stepTextureId` in `src/gv/media.ts`; the value applies
+       absolutely to every selected node, matching the desktop's
+       `_on_insp_texture_id_changed`. With no media folder (a bare CSV,
+       `?csv=`) the row degrades to the desktop's plain id field, so an
+       id can still be authored ahead of the media it names.
+     - Consequence: textures now load in more than one batch. Load-time
+       decoding fetched only the ids nodes referenced, so naming a new
+       one has to fetch it on demand — `decodeTexturesFor` in main.ts
+       tracks which ids were attempted (a missing or undecodable id is
+       never re-fetched) and `mergeTextureLibrary` folds each batch into
+       the live library. The glyph draws untextured for the moment a
+       decode takes, then the rebuild paints it.
+     - The panel rebuilds itself after every edit, which would throw
+       away the button being clicked, so controls carrying a
+       `data-ins-key` come back focused — that is what makes a run of
+       steps possible. Those buttons also swallow Space/Enter, which
+       would otherwise reach the viewport's single-key commands and
+       toggle Channels playback on every press.
    - ~~Channels animation~~ (shipped 2026-07-25): companion
      `gv_ch-map.csv` / `gv_ch-tracks.csv` files play a node attribute
      time series. `src/gv/channels.ts` parses both and resolves the

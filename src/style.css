@@ -388,6 +388,28 @@ canvas {
   flex: 1 1 100%;
 }
 
+/* The texture menu keeps its ‹ › steppers on the same line. */
+.ins-value select.ins-tex {
+  flex: 1 1 0;
+}
+
+.ins-value .ins-step {
+  flex: 0 0 auto;
+  width: 20px;
+  padding: 1px 0;
+  background: none;
+  color: #cfd6e4;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.ins-value .ins-step:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .ins-value input[type='color'] {
   width: 34px;
   height: 22px;

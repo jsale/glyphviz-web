@@ -200,15 +200,49 @@ export async function loadTextures(
   return { byId, videos, warnings }
 }
 
+/**
+ * Fold a later decode into the scene's live library.
+ *
+ * Textures arrive in more than one batch: the ids the CSV references at load,
+ * then whatever an inspector texture_id edit newly names. The additions are
+ * MOVED, not copied — `from` is emptied of everything that transferred, so
+ * disposing it afterwards would be wrong and is never done. An id already
+ * present wins (it is the one live materials hold); the newcomer is disposed
+ * rather than leaked.
+ */
+export function mergeTextureLibrary(into: TextureLibrary, from: TextureLibrary): void {
+  for (const [id, texture] of from.byId) {
+    if (into.byId.has(id)) {
+      texture.dispose()
+      continue
+    }
+    into.byId.set(id, texture)
+  }
+  for (const video of from.videos) {
+    if (into.videos.some((v) => v.textureId === video.textureId)) {
+      releaseVideo(video)
+      continue
+    }
+    into.videos.push(video)
+  }
+  into.videos.sort((a, b) => a.textureId - b.textureId)
+  into.warnings.push(...from.warnings)
+  from.byId.clear()
+  from.videos.length = 0
+}
+
+/** Stop a video and give its object URL back to the browser. */
+function releaseVideo(video: VideoEntry): void {
+  video.element.pause()
+  video.element.removeAttribute('src')
+  video.element.load()
+  URL.revokeObjectURL(video.url)
+}
+
 export function disposeTextures(library: TextureLibrary): void {
   for (const texture of library.byId.values()) texture.dispose()
   library.byId.clear()
-  for (const video of library.videos) {
-    video.element.pause()
-    video.element.removeAttribute('src')
-    video.element.load()
-    URL.revokeObjectURL(video.url)
-  }
+  for (const video of library.videos) releaseVideo(video)
   library.videos.length = 0
 }
 

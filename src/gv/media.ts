@@ -136,3 +136,53 @@ export function buildMediaIndex(names: readonly string[]): MediaIndex {
     ignored,
   }
 }
+
+/** One entry of the inspector's texture menu. */
+export interface TextureChoice {
+  id: number
+  /** Menu text: `3 · clip.mp4 — video`. */
+  label: string
+}
+
+/**
+ * The texture_id menu for a scene: "None" plus every file in the media folder,
+ * in id order.
+ *
+ * `current` is kept as its own entry when the folder never supplied it — a
+ * scene authored against a media folder the browser wasn't given still shows
+ * (and preserves) the id its CSV carries, rather than silently reading as
+ * "None" and being overwritten by the first step.
+ */
+export function textureChoices(index: MediaIndex | null, current: number): TextureChoice[] {
+  const choices: TextureChoice[] = [{ id: 0, label: 'None (0)' }]
+  for (const entry of index?.entries ?? []) {
+    const note =
+      entry.support === 'unsupported'
+        ? ' — no decoder'
+        : entry.kind === 'video'
+          ? ' — video'
+          : ''
+    choices.push({ id: entry.textureId, label: `${entry.textureId} · ${entry.name}${note}` })
+  }
+  if (current > 0 && !choices.some((c) => c.id === current)) {
+    choices.push({ id: current, label: `${current} · (not in media folder)` })
+    choices.sort((a, b) => a.id - b.id)
+  }
+  return choices
+}
+
+/**
+ * Step to the next/previous texture in the menu, wrapping — the same
+ * round-robin feel as the J/O attribute cycling keys. An id that isn't in the
+ * menu at all (no media loaded) steps to the first entry.
+ */
+export function stepTextureId(
+  choices: readonly TextureChoice[],
+  current: number,
+  direction: 1 | -1,
+): number {
+  if (choices.length === 0) return current
+  const at = choices.findIndex((c) => c.id === current)
+  if (at === -1) return choices[0].id
+  return choices[(at + direction + choices.length) % choices.length].id
+}

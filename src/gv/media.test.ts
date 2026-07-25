@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMediaIndex, compareMediaNames } from './media'
+import { buildMediaIndex, compareMediaNames, stepTextureId, textureChoices } from './media'
 
 describe('compareMediaNames', () => {
   it('sorts zero-padded names lexicographically, as Python does', () => {
@@ -90,5 +90,47 @@ describe('buildMediaIndex', () => {
 
   it('is empty for an empty folder', () => {
     expect(buildMediaIndex([]).entries).toEqual([])
+  })
+})
+
+describe('textureChoices', () => {
+  const index = buildMediaIndex(['alpha.png', 'clip.mp4', 'scan.tif'])
+
+  it('lists None first, then every media file in id order', () => {
+    expect(textureChoices(index, 0).map((c) => [c.id, c.label])).toEqual([
+      [0, 'None (0)'],
+      [1, '1 · alpha.png'],
+      [2, '2 · scan.tif — no decoder'],
+      [3, '3 · clip.mp4 — video'],
+    ])
+  })
+
+  it('offers only None when no media folder was opened', () => {
+    expect(textureChoices(null, 0)).toEqual([{ id: 0, label: 'None (0)' }])
+  })
+
+  it('keeps an id the media folder never supplied, so an edit cannot lose it', () => {
+    const choices = textureChoices(index, 9)
+    expect(choices.map((c) => c.id)).toEqual([0, 1, 2, 3, 9])
+    expect(choices[4].label).toBe('9 · (not in media folder)')
+  })
+})
+
+describe('stepTextureId', () => {
+  const choices = textureChoices(buildMediaIndex(['a.png', 'b.png']), 0)
+
+  it('steps forward and back through the menu', () => {
+    expect(stepTextureId(choices, 0, 1)).toBe(1)
+    expect(stepTextureId(choices, 1, 1)).toBe(2)
+    expect(stepTextureId(choices, 2, -1)).toBe(1)
+  })
+
+  it('wraps at both ends, including through None', () => {
+    expect(stepTextureId(choices, 2, 1)).toBe(0)
+    expect(stepTextureId(choices, 0, -1)).toBe(2)
+  })
+
+  it('lands on the first entry from an id that is not in the menu', () => {
+    expect(stepTextureId(choices, 7, 1)).toBe(0)
   })
 })

@@ -17,6 +17,8 @@
 // A single selection is the same code path: the anchor equals the node's own
 // value, so `+= (new − anchor)` is just `= new`.
 
+import { stepTextureId, textureChoices } from '../gv/media'
+import type { MediaIndex } from '../gv/media'
 import { shiftAxis } from '../gv/multiEdit'
 import type { VectorField } from '../gv/multiEdit'
 import type { GvNode, Vec3 } from '../gv/types'
@@ -72,6 +74,8 @@ export class Inspector {
 
   private nodes: GvNode[] = []
   private host: InspectorHost
+  /** The loaded scene's media folder, naming the ids the texture row offers. */
+  private media: MediaIndex | null = null
   /** Values the translate/rotate fields are currently showing (see header). */
   private anchorTranslate: Vec3 = { x: 0, y: 0, z: 0 }
   private anchorRotate: Vec3 = { x: 0, y: 0, z: 0 }
@@ -84,6 +88,15 @@ export class Inspector {
 
   get element(): HTMLDivElement {
     return this.panel.element
+  }
+
+  /**
+   * Tell the panel which media the loaded scene supplies (null for a bare CSV,
+   * which has no folder to step through). Set before the first show of a
+   * scene; the texture row falls back to a plain id field without it.
+   */
+  setMedia(index: MediaIndex | null): void {
+    this.media = index
   }
 
   /** No selection: keep the panel (and its shortcut) on screen, just empty. */
@@ -101,7 +114,18 @@ export class Inspector {
     const primary = nodes[0]
     this.anchorTranslate = { ...primary.translate }
     this.anchorRotate = { ...primary.rotate }
+    // Every edit rebuilds this panel through the host, which throws away the
+    // control that was just used. Keyed controls come back focused, so the
+    // texture steppers can be clicked (or held down on the keyboard) in a run.
+    const focusKey =
+      document.activeElement instanceof HTMLElement &&
+      this.panel.body.contains(document.activeElement)
+        ? (document.activeElement.dataset.insKey ?? null)
+        : null
     this.panel.body.replaceChildren(...this.build(nodes, worldPos))
+    if (focusKey) {
+      this.panel.body.querySelector<HTMLElement>(`[data-ins-key="${focusKey}"]`)?.focus()
+    }
   }
 
   /** Mutate every selected node and hand off to the host for rebuild+refresh. */
@@ -170,6 +194,65 @@ export class Inspector {
       this.commit((n) => apply(n, Number(select.value))),
     )
     return select
+  }
+
+  /**
+   * texture_id: pick a file out of the scene's media folder, or step through
+   * it with the ‹ › buttons.
+   *
+   * The value applies ABSOLUTELY to every selected node, like the desktop's
+   * Texture ID spinbox (_on_insp_texture_id_changed). Without a media folder
+   * there is no list to offer, so the row degrades to that same plain id
+   * field — an id can be authored before the media it names exists.
+   */
+  private textureRow(primary: GvNode): HTMLDivElement {
+    const setId = (v: number) => this.commit((n) => (n.textureId = v))
+    if (!this.media || this.media.entries.length === 0) {
+      const input = this.numberInput(primary.textureId, setId, {
+        min: 0,
+        integer: true,
+        width: '70px',
+      })
+      input.title =
+        'texture_id: 0 = none, 1 = first file in the scene’s media/ folder. ' +
+        'Open the scene as a folder or .zip to pick by name.'
+      return row('texture', input)
+    }
+
+    const choices = textureChoices(this.media, primary.textureId)
+    const select = el('select', { className: 'ins-tex' })
+    select.dataset.insKey = 'texture'
+    for (const choice of choices) {
+      select.appendChild(el('option', { value: String(choice.id), textContent: choice.label }))
+    }
+    select.value = String(primary.textureId)
+    // The panel is 300px wide, so a long file name is elided in the closed
+    // control — the tooltip is where you can still read which file it is.
+    const currentLabel = choices.find((c) => c.id === primary.textureId)?.label ?? ''
+    select.title = `Media file drawn on this node (texture_id).\n${currentLabel}`
+    select.addEventListener('change', () => setId(Number(select.value)))
+
+    const stepButton = (direction: 1 | -1, glyph: string, title: string) => {
+      const button = el('button', { className: 'ins-step', textContent: glyph, title })
+      button.type = 'button'
+      button.dataset.insKey = `texture-${direction}`
+      button.addEventListener('click', () =>
+        setId(stepTextureId(choices, this.nodes[0]?.textureId ?? 0, direction)),
+      )
+      // A focused button is not a text field, so the viewport's single-key
+      // commands would fire alongside the step it is already doing — Space
+      // would flip Channels playback on every press.
+      button.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') e.stopPropagation()
+      })
+      return button
+    }
+    return row(
+      'texture',
+      select,
+      stepButton(-1, '‹', 'Previous texture'),
+      stepButton(1, '›', 'Next texture'),
+    )
   }
 
   private textInput(value: string, apply: (n: GvNode, v: string) => void): HTMLInputElement {
@@ -265,6 +348,7 @@ export class Inspector {
           width: '54px',
         }),
       ),
+      this.textureRow(primary),
     )
 
     const hide = el('input', { type: 'checkbox', checked: primary.hide !== 0 })

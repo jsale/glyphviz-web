@@ -54,6 +54,7 @@ import {
   disposeTextures,
   emptyTextureLibrary,
   loadTextures,
+  mergeTextureLibrary,
   referencedTextureIds,
 } from './render/textureLibrary'
 import type { AudioMode, TextureLibrary } from './render/textureLibrary'
@@ -321,10 +322,16 @@ const selection = new Selection()
 let nodesById = new Map<number, GvNode>()
 
 const inspector = new Inspector({
-  onNodesEdited() {
+  onNodesEdited(nodes) {
     // The mutated nodes live in currentNodes; rebuild in place, keeping the
     // camera and reattaching the selection + inspector.
     rebuildScene(false)
+    // A texture_id edit can name a file the scene never referenced, so nothing
+    // decoded it at load. Fetch it now; that lands with a second rebuild.
+    void decodeTexturesFor(
+      nodes.map((n) => n.textureId),
+      sceneEpoch,
+    )
   },
 })
 app.appendChild(inspector.element)
@@ -745,6 +752,8 @@ let currentMedia: { index: MediaIndex; fileById: Map<number, File> } | null = nu
 let labelNote = ''
 /** Decoded textures for the loaded scene, keyed by texture_id. */
 let currentTextures: TextureLibrary = emptyTextureLibrary()
+/** Ids this scene has tried to decode — successes and failures alike. */
+let attemptedTextureIds = new Set<number>()
 /** Bumped per scene load, so a slow texture decode can't land on a newer scene. */
 let sceneEpoch = 0
 let textureNote = ''
@@ -810,8 +819,12 @@ function loadScene(source: SceneSource) {
   disposeTextures(currentTextures)
   clearMaterialCache()
   currentTextures = emptyTextureLibrary()
+  attemptedTextureIds = new Set()
   textureNote = ''
   selectionPanel.setVideoCount(0)
+  // The texture row offers this scene's media, so it has to know before the
+  // first selection lands in the panel.
+  inspector.setMedia(currentMedia?.index ?? null)
 
   // Draw immediately, untextured; media decodes asynchronously and triggers a
   // second, camera-preserving rebuild when it lands.
@@ -878,16 +891,35 @@ function loadChannels(source: SceneSource) {
  * Decode the media this scene's nodes reference, then redraw with it.
  *
  * Only referenced ids are fetched — a scene folder can carry tens of megabytes
- * of media that no node points at. `epoch` guards against a slow decode
- * landing after the user has moved on to another scene.
+ * of media that no node points at.
  */
 async function decodeSceneTextures(epoch: number) {
-  const media = currentMedia
-  if (!media || media.index.entries.length === 0) return
   const wanted = referencedTextureIds(currentNodes)
   // A flip-book's frames are named only by its track, never by a CSV cell.
   for (const id of channels.textureIds) wanted.add(id)
+  await decodeTexturesFor(wanted, epoch)
+}
+
+/**
+ * Decode any of `ids` this scene hasn't tried yet, merge them into the live
+ * library and redraw.
+ *
+ * Loading on demand is what lets the inspector's texture row name a file no
+ * node referenced when the scene opened: the id is set, the glyph draws
+ * untextured for the moment the decode takes, and this rebuild paints it.
+ * `attemptedTextureIds` is what keeps a failed or absent id from being
+ * re-fetched on every subsequent edit, and `epoch` guards against a slow
+ * decode landing after the user has moved on to another scene.
+ */
+async function decodeTexturesFor(ids: Iterable<number>, epoch: number) {
+  const media = currentMedia
+  if (!media || media.index.entries.length === 0) return
+  const wanted = new Set<number>()
+  for (const id of ids) {
+    if (id > 0 && !attemptedTextureIds.has(id)) wanted.add(id)
+  }
   if (wanted.size === 0) return
+  for (const id of wanted) attemptedTextureIds.add(id)
 
   const library = await loadTextures(media.index, wanted, async (entry) =>
     media.fileById.get(entry.textureId) ?? null,
@@ -897,12 +929,15 @@ async function decodeSceneTextures(epoch: number) {
     return
   }
 
-  currentTextures = library
-  const videoNote = library.videos.length > 0 ? ` (${library.videos.length} video)` : ''
+  mergeTextureLibrary(currentTextures, library)
+  const videoCount = currentTextures.videos.length
+  const videoNote = videoCount > 0 ? ` (${videoCount} video)` : ''
   textureNote =
-    library.byId.size > 0 ? `${library.byId.size}/${wanted.size} texture(s)${videoNote}` : ''
+    currentTextures.byId.size > 0
+      ? `${currentTextures.byId.size}/${attemptedTextureIds.size} texture(s)${videoNote}`
+      : ''
   parseWarningLines.push(...library.warnings)
-  selectionPanel.setVideoCount(library.videos.length)
+  selectionPanel.setVideoCount(videoCount)
   refreshAudio()
   clearMaterialCache()
   rebuildScene(false)
