@@ -87,7 +87,10 @@ key.position.set(3, -4, 5)
 scene.add(key)
 
 const controls = new OrbitControls(camera, renderer.domElement)
-controls.enableDamping = true
+// No damping: the camera stops dead when the mouse button comes up. Inertial
+// glide reads as lag on big scenes, where a low frame rate stretches the
+// spin-down out over many seconds.
+controls.enableDamping = false
 
 // Desktop-style procedural backdrop: the "infinite" reference grid (hidden
 // once the scene contains a real World Grid) and the RGB origin axes.
