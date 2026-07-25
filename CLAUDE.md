@@ -121,9 +121,8 @@ something to decide now).
         bar by click or Ctrl+B / Ctrl+E / Ctrl+P. Ctrl+N is reserved by
         browsers and cannot be intercepted — Alt+N is free for the Node
         Table panel when it lands.
-      - TO DO from this round: select by tag text (deferred until this
-        app has a story for scenes whose labels live in a companion
-        gv_tag.csv rather than inline text columns), and a Node Table
+      - TO DO from this round: select by tag text (now unblocked —
+        companion tag files load as of 2026-07-25), and a Node Table
         panel (desktop `node_table.py`).
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
@@ -167,7 +166,42 @@ something to decide now).
      big files; also handy for sharing). Deferred to later steps:
      prism texture + rotate_rate_z flow scroll (textures step), desktop's
      round line end caps (cosmetic), link authoring UI.
-   - Remaining: Plot/Surface overlays, textures, tags/labels, Channels
+   - ~~Tags/labels~~ (shipped 2026-07-25): companion `gv_tag.csv` files
+     now load — 29 of the desktop repo's 36 example scenes keep their
+     labels there rather than in inline `text`/`link` columns, so they
+     all rendered unlabeled before. `src/gv/tagCsv.ts` parses and applies
+     them (inline columns always win; `table_id` must be 0; match on
+     `record_id` falling back to node id), `src/gv/writeTagCsv.ts` writes
+     them back, and `writeGvNodeCsv`'s `inlineLabels: false` keeps a
+     tag-file scene saving as a PAIR instead of converting to inline
+     labels that would shadow the tag file on reload.
+     `src/render/labelOverlay.ts` paints them on a 2D canvas over the
+     WebGL one — a port of `_project_tagged_nodes`/`_paint_tags`, not 3D
+     text: 12px (Qt 9pt), +5px x, pale yellow over a black shadow, the
+     500-per-frame cap in show-all mode and NO cap in selected-only mode.
+     T toggles; U and Alt+click open a node's `link`. Divergences: a
+     non-URL link is a local path the desktop hands to the OS, which a
+     browser cannot do (reported in the status bar instead); an empty tag
+     title stays empty rather than becoming the literal "nan" that
+     pandas' NA parsing yields on the desktop.
+   - Scene bundles, same date — a scene is a FOLDER, not a file. Browsers
+     have no folders, so `src/io/browserFiles.ts` collects a dropped
+     directory (`webkitGetAsEntry`) or a picked one (`webkitdirectory`)
+     into relative paths, and `src/gv/bundle.ts` resolves those into
+     scenes: node CSV + companion tag file + sibling `media/` + the
+     Channels `ch-map`/`ch-tracks` and `_gv_audio.txt` companions a later
+     step will consume. A dropped parent folder may hold several scenes
+     (Global_Terrorism_Example holds five) — those go in a picker.
+     `src/gv/media.ts` assigns `texture_id`s the desktop's way (images
+     sorted 1..N, videos continuing after them), case-INsensitively:
+     Python's `sorted(Path…)` is case-insensitive on Windows and
+     case-sensitive on Linux, and Jeff chose to match Windows, where the
+     examples were authored. Agreed plan for the rest: zip bundles and a
+     curated set of hosted example folders (with textures downscaled to
+     ~2048px) come with the textures step; the full examples tree is
+     315 MB and is never shipped wholesale.
+   - Remaining: Plot/Surface overlays, textures (steps 4–5 of the
+     2026-07-25 plan: media decode + UV parity + video), Channels
      animation.
 8. WebXR/stereo: deliberately deferred until basic parity exists.
 
