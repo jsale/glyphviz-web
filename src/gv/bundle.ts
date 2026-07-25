@@ -39,6 +39,24 @@ export function normalizePath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^\.?\//, '')
 }
 
+/**
+ * Resolve a path relative to a folder within the dropped set, collapsing `.`
+ * and `..` segments — the `_gv_audio.txt` manifest names its audio file this
+ * way, and the desktop resolves it with plain filesystem semantics.
+ *
+ * A `..` that would climb above the set's top is dropped rather than escaping:
+ * the set has no parent to reach, so a file above it is simply not available.
+ */
+export function resolveRelative(dir: string, relative: string): string {
+  const out = dir === '' ? [] : dir.split('/')
+  for (const part of normalizePath(relative).split('/')) {
+    if (part === '' || part === '.') continue
+    if (part === '..') out.pop()
+    else out.push(part)
+  }
+  return out.join('/')
+}
+
 function dirOf(path: string): string {
   const slash = path.lastIndexOf('/')
   return slash === -1 ? '' : path.slice(0, slash)

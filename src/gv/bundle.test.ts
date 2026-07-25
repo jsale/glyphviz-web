@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findScenes, normalizePath } from './bundle'
+import { findScenes, normalizePath, resolveRelative } from './bundle'
 
 // The real layouts these tests mirror come from the desktop repo's examples/
 // tree (surveyed 2026-07-25): 29 of 36 example scenes carry a companion tag
@@ -19,6 +19,23 @@ describe('normalizePath', () => {
     expect(normalizePath('a\\b\\c.csv')).toBe('a/b/c.csv')
     expect(normalizePath('./a/b.csv')).toBe('a/b.csv')
     expect(normalizePath('/a/b.csv')).toBe('a/b.csv')
+  })
+})
+
+describe('resolveRelative', () => {
+  it('resolves a manifest path against the scene folder', () => {
+    // The real shape: Violin_A_Major_Example_gv_audio.txt holds
+    // "media/356437__mtg__violin-a-major.wav".
+    expect(resolveRelative('Violin_A_Major_Example', 'media/violin.wav')).toBe(
+      'Violin_A_Major_Example/media/violin.wav',
+    )
+    expect(resolveRelative('', 'media/violin.wav')).toBe('media/violin.wav')
+    expect(resolveRelative('a/b', './c.wav')).toBe('a/b/c.wav')
+    expect(resolveRelative('a/b', '..\\shared\\c.wav')).toBe('a/shared/c.wav')
+  })
+
+  it('drops a climb above the dropped set instead of escaping it', () => {
+    expect(resolveRelative('a', '../../outside.wav')).toBe('outside.wav')
   })
 })
 

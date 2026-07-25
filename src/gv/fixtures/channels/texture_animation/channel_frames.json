@@ -1,0 +1,142 @@
+{
+ "source_csv": "texture_animation_gv_node.csv",
+ "ch_map": "texture_animation_gv_ch-map.csv",
+ "ch_tracks": "texture_animation_gv_ch-tracks.csv",
+ "engine": "glyphviz_core.channel_engine.ChannelEngine",
+ "frame_count": 20,
+ "bindings": [
+  {
+   "id": 1,
+   "attribute": "texture_id"
+  }
+ ],
+ "originals": [
+  {
+   "id": 1,
+   "attribute": "texture_id",
+   "value": 0
+  }
+ ],
+ "frames": [
+  {
+   "frame": 0,
+   "values": [
+    1.0
+   ]
+  },
+  {
+   "frame": 1,
+   "values": [
+    2.0
+   ]
+  },
+  {
+   "frame": 2,
+   "values": [
+    3.0
+   ]
+  },
+  {
+   "frame": 3,
+   "values": [
+    4.0
+   ]
+  },
+  {
+   "frame": 4,
+   "values": [
+    5.0
+   ]
+  },
+  {
+   "frame": 5,
+   "values": [
+    6.0
+   ]
+  },
+  {
+   "frame": 6,
+   "values": [
+    7.0
+   ]
+  },
+  {
+   "frame": 7,
+   "values": [
+    8.0
+   ]
+  },
+  {
+   "frame": 8,
+   "values": [
+    9.0
+   ]
+  },
+  {
+   "frame": 9,
+   "values": [
+    10.0
+   ]
+  },
+  {
+   "frame": 10,
+   "values": [
+    11.0
+   ]
+  },
+  {
+   "frame": 11,
+   "values": [
+    12.0
+   ]
+  },
+  {
+   "frame": 12,
+   "values": [
+    13.0
+   ]
+  },
+  {
+   "frame": 13,
+   "values": [
+    14.0
+   ]
+  },
+  {
+   "frame": 14,
+   "values": [
+    15.0
+   ]
+  },
+  {
+   "frame": 15,
+   "values": [
+    16.0
+   ]
+  },
+  {
+   "frame": 16,
+   "values": [
+    17.0
+   ]
+  },
+  {
+   "frame": 17,
+   "values": [
+    18.0
+   ]
+  },
+  {
+   "frame": 18,
+   "values": [
+    19.0
+   ]
+  },
+  {
+   "frame": 19,
+   "values": [
+    20.0
+   ]
+  }
+ ]
+}

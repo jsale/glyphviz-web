@@ -1,0 +1,488 @@
+// Channels animation: the `gv_ch-map.csv` patch bay and `gv_ch-tracks.csv`
+// time series that drive node attributes frame by frame.
+//
+// Authoritative spec: glyphviz repo, glyphviz-skill/references/
+// channels-animation.md. Behavior ported (not code) from the desktop's
+// glyphviz_core/channel_loader.py + channel_engine.py, verified 2026-07-25.
+//
+// Three files cooperate: a node opts in with `ch_input_id` (an extras column
+// here, exactly as on the desktop, which reads it off `node.extras`); the map
+// binds that channel to (track, attribute) pairs; the tracks file supplies one
+// row per frame. Values are absolute — each frame REPLACES the bound
+// attribute, with no interpolation between rows.
+//
+// This module is pure data: it mutates GvNode rows and nothing else. Pushing
+// the mutated rows onto the live scene graph without a rebuild is
+// src/render/dynamicNodes.ts.
+
+import { tokenizeCsv } from './csv'
+import type { GvNode, GvParseIssue, Rgba, Vec3 } from './types'
+
+/** Attribute names the engine binds; anything else is silently skipped. */
+const VEC_ATTRIBUTES: Record<string, keyof Pick<
+  GvNode,
+  'translate' | 'rotate' | 'scale' | 'translateRate' | 'rotateRate' | 'scaleRate'
+>> = {
+  translate: 'translate',
+  rotate: 'rotate',
+  scale: 'scale',
+  translate_rate: 'translateRate',
+  rotate_rate: 'rotateRate',
+  scale_rate: 'scaleRate',
+}
+
+const COLOR_ATTRIBUTES: Record<string, keyof Rgba> = {
+  color_r: 'r',
+  color_g: 'g',
+  color_b: 'b',
+  color_a: 'a',
+}
+
+/**
+ * Column names carrying a node's channel number.
+ *
+ * The desktop also checks the literal `'ch_input_id '` (trailing space) because
+ * pandas hands it back untrimmed; our header parse trims, so two keys cover the
+ * same files.
+ */
+const CH_INPUT_KEYS = ['ch_input_id', 'np_ch_in_id'] as const
+
+export interface ChMapRow {
+  trackId: number
+  attribute: string
+}
+
+export interface ChMapParseResult {
+  /** channel_id → its (track, attribute) bindings, in file order. */
+  byChannel: Map<number, ChMapRow[]>
+  rowCount: number
+  errors: GvParseIssue[]
+  warnings: GvParseIssue[]
+}
+
+export interface ChTracksParseResult {
+  /** One row per frame; every track column has this length. */
+  frameCount: number
+  /** track_id → its column, frame-indexed. */
+  columns: Map<number, Float64Array>
+  errors: GvParseIssue[]
+  warnings: GvParseIssue[]
+}
+
+/**
+ * Parse a `gv_ch-map.csv`.
+ *
+ * Exactly three columns matter — `channel_id`, `track_id`, `attribute`. Every
+ * other column (`id`, `track_table_id`, `record_id`, …) exists only for
+ * GaiaViz-tool compatibility and is ignored, as on the desktop.
+ */
+export function parseGvChMap(text: string): ChMapParseResult {
+  const errors: GvParseIssue[] = []
+  const warnings: GvParseIssue[] = []
+  const byChannel = new Map<number, ChMapRow[]>()
+
+  const rows = tokenizeCsv(text)
+  if (rows.length === 0) {
+    errors.push({ message: 'Channel map file is empty.' })
+    return { byChannel, rowCount: 0, errors, warnings }
+  }
+
+  const header = rows[0].map((h) => h.trim())
+  const col = new Map(header.map((name, i) => [name, i] as const))
+  const missing = ['channel_id', 'track_id', 'attribute'].filter((n) => !col.has(n))
+  if (missing.length > 0) {
+    errors.push({ line: 1, message: `Channel map is missing column(s): ${missing.join(', ')}.` })
+    return { byChannel, rowCount: 0, errors, warnings }
+  }
+
+  let rowCount = 0
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r]
+    if (row.length === 1 && row[0].trim() === '') continue
+    const cell = (name: string) => (row[col.get(name)!] ?? '').trim()
+    // The desktop wraps each row in try/except and simply drops the bad ones.
+    const channelId = Number(cell('channel_id'))
+    const trackId = Number(cell('track_id'))
+    const attribute = cell('attribute')
+    if (!Number.isFinite(channelId) || !Number.isFinite(trackId) || attribute === '') {
+      warnings.push({ line: r + 1, message: 'Unreadable channel map row; skipped.' })
+      continue
+    }
+    const list = byChannel.get(Math.trunc(channelId))
+    const entry = { trackId: Math.trunc(trackId), attribute }
+    if (list) list.push(entry)
+    else byChannel.set(Math.trunc(channelId), [entry])
+    rowCount++
+  }
+
+  return { byChannel, rowCount, errors, warnings }
+}
+
+/**
+ * Parse a `gv_ch-tracks.csv`.
+ *
+ * Every column named `ch<digits>` is that track; every other column is ignored,
+ * `cyclecount` included (it is a readability aid, not the clock). Each row is
+ * one frame, so the row count IS the frame count. Columns need not be
+ * contiguous — the number in the name is the track_id.
+ *
+ * Divergence, deliberate: a blank or unreadable cell HOLDS the previous frame's
+ * value rather than becoming NaN. Pandas yields NaN there, which the desktop
+ * writes straight into the attribute — a NaN translate removes the glyph from
+ * the scene permanently. Holding is what the spec's authoring rule asks for
+ * ("carry a value forward through gaps in the source data") and cannot make a
+ * well-formed file behave differently.
+ */
+export function parseGvChTracks(text: string): ChTracksParseResult {
+  const errors: GvParseIssue[] = []
+  const warnings: GvParseIssue[] = []
+  const columns = new Map<number, Float64Array>()
+
+  const rows = tokenizeCsv(text)
+  if (rows.length === 0) {
+    errors.push({ message: 'Channel tracks file is empty.' })
+    return { frameCount: 0, columns, errors, warnings }
+  }
+
+  const header = rows[0].map((h) => h.trim())
+  const trackCols: Array<{ trackId: number; index: number }> = []
+  for (let i = 0; i < header.length; i++) {
+    const match = /^ch(\d+)$/.exec(header[i])
+    if (match) trackCols.push({ trackId: Number(match[1]), index: i })
+  }
+  if (trackCols.length === 0) {
+    errors.push({ line: 1, message: 'Channel tracks file has no ch<n> track columns.' })
+    return { frameCount: 0, columns, errors, warnings }
+  }
+
+  // Data rows only; a trailing blank line is not a frame.
+  const dataRows: string[][] = []
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r]
+    if (row.length === 1 && row[0].trim() === '') continue
+    dataRows.push(row)
+  }
+  const frameCount = dataRows.length
+
+  let held = 0
+  for (const { trackId, index } of trackCols) {
+    if (columns.has(trackId)) {
+      warnings.push({ line: 1, column: `ch${trackId}`, message: `Duplicate track column; first wins.` })
+      continue
+    }
+    const column = new Float64Array(frameCount)
+    let previous = 0
+    for (let f = 0; f < frameCount; f++) {
+      const raw = (dataRows[f][index] ?? '').trim()
+      const value = raw === '' ? NaN : Number(raw)
+      if (Number.isFinite(value)) {
+        previous = value
+      } else {
+        held++
+      }
+      column[f] = previous
+    }
+    columns.set(trackId, column)
+  }
+  if (held > 0) {
+    warnings.push({
+      message: `${held} blank or unreadable track cell(s); each held the previous frame's value.`,
+    })
+  }
+
+  return { frameCount, columns, errors, warnings }
+}
+
+/**
+ * `<stem>node.csv` → its conventional Channels companions.
+ *
+ * Only a naming convention (the desktop discovers companions by scanning the
+ * folder for `ch-map` / `ch-track` in any filename), so this is for the one
+ * case with no folder to scan: a `?csv=<url>` load, where the sibling names can
+ * only be guessed. Returns null when the name does not follow the convention.
+ */
+export function deriveChannelFilenames(
+  nodeFilename: string,
+): { map: string; tracks: string } | null {
+  const dot = nodeFilename.lastIndexOf('.')
+  const stem = dot === -1 ? nodeFilename : nodeFilename.slice(0, dot)
+  const ext = dot === -1 ? '.csv' : nodeFilename.slice(dot)
+  if (!stem.endsWith('node')) return null
+  const base = stem.slice(0, stem.length - 'node'.length)
+  return { map: `${base}ch-map${ext}`, tracks: `${base}ch-tracks${ext}` }
+}
+
+// --- Binding + playback --------------------------------------------------------
+
+type Axis = 'x' | 'y' | 'z'
+
+/**
+ * One (node, attribute) ← track binding. The Vec3/Rgba object reference is the
+ * node's own, so applying a frame is a direct store with no property lookup —
+ * this loop runs over every binding at up to 60 Hz.
+ *
+ * The invariant that buys: node.translate/rotate/scale/color are MUTATED in
+ * place, never reassigned. Everything that edits a node (the inspector, multi-
+ * edit, gizmo drags, selectionOps) already works that way; only createNode
+ * replaces one, and a brand-new node has no ch_input_id to bind. Reassigning
+ * one on a bound node would leave its channel writing to a detached object.
+ */
+type Binding =
+  | { kind: 'vec'; node: GvNode; attribute: string; column: Float64Array; vec: Vec3; axis: Axis }
+  | {
+      kind: 'color'
+      node: GvNode
+      attribute: string
+      column: Float64Array
+      rgba: Rgba
+      channel: keyof Rgba
+    }
+  | { kind: 'texture'; node: GvNode; attribute: string; column: Float64Array }
+
+export interface ChannelAnimation {
+  frameCount: number
+  bindings: Binding[]
+  /** Every node with at least one binding. */
+  boundNodeIds: Set<number>
+  /** Bindings that can move or reshape geometry — translate/rotate/scale and
+   *  their rates (a rate binding makes the integrator move the node each tick). */
+  transformBoundNodeIds: Set<number>
+  /** Bindings that change draw content but never the transform. */
+  appearanceBoundNodeIds: Set<number>
+  /** Nodes whose scale can change, so their glyph's draw-scale floor must be
+   *  re-derived (and their descendants' with it). */
+  scaleBoundNodeIds: Set<number>
+  /** Nodes whose rates a channel drives — rate integration candidates. */
+  rateBoundNodeIds: Set<number>
+  /** Every texture_id a `texture_id` track can produce, for media preloading:
+   *  a flip-book scene's CSV texture_id is often 0, so nothing else names them. */
+  textureIds: Set<number>
+  /** node id → field → value at bind time, for Stop. */
+  originals: Map<number, Map<string, number>>
+  warnings: string[]
+}
+
+export function emptyChannelAnimation(): ChannelAnimation {
+  return {
+    frameCount: 0,
+    bindings: [],
+    boundNodeIds: new Set(),
+    transformBoundNodeIds: new Set(),
+    appearanceBoundNodeIds: new Set(),
+    scaleBoundNodeIds: new Set(),
+    rateBoundNodeIds: new Set(),
+    textureIds: new Set(),
+    originals: new Map(),
+    warnings: [],
+  }
+}
+
+/** A node's channel number, 0 when it does not opt in. */
+export function channelInputId(node: GvNode): number {
+  for (const key of CH_INPUT_KEYS) {
+    const raw = node.extras[key]
+    if (raw === undefined) continue
+    // Desktop: int(float(raw)) — "1.0" is channel 1; an unparseable cell is 0.
+    const value = Number(raw.trim())
+    return Number.isFinite(value) ? Math.trunc(value) : 0
+  }
+  return 0
+}
+
+/**
+ * Resolve the three-way join (node.ch_input_id → map channel_id → track column)
+ * into a flat binding list.
+ *
+ * The desktop drops every unmatched piece in silence. Here each kind is counted
+ * and reported once: a scene whose Channels quietly do nothing is the most
+ * common authoring mistake the spec warns about, and it is invisible otherwise.
+ */
+export function bindChannels(
+  map: ChMapParseResult,
+  tracks: ChTracksParseResult,
+  nodes: readonly GvNode[],
+): ChannelAnimation {
+  const anim = emptyChannelAnimation()
+  anim.frameCount = tracks.frameCount
+
+  const nodesByChannel = new Map<number, GvNode[]>()
+  for (const node of nodes) {
+    const channel = channelInputId(node)
+    if (channel === 0) continue
+    const list = nodesByChannel.get(channel)
+    if (list) list.push(node)
+    else nodesByChannel.set(channel, [node])
+  }
+
+  const unknownAttributes = new Set<string>()
+  const missingTracks = new Set<number>()
+  let channelsWithoutNodes = 0
+
+  for (const [channelId, rows] of map.byChannel) {
+    const channelNodes = nodesByChannel.get(channelId)
+    if (!channelNodes) {
+      channelsWithoutNodes++
+      continue
+    }
+    for (const node of channelNodes) {
+      for (const { trackId, attribute } of rows) {
+        const column = tracks.columns.get(trackId)
+        if (!column) {
+          missingTracks.add(trackId)
+          continue
+        }
+        const binding = makeBinding(node, attribute, column)
+        if (!binding) {
+          unknownAttributes.add(attribute)
+          continue
+        }
+        // First binding of a field wins the original, matching the desktop's
+        // `if field not in self._originals[node.id]`.
+        let fields = anim.originals.get(node.id)
+        if (!fields) {
+          fields = new Map()
+          anim.originals.set(node.id, fields)
+        }
+        if (!fields.has(attribute)) fields.set(attribute, readField(binding))
+
+        anim.bindings.push(binding)
+        anim.boundNodeIds.add(node.id)
+        classify(anim, node.id, attribute)
+        if (binding.kind === 'texture') collectTextureIds(anim.textureIds, column)
+      }
+    }
+  }
+
+  const channelsWithoutMap = [...nodesByChannel.keys()].filter(
+    (id) => !map.byChannel.has(id),
+  ).length
+  if (unknownAttributes.size > 0) {
+    anim.warnings.push(
+      `Channel map binds ${unknownAttributes.size} unsupported attribute(s), ignored: ` +
+        `${[...unknownAttributes].sort().join(', ')}.`,
+    )
+  }
+  if (missingTracks.size > 0) {
+    anim.warnings.push(
+      `Channel map references track(s) with no ch<n> column: ` +
+        `${[...missingTracks].sort((a, b) => a - b).join(', ')}.`,
+    )
+  }
+  if (channelsWithoutNodes > 0) {
+    anim.warnings.push(`${channelsWithoutNodes} mapped channel(s) drive no node's ch_input_id.`)
+  }
+  if (channelsWithoutMap > 0) {
+    anim.warnings.push(`${channelsWithoutMap} node ch_input_id value(s) have no channel map row.`)
+  }
+  return anim
+}
+
+function makeBinding(node: GvNode, attribute: string, column: Float64Array): Binding | null {
+  if (attribute === 'texture_id') {
+    return { kind: 'texture', node, attribute, column }
+  }
+  const channel = COLOR_ATTRIBUTES[attribute]
+  if (channel) {
+    return { kind: 'color', node, attribute, column, rgba: node.color, channel }
+  }
+  const split = attribute.lastIndexOf('_')
+  if (split === -1) return null
+  const axis = attribute.slice(split + 1)
+  if (axis !== 'x' && axis !== 'y' && axis !== 'z') return null
+  const group = VEC_ATTRIBUTES[attribute.slice(0, split)]
+  if (!group) return null
+  return { kind: 'vec', node, attribute, column, vec: node[group], axis }
+}
+
+function readField(binding: Binding): number {
+  switch (binding.kind) {
+    case 'vec':
+      return binding.vec[binding.axis]
+    case 'color':
+      return binding.rgba[binding.channel]
+    case 'texture':
+      return binding.node.textureId
+  }
+}
+
+function classify(anim: ChannelAnimation, nodeId: number, attribute: string): void {
+  if (attribute === 'texture_id' || attribute in COLOR_ATTRIBUTES) {
+    anim.appearanceBoundNodeIds.add(nodeId)
+    return
+  }
+  anim.transformBoundNodeIds.add(nodeId)
+  if (attribute.startsWith('scale')) anim.scaleBoundNodeIds.add(nodeId)
+  if (attribute.includes('_rate_')) anim.rateBoundNodeIds.add(nodeId)
+}
+
+function collectTextureIds(into: Set<number>, column: Float64Array): void {
+  for (let f = 0; f < column.length; f++) {
+    const id = Math.max(0, roundHalfToEven(column[f]))
+    if (id > 0) into.add(id)
+  }
+}
+
+/**
+ * Python's `round()` — half-to-even, not JavaScript's half-up. The desktop
+ * rounds every color and texture_id through it, so 0.5 steps in a track would
+ * otherwise land on different values in the two apps.
+ */
+export function roundHalfToEven(value: number): number {
+  const floor = Math.floor(value)
+  const frac = value - floor
+  if (frac > 0.5) return floor + 1
+  if (frac < 0.5) return floor
+  return floor % 2 === 0 ? floor : floor + 1
+}
+
+/**
+ * Write frame `frame`'s value into every bound attribute.
+ *
+ * Absolute, not additive; no interpolation between frames (the spec is explicit
+ * — author enough frames for smooth motion). Colors round and clamp to 0–255,
+ * texture_id rounds with a floor of 0.
+ */
+export function applyChannelFrame(anim: ChannelAnimation, frame: number): void {
+  if (anim.frameCount === 0 || anim.bindings.length === 0) return
+  const f = Math.max(0, Math.min(frame, anim.frameCount - 1))
+  for (const binding of anim.bindings) {
+    const value = binding.column[f]
+    switch (binding.kind) {
+      case 'vec':
+        binding.vec[binding.axis] = value
+        break
+      case 'color':
+        binding.rgba[binding.channel] = Math.max(0, Math.min(255, roundHalfToEven(value)))
+        break
+      case 'texture':
+        binding.node.textureId = Math.max(0, roundHalfToEven(value))
+        break
+    }
+  }
+}
+
+/**
+ * Stop: restore every bound attribute to what it held when the scene loaded.
+ *
+ * Rates are restored (normally to 0, stopping the motion) but the position,
+ * rotation and scale their integration accumulated deliberately are NOT — they
+ * stay where the animation left them, matching the desktop and how hand-
+ * authored ANTz rate fields behave on load.
+ */
+export function resetChannels(anim: ChannelAnimation): void {
+  for (const binding of anim.bindings) {
+    const original = anim.originals.get(binding.node.id)?.get(binding.attribute)
+    if (original === undefined) continue
+    switch (binding.kind) {
+      case 'vec':
+        binding.vec[binding.axis] = original
+        break
+      case 'color':
+        binding.rgba[binding.channel] = original
+        break
+      case 'texture':
+        binding.node.textureId = original
+        break
+    }
+  }
+}

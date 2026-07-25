@@ -6,14 +6,26 @@ import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/creat
 import type { NewObjectDefaults } from './gv/createNode'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
 import type { DragMode, DragSnapshot } from './gv/multiEdit'
-import { findScenes, normalizePath } from './gv/bundle'
+import { findScenes, normalizePath, resolveRelative } from './gv/bundle'
 import type { SceneCandidate } from './gv/bundle'
+import {
+  applyChannelFrame,
+  bindChannels,
+  deriveChannelFilenames,
+  emptyChannelAnimation,
+  parseGvChMap,
+  parseGvChTracks,
+  resetChannels,
+} from './gv/channels'
+import type { ChannelAnimation } from './gv/channels'
+import { applyRateAnimation, rateCandidates } from './gv/rates'
 import type { MediaIndex } from './gv/media'
 import { parseGvNodeCsv } from './gv/nodeCsv'
 import { applyTags, deriveTagFilename, parseGvTagCsv } from './gv/tagCsv'
 import { hasAnyLabel, writeGvTagCsv } from './gv/writeTagCsv'
 import { filesFromDataTransfer, filesFromInput } from './io/browserFiles'
 import type { PathedFile } from './io/browserFiles'
+import { ChannelAudio, parseAudioManifest } from './io/channelAudio'
 import {
   invertSelection,
   isolateSelection,
@@ -31,6 +43,7 @@ import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
+import { DynamicNodes } from './render/dynamicNodes'
 import { clearMaterialCache } from './render/glyphGeometry'
 import { LabelOverlay } from './render/labelOverlay'
 import {
@@ -45,11 +58,16 @@ import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
 import { nodeIdsInRect } from './render/rectSelect'
 import { invertLocalRotation } from './render/rotationInverse'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
+import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { Inspector } from './ui/inspector'
 import { Panel } from './ui/panel'
 import { SelectionPanel } from './ui/selectionPanel'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import linkCsv from './examples/link_example_gv_node.csv?raw'
+import sineWaveCsv from './examples/sine_wave_example_gv_node.csv?raw'
+import sineWaveTagCsv from './examples/sine_wave_example_gv_tag.csv?raw'
+import sineWaveChMapCsv from './examples/sine_wave_example_gv_ch-map.csv?raw'
+import sineWaveChTracksCsv from './examples/sine_wave_example_gv_ch-tracks.csv?raw'
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
 import topologyTagCsv from './gv/fixtures/topology_example_gv_tag.csv?raw'
 import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
@@ -65,10 +83,22 @@ import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
 // level / geometry / topology, inverts, and drives the per-node hide flag.
 // Edits and gizmo drags apply across the whole set — see src/gv/multiEdit.ts.
 //
-// Still to come: select by tag text, a Node Table panel, Plot/Surface
-// overlays, textures, tags/labels, Channels animation.
+// Channels animation plays a scene's companion gv_ch-map.csv / gv_ch-tracks.csv
+// time series over its nodes (Space plays, Shift+Space stops), and the ANTz
+// *_rate fields integrate continuously whether or not a channel drives them.
+//
+// Still to come: select by tag text, a Node Table panel, Plot/Surface overlays.
 
-const BUILT_IN_SCENES: Record<string, { csv: string; tag?: string; filename: string }> = {
+interface BuiltInScene {
+  csv: string
+  tag?: string
+  /** Channels companions, for the scenes that have them. */
+  chMap?: string
+  chTracks?: string
+  filename: string
+}
+
+const BUILT_IN_SCENES: Record<string, BuiltInScene> = {
   'Topology example (all 18 topologies)': {
     csv: topologyCsv,
     // Its companion label file, vendored alongside the node CSV — the same
@@ -82,6 +112,13 @@ const BUILT_IN_SCENES: Record<string, { csv: string; tag?: string; filename: str
     filename: 'world_grid_example_gv_node.csv',
   },
   'Link example (lines + prisms)': { csv: linkCsv, filename: 'link_example_gv_node.csv' },
+  'Sine wave example (Channels animation)': {
+    csv: sineWaveCsv,
+    tag: sineWaveTagCsv,
+    chMap: sineWaveChMapCsv,
+    chTracks: sineWaveChTracksCsv,
+    filename: 'sine_wave_example_gv_node.csv',
+  },
 }
 
 // GlyphViz worlds are Z-up (ANTz convention).
@@ -468,6 +505,137 @@ function refreshAudio() {
 const selectionPanel = new SelectionPanel(selectionCommands)
 panelsLeft.appendChild(selectionPanel.panel.element)
 
+// --- Channels playback ---------------------------------------------------------
+// The engine writes absolute attribute values into the node rows each frame
+// (src/gv/channels.ts) and DynamicNodes pushes just those rows onto the live
+// scene graph — never a rebuild, which at Event_Cloud's 209k nodes could not
+// run at 60 Hz. Rate fields integrate alongside, with or without channels.
+
+let channels: ChannelAnimation = emptyChannelAnimation()
+/** Nodes the rate integrator has to visit — see rates.ts on why it isn't all. */
+let rateNodes: GvNode[] = []
+let dynamic: DynamicNodes | null = null
+const channelAudio = new ChannelAudio()
+
+let playing = false
+let channelFrame = 0
+let channelFps = DEFAULT_CHANNEL_FPS
+let channelLoop = true
+let rateMotion = true
+/** Fractional frames carried between ticks, so a 7 fps setting isn't quantised
+ *  to the display's refresh rate. */
+let frameCarry = 0
+let lastTickMs = 0
+
+// Named rather than inline: the Space / Shift+Space keys run the same commands
+// as the transport buttons, exactly as with selectionCommands.
+const channelCommands = {
+  togglePlay() {
+    if (channels.frameCount === 0) return
+    setPlaying(!playing)
+  },
+  stop() {
+    // Desktop Stop: back to frame 0 AND the CSV values restored. The motion a
+    // rate binding integrated deliberately stays where it left off.
+    setPlaying(false)
+    channelFrame = 0
+    frameCarry = 0
+    resetChannels(channels)
+    channelAudio.stop()
+    channelsPanel.setFrame(0)
+    dynamic?.update()
+  },
+  seek(frame: number) {
+    channelFrame = frame
+    frameCarry = 0
+    applyChannelFrame(channels, frame)
+    channelsPanel.setFrame(frame)
+    if (channelAudio.loaded && channels.frameCount > 1) {
+      channelAudio.seekFraction(frame / (channels.frameCount - 1))
+    }
+    dynamic?.update()
+  },
+  setFps(value: number) {
+    channelFps = value
+  },
+  setLoop(value: boolean) {
+    channelLoop = value
+  },
+  setMotion(value: boolean) {
+    rateMotion = value
+  },
+}
+
+const channelsPanel = new ChannelsPanel(channelCommands)
+panelsLeft.appendChild(channelsPanel.panel.element)
+
+function setPlaying(value: boolean) {
+  if (value && channels.frameCount === 0) return
+  playing = value
+  channelsPanel.setPlaying(value)
+  if (!value) {
+    channelAudio.pause()
+    return
+  }
+  // Pressing Play IS the user gesture browsers require before audible playback.
+  channelAudio.play(channelLoop).catch(() => {
+    status('The browser blocked audio playback; the animation is running unsynced.')
+  })
+}
+
+/** One display frame of animation. Returns true when something moved. */
+function tickAnimation(dtMs: number): boolean {
+  let changed = false
+
+  if (playing && channels.frameCount > 0) {
+    const audioFraction = channelAudio.loaded ? channelAudio.positionFraction() : null
+    if (channelAudio.loaded) {
+      // Audio-synced: the frame index follows the file's REAL position, so a
+      // slow frame costs smoothness and never sync (desktop parity). A null
+      // fraction means the duration isn't known yet — holding is right, since
+      // advancing would snap back to frame 0.
+      if (audioFraction !== null) {
+        channelFrame = Math.min(
+          channels.frameCount - 1,
+          Math.floor(audioFraction * channels.frameCount),
+        )
+        if (channelAudio.ended && !channelLoop) setPlaying(false)
+        changed = true
+      }
+    } else {
+      frameCarry += (dtMs / 1000) * channelFps
+      const steps = Math.floor(frameCarry)
+      if (steps > 0) {
+        frameCarry -= steps
+        channelFrame += steps
+        if (channelFrame >= channels.frameCount) {
+          if (channelLoop) {
+            channelFrame %= channels.frameCount
+          } else {
+            channelFrame = channels.frameCount - 1
+            setPlaying(false)
+          }
+        }
+        changed = true
+      }
+    }
+    if (changed) {
+      applyChannelFrame(channels, channelFrame)
+      channelsPanel.setFrame(channelFrame)
+    }
+  }
+
+  // Rates keep integrating whether or not a channel is playing — that is what
+  // they are. Suspended mid-gizmo-drag so the integrator and the drag are not
+  // both writing the same fields.
+  if (rateMotion && rateNodes.length > 0 && !gizmo.dragging) {
+    if (applyRateAnimation(rateNodes, dtMs).size > 0) changed = true
+  }
+
+  if (changed) dynamic?.update()
+  return changed
+}
+
 function toggleTags() {
   selectionCommands.setShowTags(!showTags)
   selectionPanel.setShowTagsChecked(showTags)
@@ -519,11 +687,17 @@ let currentTextures: TextureLibrary = emptyTextureLibrary()
 /** Bumped per scene load, so a slow texture decode can't land on a newer scene. */
 let sceneEpoch = 0
 let textureNote = ''
+let channelNote = ''
 
 interface SceneSource {
   nodeText: string
   /** Companion tag file contents, when the scene has one. */
   tagText?: string
+  /** Channels companions — both or neither, as the desktop requires. */
+  channelMapText?: string
+  channelTracksText?: string
+  /** Audio the `_gv_audio.txt` manifest points at, for synced playback. */
+  audio?: { blob: Blob; name: string }
   displayName: string
   filename: string
   media?: { index: MediaIndex; fileById: Map<number, File> }
@@ -564,6 +738,8 @@ function loadScene(source: SceneSource) {
 
   saveTagsButton.hidden = !hasAnyLabel(currentNodes) || deriveTagFilename(currentFilename) === null
 
+  loadChannels(source)
+
   // The old scene's textures die with it, and every cached material that
   // referenced one goes too — a material holding a disposed map renders black.
   sceneEpoch++
@@ -580,6 +756,61 @@ function loadScene(source: SceneSource) {
 }
 
 /**
+ * Bind this scene's Channels companions (and any synced audio), and work out
+ * which nodes the rate integrator has to visit.
+ *
+ * Called from loadScene, before the first build: the flip-book texture_ids a
+ * `texture_id` track can produce are only knowable from the bound tracks, and
+ * the media decode below needs them (Texture_Animation_Example's CSV
+ * texture_id is 0 — the channel supplies every id it ever draws).
+ */
+function loadChannels(source: SceneSource) {
+  setPlaying(false)
+  channelFrame = 0
+  frameCarry = 0
+  channels = emptyChannelAnimation()
+  channelAudio.unload()
+  channelNote = ''
+
+  if (source.channelMapText !== undefined && source.channelTracksText !== undefined) {
+    const map = parseGvChMap(source.channelMapText)
+    const tracks = parseGvChTracks(source.channelTracksText)
+    parseWarningLines.push(
+      ...[...map.errors, ...map.warnings, ...tracks.errors, ...tracks.warnings].map(issueText),
+    )
+    if (map.errors.length === 0 && tracks.errors.length === 0) {
+      channels = bindChannels(map, tracks, currentNodes)
+      parseWarningLines.push(...channels.warnings)
+      // The desktop hides its Channels group when the join produced nothing;
+      // an empty binding list here is the same "there is nothing to play".
+      if (channels.bindings.length === 0) channels = emptyChannelAnimation()
+    }
+  }
+
+  if (source.audio && channels.frameCount > 0) {
+    channelAudio.load(source.audio.blob, source.audio.name)
+  }
+
+  rateNodes = rateCandidates(currentNodes, channels.rateBoundNodeIds)
+  channelsPanel.setScene({
+    frames: channels.frameCount,
+    rateNodes: rateNodes.length,
+    audioName: channelAudio.name ?? undefined,
+  })
+  channelsPanel.setPlaying(false)
+
+  const notes: string[] = []
+  if (channels.frameCount > 0) {
+    notes.push(
+      `channels: ${channels.frameCount} frames, ${channels.boundNodeIds.size} node(s)` +
+        (channelAudio.name ? `, synced to ${channelAudio.name}` : ''),
+    )
+  }
+  if (rateNodes.length > 0) notes.push(`${rateNodes.length} rate-animated node(s)`)
+  channelNote = notes.join(', ')
+}
+
+/**
  * Decode the media this scene's nodes reference, then redraw with it.
  *
  * Only referenced ids are fetched — a scene folder can carry tens of megabytes
@@ -590,6 +821,8 @@ async function decodeSceneTextures(epoch: number) {
   const media = currentMedia
   if (!media || media.index.entries.length === 0) return
   const wanted = referencedTextureIds(currentNodes)
+  // A flip-book's frames are named only by its track, never by a CSV cell.
+  for (const id of channels.textureIds) wanted.add(id)
   if (wanted.size === 0) return
 
   const library = await loadTextures(media.index, wanted, async (entry) =>
@@ -617,6 +850,8 @@ function loadBuiltIn(name: string) {
   loadScene({
     nodeText: builtIn.csv,
     tagText: builtIn.tag,
+    channelMapText: builtIn.chMap,
+    channelTracksText: builtIn.chTracks,
     displayName: name,
     filename: builtIn.filename,
   })
@@ -630,6 +865,9 @@ function rebuildScene(fitCamera: boolean) {
     selection.set(built.frames, null)
     scene.remove(currentRoot)
   }
+  // The animated slice belongs to one build: it holds that build's Object3Ds
+  // and its own material clones.
+  dynamic?.dispose()
   currentRoot = built.root
   currentLinks = built.links
   currentFrames = built.frames
@@ -644,6 +882,24 @@ function rebuildScene(fitCamera: boolean) {
   // of reference (its lattice has meaningful spacing; the backdrop's not).
   backdrop.showReferenceGrid = !currentNodes.some((n) => n.type === NodeType.WorldGrid)
 
+  // Rate candidates follow the CSV, so an inspector edit to a rate field (which
+  // always ends here) has to be able to add or drop a node from the tick list.
+  rateNodes = rateCandidates(currentNodes, channels.rateBoundNodeIds)
+  dynamic = new DynamicNodes(
+    currentNodes,
+    built.frames,
+    {
+      // Rate-driven nodes move through the same path as channel-driven ones.
+      transform: new Set([...channels.transformBoundNodeIds, ...rateNodes.map((n) => n.id)]),
+      appearance: channels.appearanceBoundNodeIds,
+      scaled: new Set([
+        ...channels.scaleBoundNodeIds,
+        ...rateNodes.filter((n) => n.scaleRate.x || n.scaleRate.y || n.scaleRate.z).map((n) => n.id),
+      ]),
+    },
+    currentTextures.byId,
+  )
+
   const mediaCount = currentMedia?.index.entries.length ?? 0
   const notes = [
     `${currentNodes.length} node(s)`,
@@ -652,6 +908,7 @@ function rebuildScene(fitCamera: boolean) {
     ...(labelNote ? [labelNote] : []),
     ...(mediaCount > 0 ? [`${mediaCount} media file(s)`] : []),
     ...(textureNote ? [textureNote] : []),
+    ...(channelNote ? [channelNote] : []),
   ]
   hudScene.textContent = `${currentDisplayName} — ${notes.join(', ')}`
   showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
@@ -695,13 +952,51 @@ function fitCameraTo(root: THREE.Object3D) {
 let openedScenes: SceneCandidate[] = []
 let openedFiles = new Map<string, File>()
 
+/**
+ * Follow a scene's `_gv_audio.txt` manifest to the audio file it names.
+ *
+ * The manifest holds one line: a path relative to the node CSV's folder. On the
+ * desktop that resolves against the filesystem; here it has to resolve inside
+ * the dropped file set, so a manifest pointing outside the folder that was
+ * opened simply finds nothing — the animation then plays on the FPS clock.
+ */
+async function readAudioCompanion(
+  scene: SceneCandidate,
+): Promise<{ blob: Blob; name: string } | undefined> {
+  if (!scene.audioManifestPath) return undefined
+  const manifest = openedFiles.get(scene.audioManifestPath)
+  if (!manifest) return undefined
+  const relative = parseAudioManifest(await manifest.text())
+  if (!relative) return undefined
+  const path = resolveRelative(scene.dir, relative)
+  const file = openedFiles.get(path)
+  if (!file) {
+    // Reported on the status line rather than the warning list: loadScene
+    // clears that list after this runs.
+    status(
+      `Audio manifest points at "${relative}", which is not in the opened folder; ` +
+        'playback will use the FPS clock.',
+    )
+    return undefined
+  }
+  return { blob: file, name: file.name }
+}
+
 async function loadSceneCandidate(scene: SceneCandidate) {
   const nodeFile = openedFiles.get(scene.nodePath)
   if (!nodeFile) return
   try {
     const nodeText = await nodeFile.text()
-    const tagFile = scene.tagPath ? openedFiles.get(scene.tagPath) : undefined
-    const tagText = tagFile ? await tagFile.text() : undefined
+    const readText = async (path: string | null) => {
+      const file = path ? openedFiles.get(path) : undefined
+      return file ? await file.text() : undefined
+    }
+    const tagText = await readText(scene.tagPath)
+    // Both or neither: bundle.ts only reports a companion when the folder holds
+    // exactly one candidate, which is the desktop's own rule.
+    const channelMapText = await readText(scene.channelMapPath)
+    const channelTracksText = await readText(scene.channelTracksPath)
+    const audio = await readAudioCompanion(scene)
     const fileById = new Map<number, File>()
     for (const [textureId, path] of scene.mediaPathById) {
       const file = openedFiles.get(path)
@@ -711,6 +1006,9 @@ async function loadSceneCandidate(scene: SceneCandidate) {
     loadScene({
       nodeText,
       tagText,
+      channelMapText,
+      channelTracksText,
+      audio,
       displayName: scene.label,
       filename: scene.nodePath.split('/').pop()!,
       media: { index: scene.media, fileById },
@@ -940,8 +1238,21 @@ window.addEventListener('keydown', (e) => {
     return
   }
 
+  // Alt+C for the Channels panel: Ctrl+B/E/P are taken, and Ctrl+N — the
+  // obvious fourth — is reserved by the browser.
+  if (e.altKey && (e.key === 'c' || e.key === 'C')) {
+    channelsPanel.panel.toggle()
+    e.preventDefault()
+    return
+  }
+
   if (typing) return
-  if (e.key === 'Escape') setSelection(null)
+  if (e.key === ' ') {
+    // Desktop transport: Space plays/pauses, Shift+Space stops and restores.
+    e.preventDefault() // Space would otherwise scroll or re-press a focused button
+    if (e.shiftKey) channelCommands.stop()
+    else channelCommands.togglePlay()
+  } else if (e.key === 'Escape') setSelection(null)
   else if (e.key === 'g' || e.key === 'G') cycleGridSelection()
   else if (e.key === 'h') selectionCommands.hideSelected()
   else if (e.key === 'H') selectionCommands.showAll()
@@ -1349,18 +1660,36 @@ deleteButton.addEventListener('click', deleteSelection)
     // The companion tag file lives next to the node CSV on disk, so try the
     // derived sibling URL too — one speculative GET, and a 404 just means the
     // scene has no labels (or keeps them inline).
+    const base = csvUrl.slice(0, csvUrl.length - filename.length)
     const tagName = deriveTagFilename(filename)
-    const tagUrl = tagName ? csvUrl.slice(0, csvUrl.length - filename.length) + tagName : null
+    const tagUrl = tagName ? base + tagName : null
     const fetchText = (url: string) =>
       fetch(url).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
+    const optional = (url: string | null) =>
+      url ? fetchText(url).catch(() => undefined) : Promise.resolve(undefined)
+
+    // Channels companions are discovered by scanning the scene FOLDER, which a
+    // URL load has no way to do — so guess the conventional sibling names
+    // (`…_gv_ch-map.csv` / `…_gv_ch-tracks.csv`) the same way the tag file is
+    // guessed. A 404 just means this scene has no Channels.
+    const channelNames = deriveChannelFilenames(filename)
 
     Promise.all([
       fetchText(csvUrl),
-      tagUrl ? fetchText(tagUrl).catch(() => undefined) : Promise.resolve(undefined),
+      optional(tagUrl),
+      optional(channelNames ? base + channelNames.map : null),
+      optional(channelNames ? base + channelNames.tracks : null),
     ])
-      .then(([nodeText, tagText]) => {
+      .then(([nodeText, tagText, channelMapText, channelTracksText]) => {
         exampleSelect.value = OPENED_SCENE_OPTION
-        loadScene({ nodeText, tagText, displayName: filename, filename })
+        loadScene({
+          nodeText,
+          tagText,
+          channelMapText,
+          channelTracksText,
+          displayName: filename,
+          filename,
+        })
       })
       .catch((err: unknown) => showMessages([`Could not fetch ${csvUrl}: ${String(err)}`], []))
   }
@@ -1378,6 +1707,14 @@ window.addEventListener('resize', () => {
 })
 
 renderer.setAnimationLoop(() => {
+  // Elapsed real time drives both clocks. Capped so a backgrounded tab (whose
+  // animation loop stops) does not resume by integrating a minute of rates in
+  // one step; the desktop's timer has the same effect by simply not firing.
+  const now = performance.now()
+  const dtMs = lastTickMs === 0 ? 0 : Math.min(now - lastTickMs, 250)
+  lastTickMs = now
+  tickAnimation(dtMs)
+
   controls.update()
   backdrop.update(camera.position.distanceTo(controls.target))
   // Edges chase their endpoint nodes (gizmo drags mutate frames between

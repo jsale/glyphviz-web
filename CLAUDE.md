@@ -243,12 +243,71 @@ something to decide now).
      picking a mode supplies the gesture. Deferred: the desktop pauses
      videos no node drew this frame; animated-GIF per-frame delays
      (no example uses one — `ImageDecoder` is the eventual path).
+   - ~~Channels animation~~ (shipped 2026-07-25): companion
+     `gv_ch-map.csv` / `gv_ch-tracks.csv` files play a node attribute
+     time series. `src/gv/channels.ts` parses both and resolves the
+     three-way join (node `ch_input_id` → map `channel_id` → `ch<n>`
+     track column) into a flat binding list holding each node's own
+     Vec3/Rgba object, so applying a frame is a direct store; the
+     desktop drops every unmatched piece in silence, this counts and
+     reports them (a scene whose Channels quietly do nothing is the
+     authoring mistake the spec warns about). Values are ABSOLUTE per
+     frame with no interpolation, colours round-half-to-EVEN (Python's
+     `round`, not JS's half-up) and clamp 0–255, `texture_id` rounds with
+     a floor of 0. Stop restores the load-time CSV values; integrated
+     rate motion deliberately stays where it left off.
+     - `src/gv/rates.ts` integrates `translate_rate`/`rotate_rate`/
+       `scale_rate` at the ANTz 60-cycles/s convention, scaled by real
+       dt so it is frame-rate independent. It runs with or without
+       Channels (RSS_News authors `rotate_rate_z` directly) and visits
+       only a precomputed candidate set — the desktop rescans all nodes
+       per tick, which is 12M property reads a second at Event_Cloud's
+       209k. `freeze` must be read as a NUMBER: extras are strings and
+       `'0'` is truthy in JS.
+     - `src/render/dynamicNodes.ts` is what makes 60 Hz possible:
+       buildScene is far too expensive to re-run per frame, so a scene
+       registers its animated slice once per rebuild and only those
+       Object3Ds are touched. Children nest under their parent's
+       Object3D here, so a moved node carries its subtree for free
+       (the desktop has to mark descendants dynamic too). Appearance-
+       bound nodes get PRIVATE material clones — the shared material
+       cache is what keeps 209k glyphs affordable, but a colour track
+       through it would either repaint every look-alike or leak a new
+       entry per frame. A map swap skips `needsUpdate` unless the
+       null-ness changes (only that flips USE_MAP), which is what makes
+       a flip-book affordable. An animated scale re-derives the 0.2
+       draw floor on the node's glyph AND every descendant's.
+     - Playback (`src/ui/channelsPanel.ts` + main.ts): frame slider,
+       Play/Pause (Space), Stop (Shift+Space), FPS 1–30 default 30,
+       Loop default on, Alt+C collapses the panel. A `_gv_audio.txt`
+       manifest switches the clock to the audio's real playback position
+       (`src/io/channelAudio.ts`); pressing Play supplies the gesture
+       browsers require. Flip-book `texture_id`s are unioned into the
+       media preload set — `Texture_Animation_Example`'s CSV
+       `texture_id` is 0 and the channel names every id it draws.
+     - Parity: `tools/dump_channel_frames.py` runs the REAL desktop
+       `ChannelEngine` and dumps per-frame bound-attribute values;
+       `src/gv/channelParity.test.ts` diffs four fixtures at 1e-9
+       (rotation convention floats over all 120 frames, YBCO colour +
+       scale + translate, texture-animation `texture_id`, sine wave's
+       224 bindings). Each fixture needs its OWN folder under
+       `src/gv/fixtures/channels/` — companion discovery requires
+       exactly one ch-map and one ch-tracks per folder.
+     - Divergences: a blank/unreadable track cell HOLDS the previous
+       frame's value instead of becoming pandas' NaN (which the desktop
+       writes straight into the attribute — a NaN translate deletes the
+       glyph permanently, and holding is what the spec's authoring rule
+       asks for). World Grid nodes are excluded from appearance sync:
+       their surface draws untinted and their lattice at half alpha, so
+       one uniform colour write would misdraw both. `?csv=<url>` loads
+       guess the conventional companion names (no folder to scan).
+       Not done: the desktop's rate-pause snapshot restore (the panel's
+       Rate Motion checkbox just freezes in place).
    - Remaining: zip bundles + a curated set of hosted example folders
      (agreed 2026-07-25, textures downscaled to ~2048px — the full
      examples tree is 315 MB and is never shipped wholesale), Plot/
-     Surface overlays, Channels animation (which is what makes
-     `Texture_Animation_Example` interesting: its `texture_id` is 0 in
-     the CSV and driven entirely by a channel).
+     Surface overlays with links and facets (agreed 2026-07-25 as the
+     last of the step-7 gap filling).
 8. WebXR/stereo: deliberately deferred until basic parity exists.
 
 ## Collaboration notes

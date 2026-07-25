@@ -285,8 +285,12 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   return { root, background, drawnCount, links, frames, warnings: [...warnings] }
 }
 
-/** Ratio to apply on the glyph so its drawn world scale respects the floor. */
-function drawScaleCorrection(cumAxisScale: number): number {
+/**
+ * Ratio to apply on the glyph so its drawn world scale respects the floor.
+ * Shared with the animation path, which re-derives it when a channel or a
+ * scale_rate changes an ancestor's scale (src/render/dynamicNodes.ts).
+ */
+export function drawScaleCorrection(cumAxisScale: number): number {
   const world = cumAxisScale * BASE_SCALE
   if (Math.abs(world) < 1e-12) return 1 // degenerate frame; nothing recoverable
   const floored = Math.max(world, RENDER_SCALE_FLOOR)

@@ -14,6 +14,15 @@ canvas {
   display: block;
 }
 
+/* The UA's `[hidden] { display: none }` sits at user-agent origin, so ANY
+   author rule setting display wins over it — every `display: flex` row below
+   would ignore `element.hidden = true`. (That silently kept the Selection
+   panel's Video Audio row on screen for scenes with no video; the Channels
+   panel has several such rows.) */
+[hidden] {
+  display: none !important;
+}
+
 /* Tag labels sit above the WebGL canvas but below the panels, and never take
    a click — the desktop paints them as a QPainter overlay for the same reason. */
 #label-overlay {
@@ -452,6 +461,72 @@ canvas {
 .sel-hint {
   margin-top: 8px;
   color: #6c7488;
+}
+
+/* --- Channels panel ------------------------------------------------------ */
+
+.ch-frame {
+  color: #9aa3b5;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-slider,
+#channels-panel input[type='range'] {
+  width: 100%;
+  margin: 2px 0;
+  accent-color: #4db3ff;
+}
+
+.ch-transport-row {
+  display: flex;
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.ch-transport {
+  width: 38px;
+  padding: 2px 0;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.ch-transport:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ch-transport:disabled {
+  color: #6c7488;
+  cursor: default;
+}
+
+.ch-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 3px 0;
+}
+
+.ch-row > span:first-child {
+  flex: 0 0 28px;
+  color: #9aa3b5;
+}
+
+.ch-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.ch-fps-value {
+  flex: 0 0 46px;
+  color: #9aa3b5;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- Region select band + status line ------------------------------------ */
