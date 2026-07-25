@@ -200,9 +200,55 @@ something to decide now).
      curated set of hosted example folders (with textures downscaled to
      ~2048px) come with the textures step; the full examples tree is
      315 MB and is never shipped wholesale.
-   - Remaining: Plot/Surface overlays, textures (steps 4–5 of the
-     2026-07-25 plan: media decode + UV parity + video), Channels
-     animation.
+   - ~~Textures~~ (shipped 2026-07-25): `src/render/textureLibrary.ts`
+     decodes a scene's `media/` into GPU textures with the desktop's
+     sampling (REPEAT wrap, linear mag, mipmapped min; flipY matches its
+     mirrored QImage upload), fetching only the ids nodes reference. A
+     failure never fails the load — the node draws untextured and the
+     reason is reported. Colour × map is Three's default modulate, which
+     is what fixed-function GL does. Materials are now CACHED by
+     (colour, opacity, side, map): buildScene minted one per node, which
+     is pathological at Event_Cloud's 209k and worse once each rebinds
+     the same map.
+     UV mapping is deliberate on every geometry
+     (`src/render/uvGeometry.ts`), per Jeff 2026-07-25 ("I need all
+     geometries to have optimal UV mapping"):
+     - Round surfaces (sphere, cone, cylinder, pin, globe) share ONE
+       equirect convention — u = (lon+180)/360 eastward from −X,
+       v = (lat+90)/180 northward. Three's primitives are Y-up, and GLU's
+       quadric mapping (which the desktop inherits from
+       `gluQuadricTexture`) puts s=0 at +Y running BACKWARDS, so a map on
+       a gluSphere is mirrored and quarter-turned. The desktop already
+       rejected that where it mattered — `_draw_world_grid` hand-builds
+       its globe with exactly this convention — so this applies the
+       desktop's own better answer everywhere. That also closed the
+       KML-alignment TODO the World Grid left behind.
+     - Flat-faced solids get per-face 0–1, like the cube's `_CUBE_UVS`,
+       NOT the desktop's spherical `_vert_uv` (which wastes ~60% of the
+       image on a tetrahedron). Triangles group by plane, so a
+       dodecahedron's pentagons take one image each, not three.
+     - Cross/Star get their bounding box refit (Three emits raw ±1
+       coordinates, tiling the image 4×). The desktop emits no texture
+       coordinates at all for Circle/Star/Cross, so there was nothing to
+       match.
+     - Kept from Three where already right: BoxGeometry per-face,
+       TorusGeometry's major/minor parameterisation, PlaneGeometry and
+       CircleGeometry (which match `_draw_grid_solid` and `gluDisk`).
+     A textured World Grid surface draws untinted and unlit — the desktop
+     forces `glColor4f(1,1,1,a)` so the map reads as authored.
+     Video textures play muted and looping; a Video Audio control
+     (Muted / All Tracks / Solo to Selection) ports the desktop's audio
+     dropdown and "Solo Audio to Selection" checkbox. Divergence:
+     browsers refuse audible autoplay, so muted is the default and
+     picking a mode supplies the gesture. Deferred: the desktop pauses
+     videos no node drew this frame; animated-GIF per-frame delays
+     (no example uses one — `ImageDecoder` is the eventual path).
+   - Remaining: zip bundles + a curated set of hosted example folders
+     (agreed 2026-07-25, textures downscaled to ~2048px — the full
+     examples tree is 315 MB and is never shipped wholesale), Plot/
+     Surface overlays, Channels animation (which is what makes
+     `Texture_Animation_Example` interesting: its `texture_id` is 0 in
+     the CSV and driven entirely by a channel).
 8. WebXR/stereo: deliberately deferred until basic parity exists.
 
 ## Collaboration notes
