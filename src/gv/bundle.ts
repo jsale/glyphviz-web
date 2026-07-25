@@ -6,7 +6,9 @@
 // ch-tracks files and a _gv_audio.txt manifest. Browsers have no folders, so
 // every input path — a directory drop, a multi-file selection, a zip, or a
 // hosted manifest — is reduced to a flat list of relative paths and resolved
-// here. Pure path logic, no DOM: the DOM side lives in src/io/browserFiles.ts.
+// here. Pure path logic, no DOM: the DOM side lives in src/io/browserFiles.ts,
+// which also expands a dropped .zip into that same flat list (src/io/zip.ts) so
+// an archive resolves identically to the folder it was made from.
 
 import { buildMediaIndex } from './media'
 import type { MediaIndex } from './media'

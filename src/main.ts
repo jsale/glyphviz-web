@@ -23,7 +23,7 @@ import type { MediaIndex } from './gv/media'
 import { parseGvNodeCsv } from './gv/nodeCsv'
 import { applyTags, deriveTagFilename, parseGvTagCsv } from './gv/tagCsv'
 import { hasAnyLabel, writeGvTagCsv } from './gv/writeTagCsv'
-import { filesFromDataTransfer, filesFromInput } from './io/browserFiles'
+import { expandZips, filesFromDataTransfer, filesFromInput } from './io/browserFiles'
 import type { PathedFile } from './io/browserFiles'
 import { ChannelAudio, parseAudioManifest } from './io/channelAudio'
 import {
@@ -189,7 +189,7 @@ hud.innerHTML = `
   <div id="hud-scene"></div>
   <div id="hud-warnings"></div>
   <div id="hud-open">
-    <label title="Pick a gv_node.csv, or select it together with its companion gv_tag.csv and media files.">Open Files<input type="file" accept=".csv,text/csv" multiple></label>
+    <label title="Pick a gv_node.csv, a scene .zip, or a node CSV together with its companion gv_tag.csv and media files.">Open Files<input type="file" accept=".csv,text/csv,.zip,application/zip" multiple></label>
     <label title="Pick a whole scene folder: the node CSV, its companion tag file and media/ folder are found inside.">Open Folder<input type="file" id="hud-open-folder" webkitdirectory></label>
   </div>
   <select id="hud-scenes" title="Scenes found in the opened folder" hidden></select>
@@ -213,7 +213,7 @@ hud.innerHTML = `
     <div class="hud-create-row"><span>Color</span><input id="hud-new-color" type="color" value="#c8c8c8"></div>
     <button id="hud-delete" title="Delete the selected node and all of its descendants — children are never reparented." disabled>Delete (Del)</button>
   </div>
-  <div id="hud-hint">or drop a scene folder (or CSV) anywhere</div>
+  <div id="hud-hint">or drop a scene folder, .zip or CSV anywhere</div>
 `
 const hudScene = hud.querySelector<HTMLDivElement>('#hud-scene')!
 const hudWarnings = hud.querySelector<HTMLDivElement>('#hud-warnings')!
@@ -723,7 +723,10 @@ function loadScene(source: SceneSource) {
   currentFilename = source.filename
   currentMedia = source.media ?? null
   parseErrorLines = parsed.errors.map(issueText)
-  parseWarningLines = parsed.warnings.map(issueText)
+  // Problems opening the file SET (an unreadable zip member, say) describe
+  // every scene in it, so they ride along with each load rather than being
+  // cleared by the first one.
+  parseWarningLines = [...parsed.warnings.map(issueText), ...openWarningLines]
   labelsFromTagFile = false
   labelNote = ''
 
@@ -856,6 +859,7 @@ async function decodeSceneTextures(epoch: number) {
 function loadBuiltIn(name: string) {
   const builtIn = BUILT_IN_SCENES[name]
   exampleSelect.value = name
+  openWarningLines = [] // leaving an opened file set behind leaves its problems too
   loadScene({
     nodeText: builtIn.csv,
     tagText: builtIn.tag,
@@ -962,10 +966,14 @@ function fitCameraTo(root: THREE.Object3D) {
 // gv_tag.csv and its media/ folder all matter. Dropping a folder (or picking
 // one) collects the lot; bundle.ts resolves which files belong to which scene.
 // A dropped parent folder can hold several scenes — those go in a picker.
+// A .zip is expanded into the same list first (src/io/zip.ts), so an archive
+// behaves exactly like the folder it was made from.
 
 /** Scenes found in the last opened file set, with their files by path. */
 let openedScenes: SceneCandidate[] = []
 let openedFiles = new Map<string, File>()
+/** Problems with the opened file set itself; re-reported on every scene load. */
+let openWarningLines: string[] = []
 
 /**
  * Follow a scene's `_gv_audio.txt` manifest to the audio file it names.
@@ -1033,7 +1041,23 @@ async function loadSceneCandidate(scene: SceneCandidate) {
   }
 }
 
-function openFileSet(files: PathedFile[]) {
+/**
+ * Take a picked or dropped file set and load the first scene in it.
+ *
+ * Any `.zip` is expanded first, so an archive opens exactly like the folder it
+ * was made from — this is the only step that has to touch bytes before a scene
+ * is chosen, which is why it is async and posts a status line.
+ */
+async function openFileSet(dropped: PathedFile[]) {
+  let files = dropped
+  openWarningLines = []
+  if (dropped.some((f) => f.file.name.toLowerCase().endsWith('.zip'))) {
+    status('Reading archive…')
+    const expanded = await expandZips(dropped)
+    files = expanded.files
+    openWarningLines = expanded.warnings
+  }
+
   openedFiles = new Map(files.map((f) => [normalizePath(f.path), f.file]))
   openedScenes = findScenes(files.map((f) => f.path))
 
@@ -1051,13 +1075,20 @@ function openFileSet(files: PathedFile[]) {
       [
         files.length === 0
           ? 'Nothing to open.'
-          : `No gv_node.csv found in ${files.length} file(s). Drop a scene folder, or the node CSV itself.`,
+          : `No gv_node.csv found in ${files.length} file(s). Drop a scene folder, a scene .zip, or the node CSV itself.`,
       ],
-      [],
+      openWarningLines,
     )
     return
   }
-  void loadSceneCandidate(openedScenes[0])
+  await loadSceneCandidate(openedScenes[0])
+}
+
+/** Report anything that goes wrong opening a set, rather than swallowing it. */
+function openFileSetSafely(files: PathedFile[]): void {
+  void openFileSet(files).catch((err: unknown) =>
+    showMessages([`Could not open the selection: ${String(err)}`], []),
+  )
 }
 
 sceneSelect.addEventListener('change', () => {
@@ -1066,12 +1097,12 @@ sceneSelect.addEventListener('change', () => {
 })
 
 fileInput.addEventListener('change', () => {
-  openFileSet(filesFromInput(fileInput))
+  openFileSetSafely(filesFromInput(fileInput))
   fileInput.value = ''
 })
 
 folderInput.addEventListener('change', () => {
-  openFileSet(filesFromInput(folderInput))
+  openFileSetSafely(filesFromInput(folderInput))
   folderInput.value = ''
 })
 
@@ -1082,6 +1113,8 @@ window.addEventListener('dragover', (e) => {
 window.addEventListener('drop', (e) => {
   e.preventDefault()
   if (!e.dataTransfer) return
+  // A dropped .zip arrives as an ordinary file entry — no folder walk needed;
+  // openFileSet's expandZips turns it into the folder it stands for.
   filesFromDataTransfer(e.dataTransfer)
     .then(openFileSet)
     .catch((err: unknown) => showMessages([`Could not read the drop: ${String(err)}`], []))

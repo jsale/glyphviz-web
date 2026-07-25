@@ -347,9 +347,42 @@ something to decide now).
        rather than mid-drag. Lattice coordinates are meant to be fixed
        generated values, so this only shows in authoring the spec warns
        against.
-   - Remaining: zip bundles + a curated set of hosted example folders
-     (agreed 2026-07-25, textures downscaled to ~2048px — the full
-     examples tree is 315 MB and is never shipped wholesale).
+   - ~~Zip bundles~~ (shipped 2026-07-25): a `.zip` dropped or picked
+     opens exactly like the folder it was made from. `src/io/zip.ts` is
+     an in-house reader — no dependency, the same call the project made
+     for its CSV tokenizer, because the platform ships the hard part:
+     `DecompressionStream('deflate-raw')` is the inflate and `Blob.slice`
+     gives random access, so only the central directory is read to list
+     an archive. Stored + deflated members, Zip64 sizes/offsets, and
+     data-descriptor entries (the central directory always holds the
+     real sizes) all work; encrypted members and other compression
+     methods are skipped with a message rather than silently losing a
+     scene's media. `expandZips` in `src/io/browserFiles.ts` turns the
+     entries into the same `PathedFile` list a folder walk produces, so
+     `bundle.ts` resolves scenes unchanged.
+     - Archivers disagree about whether the folder itself is included
+       ("zip this folder" vs "zip these files"), so when the members
+       share no top-level folder the archive's own name becomes one —
+       the scene is then labelled after the zip rather than after a bare
+       CSV name, and a multi-scene archive keeps its shape either way.
+     - macOS `__MACOSX/` shadow trees, `._name` AppleDouble files and
+       `.DS_Store` are dropped: `__MACOSX/…/._Scene_gv_node.csv` matches
+       the node-CSV convention and would otherwise appear in the scene
+       picker as a second, broken scene.
+     - Entries get a MIME type back from their extension. A Blob URL is
+       what feeds `<video>`/`<audio>`, and those honour `blob.type`
+       rather than sniffing — an extracted video with an empty type
+       simply refuses to play.
+     - Deliberate tradeoff: expansion is EAGER, so a zip holds its
+       scene in memory while a dropped folder stays lazy (disk-backed
+       `File` handles). Capped at 1 GB expanded / 20k entries, which
+       also defuses a zip bomb. Corpus scene folders top out near 48 MB;
+       the 93 MB five-scene Global_Terrorism_Example zip opens fine.
+   - Remaining: a curated set of hosted example folders (agreed
+     2026-07-25, textures downscaled to ~2048px — the full examples tree
+     is 315 MB and is never shipped wholesale). Lower priority per Jeff
+     (2026-07-25): folder drop and zip already let users draw from their
+     own copy of the GlyphViz examples.
 8. WebXR/stereo: deliberately deferred until basic parity exists.
 
 ## Collaboration notes
