@@ -105,6 +105,15 @@ something to decide now).
    - Also shipped 2026-07-24 (desktop viewport parity, Jeff's request):
      the procedural "infinite" reference grid (hidden once a real World
      Grid exists) and RGB origin axes — `src/render/backdrop.ts`.
+   - Camera feel, also 2026-07-24 (Jeff's request): near plane fixed at
+     0.001 (logarithmic depth buffer keeps far-distance precision) so the
+     camera can enter glyphs — z-topologies place children inside the
+     parent; and the desktop's Left+Right combo drag (horizontal = orbit
+     azimuth 0.4°/px, vertical = zoom, pivot snaps to the selection at
+     combo start, one-button release resumes plain orbit — handled
+     manually to the end of the press because OrbitControls' drag anchor
+     goes stale while disabled). Deliberate difference: a combo mid-gizmo
+     drag does not steal the drag from the gizmo.
    - ~~Link edges~~ (shipped 2026-07-24): type-7 edges drawn between the
      A-end (parent_id) and B-end (extras child_id — same storage the
      desktop reads) world positions, refreshed per frame so gizmo drags

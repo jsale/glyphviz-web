@@ -47,13 +47,16 @@ THREE.Object3D.DEFAULT_UP.set(0, 0, 1)
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 
-const renderer = new THREE.WebGLRenderer({ antialias: true })
+// Logarithmic depth lets the near plane sit at ~0 (so the camera can enter
+// glyphs — z-topologies place children inside the parent) without z-fighting
+// at the far end of large scenes.
+const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
 renderer.setPixelRatio(window.devicePixelRatio)
 renderer.setSize(window.innerWidth, window.innerHeight)
 app.appendChild(renderer.domElement)
 
 const scene = new THREE.Scene()
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000)
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.001, 1000)
 camera.up.set(0, 0, 1)
 
 // Fixed-function-GL-flavored lighting: soft ambient plus one key light.
@@ -284,8 +287,8 @@ function fitCameraTo(root: THREE.Object3D) {
   const distance = Math.max(1, (sphere.radius / Math.tan((camera.fov * Math.PI) / 360)) * 1.2)
   const dir = new THREE.Vector3(0.7, -1, 0.55).normalize()
   camera.position.copy(center).addScaledVector(dir, distance)
-  camera.near = Math.max(0.01, distance / 100)
-  camera.far = distance * 100
+  camera.near = 0.001
+  camera.far = Math.max(1000, distance * 100)
   camera.updateProjectionMatrix()
   controls.target.copy(center)
   controls.update()
@@ -343,7 +346,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (e.button !== 0 || !downAt) return
   const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y)
   downAt = null
-  if (moved > CLICK_SLOP_PX) return
+  // A press that became a Left+Right camera combo is never a selection click,
+  // even if it moved less than the slop.
+  if (comboUsedInPress || moved > CLICK_SLOP_PX) return
   // Clicks on (or releases over) a gizmo arrow are drag interactions, not
   // selection changes.
   if (gizmo.dragging || gizmo.axis !== null) return
@@ -381,6 +386,95 @@ window.addEventListener('keydown', (e) => {
     navTo(navFirstChild(currentNodes, selectedNode()!))
   }
 })
+
+// --- Combined orbit+zoom: Left+Right drag together (desktop parity) -------------
+// Both mouse buttons held together always means camera nav (the ANTz-style
+// gesture ported from the desktop viewport's _orbit_zoom_camera): horizontal
+// drag orbits azimuth at 0.4°/px, vertical drag zooms (×(1 + dy·0.005) per
+// pixel, distance clamped ≥ 1), and at combo start the orbit pivot snaps to
+// the selected node so the gesture orbits the selection. Releasing one button
+// falls back to a plain orbit drag with the remaining button (desktop
+// behavior) — handled manually until every button is up, because
+// OrbitControls' drag anchor goes stale while it is disabled and handing back
+// mid-press would jump the camera. With a mouse, chorded second-button
+// presses/releases arrive as pointermove events (buttons bitmask), never as
+// pointerdown/pointerup, so the state update hangs off all pointer events.
+// One deliberate difference from the desktop: a combo pressed mid-gizmo-drag
+// does not steal the drag from the gizmo (simplest default while
+// TransformControls owns the pointer).
+
+const DEG = Math.PI / 180
+const COMBO_ORBIT_DEG_PER_PX = 0.4 // desktop _orbit_camera / _orbit_zoom_camera
+const COMBO_ZOOM_PER_PX = 0.005
+const COMBO_MIN_DISTANCE = 1
+
+let manualDrag: 'combo' | 'orbit' | null = null
+let manualLast = { x: 0, y: 0 }
+let comboUsedInPress = false
+
+function updateManualDragState(e: PointerEvent) {
+  const left = (e.buttons & 1) !== 0
+  const right = (e.buttons & 2) !== 0
+  const next: typeof manualDrag =
+    left && right
+      ? manualDrag === null && gizmo.dragging
+        ? null // the gizmo keeps an in-progress drag
+        : 'combo'
+      : manualDrag !== null && (left || right)
+        ? 'orbit'
+        : null
+  if (next !== null && manualDrag === null) {
+    manualLast = { x: e.clientX, y: e.clientY }
+    controls.enabled = false
+  }
+  if (next === 'combo' && manualDrag !== 'combo') {
+    comboUsedInPress = true
+    // Desktop _maybe_snap_orbit_target: re-center the pivot on the selection.
+    const pos = selection.id !== null ? worldPosOf(selection.id) : null
+    if (pos) controls.target.copy(pos)
+  }
+  if (next === null && manualDrag !== null) controls.enabled = true
+  manualDrag = next
+}
+
+function manualDragMove(e: PointerEvent) {
+  const dx = e.clientX - manualLast.x
+  const dy = e.clientY - manualLast.y
+  manualLast = { x: e.clientX, y: e.clientY }
+  const offset = camera.position.clone().sub(controls.target)
+  const r0 = offset.length()
+  if (r0 < 1e-9) return
+  // Z-up azimuth/elevation/distance, the desktop camera model. Azimuth sign is
+  // the grab-the-object convention (matches both the desktop and what
+  // OrbitControls does for a plain left drag).
+  const az = Math.atan2(offset.y, offset.x) - dx * COMBO_ORBIT_DEG_PER_PX * DEG
+  let el = Math.asin(THREE.MathUtils.clamp(offset.z / r0, -1, 1))
+  let r = r0
+  if (manualDrag === 'combo') {
+    r = Math.max(COMBO_MIN_DISTANCE, r * (1 + dy * COMBO_ZOOM_PER_PX))
+  } else {
+    el = THREE.MathUtils.clamp(el + dy * COMBO_ORBIT_DEG_PER_PX * DEG, -89 * DEG, 89 * DEG)
+  }
+  camera.position
+    .set(Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el))
+    .multiplyScalar(r)
+    .add(controls.target)
+  camera.lookAt(controls.target)
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  comboUsedInPress = false // pointerdown always starts a fresh button chord
+  updateManualDragState(e)
+})
+renderer.domElement.addEventListener('pointerup', updateManualDragState)
+renderer.domElement.addEventListener('pointercancel', updateManualDragState)
+renderer.domElement.addEventListener('pointermove', (e) => {
+  updateManualDragState(e)
+  if (manualDrag !== null) manualDragMove(e)
+})
+// OrbitControls only suppresses the context menu while enabled; during a combo
+// it is disabled, so cover the right-button release ourselves.
+renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault())
 
 // --- Transform gizmo (interaction 6c) ------------------------------------------
 // TransformControls in LOCAL space: thanks to the outward base rotation, the
