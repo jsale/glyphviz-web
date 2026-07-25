@@ -10,6 +10,7 @@ import type { GvNode } from '../gv/types'
 import type { CriterionValue, SelectCriterion } from '../gv/selectionOps'
 import { CRITERION_LABELS, criterionValues } from '../gv/selectionOps'
 import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
+import type { AudioMode } from '../render/textureLibrary'
 import { Panel } from './panel'
 
 export interface SelectionPanelHost {
@@ -25,6 +26,7 @@ export interface SelectionPanelHost {
   setShowHidden(showHidden: boolean): void
   setShowTags(showTags: boolean): void
   setTagsSelectedOnly(selectedOnly: boolean): void
+  setAudioMode(mode: AudioMode): void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -58,6 +60,8 @@ export class SelectionPanel {
   private showTags: HTMLInputElement
   private tagsSelectedOnly: HTMLInputElement
   private tagCount = el('div', { className: 'sel-hint' })
+  private audio = el('select')
+  private audioRow: HTMLDivElement
   private selectionButtons: HTMLButtonElement[] = []
   private values: CriterionValue[] = []
   private nodes: GvNode[] = []
@@ -105,6 +109,24 @@ export class SelectionPanel {
     this.tagsSelectedOnly.addEventListener('change', () =>
       host.setTagsSelectedOnly(this.tagsSelectedOnly.checked),
     )
+
+    // Video soundtracks. The desktop plays every loaded video's audio by
+    // default; browsers refuse audible autoplay, so this starts muted and
+    // choosing an option supplies the gesture that unmutes.
+    for (const [value, label] of [
+      ['muted', 'Muted'],
+      ['all', 'All Tracks'],
+      ['selected', 'Solo to Selection'],
+    ] as Array<[AudioMode, string]>) {
+      this.audio.appendChild(el('option', { value, textContent: label }))
+    }
+    this.audio.addEventListener('change', () => host.setAudioMode(this.audio.value as AudioMode))
+    this.audioRow = this.labelled('Video Audio', this.audio)
+    this.audioRow.title =
+      'Soundtracks of video textures in this scene.\n' +
+      'Starts muted because browsers block audible autoplay; "Solo to Selection"\n' +
+      'plays only videos textured on selected nodes.'
+    this.audioRow.hidden = true
 
     const selectAll = button('Select All', 'Select every node  (Ctrl+A)', () => host.selectAll())
     const deselect = button('Deselect All', 'Clear the selection  (Ctrl+A again, or Esc)', () =>
@@ -172,6 +194,7 @@ export class SelectionPanel {
       tagCheck.row,
       tagSelectedCheck.row,
       this.tagCount,
+      this.audioRow,
       el('div', {
         className: 'sel-hint',
         textContent:
@@ -221,5 +244,10 @@ export class SelectionPanel {
   /** Keep the checkbox in step when the T key toggles labels. */
   setShowTagsChecked(showTags: boolean): void {
     this.showTags.checked = showTags
+  }
+
+  /** The audio control only exists for scenes that actually loaded a video. */
+  setVideoCount(count: number): void {
+    this.audioRow.hidden = count === 0
   }
 }

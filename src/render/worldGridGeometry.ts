@@ -6,9 +6,9 @@
 //
 // Flat form: lattice lines at segments_x/y counts, plus — for a solid
 // geometry choice — a double-sided plate. Globe form (sphere geometry): a
-// lon/lat graticule and, when solid, a unit sphere. Both draw unlit so a
-// future map texture reads at full brightness; textures themselves are still
-// unimplemented (roadmap step 7), so the solid surface is flat color for now.
+// lon/lat graticule and, when solid, a unit sphere. Both draw unlit (Basic
+// material) so a map texture reads at full brightness with no day/night
+// shading, and a textured surface is left untinted.
 //
 // Over a solid surface the lattice dims to half opacity and lifts slightly
 // off it (z 0.001 / radius 1.002, in local units so the offset scales with
@@ -20,6 +20,7 @@ import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
 import { gridIsGlobe, gridSegments } from '../gv/worldGrid'
 import { WIRE_TO_SOLID } from './glyphGeometry'
+import { zSphereGeometry } from './uvGeometry'
 
 // Globe tessellation, matching the desktop's density choice.
 const GLOBE_SLICES = 48
@@ -89,22 +90,22 @@ function graticuleGeometry(segX: number, segY: number, radius: number): THREE.Bu
 }
 
 /**
- * Unit sphere with Z-up poles. The desktop maps the globe with exact
- * KML-aligned equirect UVs (lon 0 at +X, u eastward, v northward) — that
- * alignment only matters once textures are implemented, at which point the
- * UVs here must be rebuilt to match rather than trusting Three's defaults.
+ * Unit sphere with Z-up poles and KML-aligned equirect UVs — u = (lon+180)/360
+ * eastward, v = (lat+90)/180 northward, so lon 0 faces +X at u = 0.5 and a
+ * lon/lat map lines up with the KML-placed children on the globe. This is the
+ * desktop's own hand-built `_globe_surface` mapping (it bypasses gluSphere,
+ * whose longitude is offset and mirrored); zSphereGeometry applies the same
+ * convention to every round glyph.
  */
 function globeSurfaceGeometry(): THREE.BufferGeometry {
-  const geo = new THREE.SphereGeometry(1, GLOBE_SLICES, GLOBE_STACKS)
-  geo.rotateX(Math.PI / 2)
-  return geo
+  return zSphereGeometry(1, GLOBE_SLICES, GLOBE_STACKS)
 }
 
 /**
  * Renderable World Grid object in ±1 local units. The caller applies
  * gridDrawScale(node) and marks it as the node's glyph.
  */
-export function createWorldGridObject(node: GvNode): THREE.Object3D {
+export function createWorldGridObject(node: GvNode, map?: THREE.Texture): THREE.Object3D {
   const group = new THREE.Group()
   const color = new THREE.Color(node.color.r / 255, node.color.g / 255, node.color.b / 255)
   const alpha = node.color.a / 255
@@ -119,7 +120,11 @@ export function createWorldGridObject(node: GvNode): THREE.Object3D {
     const surface = new THREE.Mesh(
       surfaceGeo,
       new THREE.MeshBasicMaterial({
-        color,
+        // A textured grid is NOT tinted by the node colour — the desktop
+        // forces glColor4f(1,1,1,a) so the map reads as authored (only alpha
+        // still applies). Untextured, the node colour is the surface colour.
+        color: map ? 0xffffff : color,
+        map,
         transparent: alpha < 1,
         opacity: alpha,
         side: THREE.DoubleSide,

@@ -7,6 +7,7 @@
 
 import * as THREE from 'three'
 import { Geometry } from '../gv/types'
+import { applyPerFaceUV, fitPlanarUV, zSphereGeometry, zTubeGeometry } from './uvGeometry'
 
 // Desktop proportion constants (glyphviz_core/geometry_data.py).
 export const GRID_HALF_EXTENT = 1 / Math.SQRT2 // square corners reach radius 1
@@ -20,12 +21,13 @@ export interface GlyphStyle {
   opacity: number
   /** Node `ratio` — torus tube proportion, Point pixel size. */
   ratio: number
-}
-
-/** Rotates a Y-up Three.js primitive into the GlyphViz Z-up convention. */
-function zUp(geo: THREE.BufferGeometry): THREE.BufferGeometry {
-  geo.rotateX(Math.PI / 2)
-  return geo
+  /**
+   * Decoded `texture_id`, or undefined for an untextured node. The colour
+   * still applies: fixed-function GL's default env mode is MODULATE, which is
+   * exactly what Three does with `map` × `color`. Wire glyphs and Points are
+   * never textured (the desktop's `geo_id not in _WIRE_IDS` guard).
+   */
+  map?: THREE.Texture
 }
 
 function starShape(points = 5, innerRatio = 0.382): THREE.Shape {
@@ -75,22 +77,36 @@ function gridLatticeGeometry(segments = 8): THREE.BufferGeometry {
 // open-ended cone/cylinder wires (desktop wire quadrics have no caps).
 type GeoBuilder = () => THREE.BufferGeometry
 
+// Every solid carries usable texture coordinates — see uvGeometry.ts for the
+// shared equirect convention on curved surfaces and the per-face unwrap on
+// flat-faced ones. Three's own UVs are kept where they are already right:
+// BoxGeometry maps each face 0–1 (the desktop's _CUBE_UVS), TorusGeometry
+// parameterises major/minor exactly like _draw_torus, and PlaneGeometry /
+// CircleGeometry match _draw_grid_solid and gluDisk.
 const SOLID_BUILDERS: Record<number, GeoBuilder> = {
   [Geometry.CubeSolid]: () => new THREE.BoxGeometry(2 * CUBE_HALF, 2 * CUBE_HALF, 2 * CUBE_HALF),
-  [Geometry.SphereSolid]: () => new THREE.SphereGeometry(1, 16, 12),
+  [Geometry.SphereSolid]: () => zSphereGeometry(1, 32, 16),
   // Base at z=−1 (radius 1), apex at z=+1, capped.
-  [Geometry.ConeSolid]: () => zUp(new THREE.ConeGeometry(1, 2, 16, 1, false)),
-  [Geometry.DodecahedronSolid]: () => new THREE.DodecahedronGeometry(1),
-  [Geometry.OctahedronSolid]: () => new THREE.OctahedronGeometry(1),
-  [Geometry.TetrahedronSolid]: () => new THREE.TetrahedronGeometry(1),
-  [Geometry.IcosahedronSolid]: () => new THREE.IcosahedronGeometry(1),
+  [Geometry.ConeSolid]: () => zTubeGeometry(1, 0, 2, { slices: 32, capBottom: true }),
+  // Flat-faced solids take the cube's per-face 0–1 treatment (see
+  // applyPerFaceUV) rather than Three's spherical projection.
+  [Geometry.DodecahedronSolid]: () => applyPerFaceUV(new THREE.DodecahedronGeometry(1)),
+  [Geometry.OctahedronSolid]: () => applyPerFaceUV(new THREE.OctahedronGeometry(1)),
+  [Geometry.TetrahedronSolid]: () => applyPerFaceUV(new THREE.TetrahedronGeometry(1)),
+  [Geometry.IcosahedronSolid]: () => applyPerFaceUV(new THREE.IcosahedronGeometry(1)),
   // Spans z ∈ [−1, 1], capped.
   [Geometry.CylinderSolid]: () =>
-    zUp(new THREE.CylinderGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, 16, 1, false)),
+    zTubeGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, {
+      slices: 32,
+      capBottom: true,
+      capTop: true,
+    }),
   [Geometry.GridSolid]: () => new THREE.PlaneGeometry(2 * GRID_HALF_EXTENT, 2 * GRID_HALF_EXTENT),
   [Geometry.Circle]: () => new THREE.CircleGeometry(1, 24),
-  [Geometry.Cross]: () => new THREE.ShapeGeometry(crossShape()),
-  [Geometry.Star]: () => new THREE.ShapeGeometry(starShape()),
+  // ShapeGeometry emits raw vertex coordinates as UVs, which tile a ±1 glyph
+  // four times; refit them to the outline's bounding box.
+  [Geometry.Cross]: () => fitPlanarUV(new THREE.ShapeGeometry(crossShape())),
+  [Geometry.Star]: () => fitPlanarUV(new THREE.ShapeGeometry(starShape())),
 }
 
 // Flat markers and the plate render double-sided on the desktop.
@@ -105,13 +121,13 @@ const DOUBLE_SIDED = new Set<number>([
 const WIRE_BUILDERS: Record<number, GeoBuilder> = {
   [Geometry.CubeWire]: SOLID_BUILDERS[Geometry.CubeSolid],
   [Geometry.SphereWire]: SOLID_BUILDERS[Geometry.SphereSolid],
-  [Geometry.ConeWire]: () => zUp(new THREE.ConeGeometry(1, 2, 16, 1, true)),
+  [Geometry.ConeWire]: () => zTubeGeometry(1, 0, 2, { slices: 16 }),
   [Geometry.DodecahedronWire]: SOLID_BUILDERS[Geometry.DodecahedronSolid],
   [Geometry.OctahedronWire]: SOLID_BUILDERS[Geometry.OctahedronSolid],
   [Geometry.TetrahedronWire]: SOLID_BUILDERS[Geometry.TetrahedronSolid],
   [Geometry.IcosahedronWire]: SOLID_BUILDERS[Geometry.IcosahedronSolid],
   [Geometry.CylinderWire]: () =>
-    zUp(new THREE.CylinderGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, 16, 1, true)),
+    zTubeGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, { slices: 16 }),
 }
 
 // Pin (16/17): ball head above a tapering needle, both along local Z —
@@ -119,9 +135,10 @@ const WIRE_BUILDERS: Record<number, GeoBuilder> = {
 // to r 0.03 at z −1.0 (glyphviz_gl _draw_pin).
 function pinSolidGeometries(): [THREE.BufferGeometry, THREE.BufferGeometry] {
   if (!solidCache.has('pin:head')) {
-    const head = new THREE.SphereGeometry(0.12, 12, 8)
+    const head = zSphereGeometry(0.12, 16, 8)
     head.translate(0, 0, 0.22)
-    const needle = zUp(new THREE.CylinderGeometry(0.12, 0.03, 1.1, 8, 1, true))
+    // Wide end (r 0.12) at the top, tapering to r 0.03 at z −1.0.
+    const needle = zTubeGeometry(0.03, 0.12, 1.1, { slices: 16 })
     needle.translate(0, 0, -0.45)
     solidCache.set('pin:head', head)
     solidCache.set('pin:needle', needle)
@@ -153,21 +170,56 @@ function torusGeometry(ratio: number): THREE.BufferGeometry {
   return new THREE.TorusGeometry(major, minor, 16, 24)
 }
 
+// Materials are shared across every node that looks the same. A material per
+// node is affordable at a hundred glyphs and pathological at a hundred
+// thousand (Raw_Auction_Field is 100k, Event_Cloud 209k) — and textures make
+// it worse, since each material would otherwise re-bind the same map.
+const materialCache = new Map<string, THREE.Material>()
+
+function styleKey(style: GlyphStyle, kind: string, extra: string | number = ''): string {
+  return `${kind}|${style.color.getHexString()}|${style.opacity.toFixed(4)}|${
+    style.map?.uuid ?? ''
+  }|${extra}`
+}
+
+function cachedMaterial<T extends THREE.Material>(key: string, build: () => T): T {
+  const hit = materialCache.get(key)
+  if (hit) return hit as T
+  const made = build()
+  materialCache.set(key, made)
+  return made
+}
+
+/**
+ * Drop every cached material. Call when a scene is replaced: the textures the
+ * old materials reference are disposed with it, and a material holding a
+ * disposed map renders black.
+ */
+export function clearMaterialCache(): void {
+  for (const material of materialCache.values()) material.dispose()
+  materialCache.clear()
+}
+
 function solidMaterial(style: GlyphStyle, doubleSided: boolean): THREE.Material {
-  return new THREE.MeshLambertMaterial({
-    color: style.color,
-    transparent: style.opacity < 1,
-    opacity: style.opacity,
-    side: doubleSided ? THREE.DoubleSide : THREE.FrontSide,
-  })
+  return cachedMaterial(styleKey(style, 'solid', doubleSided ? 'ds' : 'fs'), () =>
+    new THREE.MeshLambertMaterial({
+      color: style.color,
+      map: style.map,
+      transparent: style.opacity < 1,
+      opacity: style.opacity,
+      side: doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+    }),
+  )
 }
 
 function wireMaterial(style: GlyphStyle): THREE.Material {
-  return new THREE.LineBasicMaterial({
-    color: style.color,
-    transparent: style.opacity < 1,
-    opacity: style.opacity,
-  })
+  return cachedMaterial(styleKey(style, 'wire'), () =>
+    new THREE.LineBasicMaterial({
+      color: style.color,
+      transparent: style.opacity < 1,
+      opacity: style.opacity,
+    }),
+  )
 }
 
 /**
@@ -181,15 +233,18 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
     // (min 1), immune to node scale — sizeAttenuation: false matches that.
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3))
+    const size = Math.max(1, style.ratio * 20)
     return new THREE.Points(
       geo,
-      new THREE.PointsMaterial({
-        color: style.color,
-        transparent: style.opacity < 1,
-        opacity: style.opacity,
-        size: Math.max(1, style.ratio * 20),
-        sizeAttenuation: false,
-      }),
+      cachedMaterial(styleKey(style, 'point', size), () =>
+        new THREE.PointsMaterial({
+          color: style.color,
+          transparent: style.opacity < 1,
+          opacity: style.opacity,
+          size,
+          sizeAttenuation: false,
+        }),
+      ),
     )
   }
 

@@ -145,6 +145,12 @@ export interface BuildSceneOptions {
    * is only undoable through the selection you kept, Show All, or the CSV.
    */
   showHidden?: boolean
+  /**
+   * Decoded media, texture_id → texture (src/render/textureLibrary.ts). A
+   * node whose texture_id is absent here draws untextured — the id may name a
+   * format no browser decodes, or a file the folder never supplied.
+   */
+  textures?: ReadonlyMap<number, THREE.Texture>
 }
 
 export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): SceneBuildResult {
@@ -189,6 +195,11 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   // must be O(1), never a getObjectByName scene scan.
   const frames = new Map<number, THREE.Object3D>()
 
+  // texture_id 0 is "untextured"; ids the media folder never supplied fall
+  // back to untextured too, and main.ts reports them once for the scene.
+  const textureFor = (node: GvNode): THREE.Texture | undefined =>
+    node.textureId > 0 ? options.textures?.get(node.textureId) : undefined
+
   const attach = (
     node: GvNode,
     parent: THREE.Object3D,
@@ -224,7 +235,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
       // times the shape's half-spans — no base_scale, no 0.2 floor, so the
       // surface sits exactly under the children it frames. Never pickable
       // (no proxy); a solid surface still occludes picking.
-      const glyph = createWorldGridObject(node)
+      const glyph = createWorldGridObject(node, textureFor(node))
       const s = gridDrawScale(node)
       glyph.scale.set(s.x, s.y, s.z)
       glyph.name = 'glyph'
@@ -236,6 +247,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
         color: new THREE.Color(node.color.r / 255, node.color.g / 255, node.color.b / 255),
         opacity: node.color.a / 255,
         ratio: node.ratio,
+        map: textureFor(node),
       })
       if (glyph) {
         // Desktop floors the *drawn* world scale at 0.2 per axis while child

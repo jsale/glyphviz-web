@@ -28,12 +28,20 @@ describe('deriveTagFilename', () => {
     expect(deriveTagFilename('np_node.csv')).toBe('np_tag.csv')
   })
 
+  it('pairs a timestamped save, which the desktop loader cannot', () => {
+    // stamp_node_and_tag_paths writes exactly this pair; its own loader then
+    // fails to find the tag file. See the note on deriveTagFilename.
+    expect(deriveTagFilename('gv_node20260725103000.csv')).toBe('gv_tag20260725103000.csv')
+    expect(deriveTagFilename('myscene_gv_node20260718094500.csv')).toBe(
+      'myscene_gv_tag20260718094500.csv',
+    )
+  })
+
   it('returns null when no tag name is derivable', () => {
     expect(deriveTagFilename('scene.csv')).toBeNull()
     expect(deriveTagFilename('nodes.csv')).toBeNull()
-    // Desktop-loader quirk, deliberately matched: a timestamped save finds no
-    // companion on reload even though the saver wrote one.
-    expect(deriveTagFilename('gv_node20260725103000.csv')).toBeNull()
+    // A stamp alone is not enough — the stem still has to end in `node`.
+    expect(deriveTagFilename('scene20260725103000.csv')).toBeNull()
   })
 })
 

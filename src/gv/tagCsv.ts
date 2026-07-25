@@ -28,21 +28,31 @@ const URL_PREFIXES = ['http://', 'https://', 'www.', 'ftp://']
 // Desktop: r'<a\s+href=["\']?([^"\'>\s]+)["\']?>([^<]*)</a>', case-insensitive.
 const ANCHOR_RE = /<a\s+href=["']?([^"'>\s]+)["']?>([^<]*)<\/a>/i
 
+/** The desktop saver's stamp: YYYYMMDDHHMMSS, no delimiters. */
+const TIMESTAMP_RE = /\d{14}$/
+
 /**
  * Companion tag filename for a node CSV, or null when none is derivable.
  *
- * Matches the desktop *loader* rule (`_swap_node_tag_stem`): the stem must end
- * in exactly `node`. Note this means a timestamped save —
- * `scene_gv_node20260725103000.csv` — finds no tag file on reload, even though
- * the desktop *saver* wrote one (it strips the stamp before swapping). Faithful
- * to desktop behavior; flagged in the plan as a desktop-side quirk.
+ * The desktop *loader* rule (`_swap_node_tag_stem`) is that the stem must end
+ * in exactly `node`. Deliberate divergence: a trailing 14-digit save stamp is
+ * stripped first, so `scene_gv_node20260725103000.csv` pairs with
+ * `scene_gv_tag20260725103000.csv`.
+ *
+ * That pair is exactly what the desktop's own `stamp_node_and_tag_paths`
+ * writes (it strips the stamp before swapping, then re-appends it) — and what
+ * its loader then fails to find, so GlyphViz currently writes a pair it cannot
+ * read back. Jeff is fixing the desktop side (2026-07-25); until then this
+ * keeps the web app able to open the files that already exist on disk.
  */
 export function deriveTagFilename(nodeFilename: string): string | null {
   const dot = nodeFilename.lastIndexOf('.')
   const stem = dot === -1 ? nodeFilename : nodeFilename.slice(0, dot)
   const ext = dot === -1 ? '' : nodeFilename.slice(dot)
-  if (!stem.endsWith('node')) return null
-  return stem.slice(0, -4) + 'tag' + ext
+  const stamp = TIMESTAMP_RE.exec(stem)?.[0] ?? ''
+  const base = stamp === '' ? stem : stem.slice(0, -stamp.length)
+  if (!base.endsWith('node')) return null
+  return base.slice(0, -4) + 'tag' + stamp + ext
 }
 
 /**

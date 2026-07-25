@@ -31,7 +31,16 @@ import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
+import { clearMaterialCache } from './render/glyphGeometry'
 import { LabelOverlay } from './render/labelOverlay'
+import {
+  applyAudioMode,
+  disposeTextures,
+  emptyTextureLibrary,
+  loadTextures,
+  referencedTextureIds,
+} from './render/textureLibrary'
+import type { AudioMode, TextureLibrary } from './render/textureLibrary'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
 import { nodeIdsInRect } from './render/rectSelect'
 import { invertLocalRotation } from './render/rotationInverse'
@@ -330,6 +339,8 @@ function refreshSelectionUi() {
   newChildButton.disabled = !primary
   deleteButton.disabled = !primary
   selectionPanel.update(currentNodes, selection.size)
+  // "Solo to Selection" mixes by what is selected right now.
+  if (audioMode === 'selected') refreshAudio()
   if (!primary) {
     gizmo.detach()
     inspector.clear()
@@ -365,6 +376,9 @@ let showHidden = false
 // Tag labels are off by default, matching the desktop ("press T to see labels").
 let showTags = false
 let tagsSelectedOnly = false
+// Muted by default: browsers block audible autoplay, so the desktop's
+// everything-audible default is not reachable until the user asks for it.
+let audioMode: AudioMode = 'muted'
 
 function selectAllToggle() {
   // Ctrl+A: select all when nothing (or only part) is selected; clear otherwise.
@@ -427,6 +441,28 @@ const selectionCommands = {
   setTagsSelectedOnly(value: boolean) {
     tagsSelectedOnly = value
   },
+  setAudioMode(mode: AudioMode) {
+    audioMode = mode
+    refreshAudio()
+    status(
+      mode === 'muted'
+        ? 'Video audio muted.'
+        : mode === 'all'
+          ? 'All video tracks audible.'
+          : 'Video audio follows the selection.',
+    )
+  },
+}
+
+/**
+ * Push the current audio mode onto the scene's videos. Called when the mode
+ * changes and whenever the selection does, since "Solo to Selection" mixes by
+ * which nodes are selected right now.
+ */
+function refreshAudio() {
+  applyAudioMode(currentTextures, audioMode, (textureId) =>
+    currentNodes.some((n) => n.textureId === textureId && selection.has(n.id)),
+  )
 }
 
 const selectionPanel = new SelectionPanel(selectionCommands)
@@ -475,9 +511,14 @@ let parseErrorLines: string[] = []
 let parseWarningLines: string[] = []
 /** True when labels came from a companion gv_tag.csv rather than inline columns. */
 let labelsFromTagFile = false
-/** Resolved media for the loaded scene — texture_id → file. Consumed by the textures step. */
+/** Resolved media for the loaded scene — texture_id → file. */
 let currentMedia: { index: MediaIndex; fileById: Map<number, File> } | null = null
 let labelNote = ''
+/** Decoded textures for the loaded scene, keyed by texture_id. */
+let currentTextures: TextureLibrary = emptyTextureLibrary()
+/** Bumped per scene load, so a slow texture decode can't land on a newer scene. */
+let sceneEpoch = 0
+let textureNote = ''
 
 interface SceneSource {
   nodeText: string
@@ -521,19 +562,53 @@ function loadScene(source: SceneSource) {
     }
   }
 
-  if (currentMedia && currentMedia.index.entries.length > 0) {
-    const unsupported = currentMedia.index.entries.filter((e) => e.support === 'unsupported')
-    if (unsupported.length > 0) {
-      parseWarningLines.push(
-        `${unsupported.length} media file(s) no browser can decode (${unsupported
-          .map((e) => e.name)
-          .join(', ')}) — their texture_ids stay reserved.`,
-      )
-    }
+  saveTagsButton.hidden = !hasAnyLabel(currentNodes) || deriveTagFilename(currentFilename) === null
+
+  // The old scene's textures die with it, and every cached material that
+  // referenced one goes too — a material holding a disposed map renders black.
+  sceneEpoch++
+  disposeTextures(currentTextures)
+  clearMaterialCache()
+  currentTextures = emptyTextureLibrary()
+  textureNote = ''
+  selectionPanel.setVideoCount(0)
+
+  // Draw immediately, untextured; media decodes asynchronously and triggers a
+  // second, camera-preserving rebuild when it lands.
+  rebuildScene(true)
+  void decodeSceneTextures(sceneEpoch)
+}
+
+/**
+ * Decode the media this scene's nodes reference, then redraw with it.
+ *
+ * Only referenced ids are fetched — a scene folder can carry tens of megabytes
+ * of media that no node points at. `epoch` guards against a slow decode
+ * landing after the user has moved on to another scene.
+ */
+async function decodeSceneTextures(epoch: number) {
+  const media = currentMedia
+  if (!media || media.index.entries.length === 0) return
+  const wanted = referencedTextureIds(currentNodes)
+  if (wanted.size === 0) return
+
+  const library = await loadTextures(media.index, wanted, async (entry) =>
+    media.fileById.get(entry.textureId) ?? null,
+  )
+  if (epoch !== sceneEpoch) {
+    disposeTextures(library) // a newer scene loaded while this decoded
+    return
   }
 
-  saveTagsButton.hidden = !hasAnyLabel(currentNodes) || deriveTagFilename(currentFilename) === null
-  rebuildScene(true)
+  currentTextures = library
+  const videoNote = library.videos.length > 0 ? ` (${library.videos.length} video)` : ''
+  textureNote =
+    library.byId.size > 0 ? `${library.byId.size}/${wanted.size} texture(s)${videoNote}` : ''
+  parseWarningLines.push(...library.warnings)
+  selectionPanel.setVideoCount(library.videos.length)
+  refreshAudio()
+  clearMaterialCache()
+  rebuildScene(false)
 }
 
 function loadBuiltIn(name: string) {
@@ -549,7 +624,7 @@ function loadBuiltIn(name: string) {
 
 function rebuildScene(fitCamera: boolean) {
   const prevSelected = new Set(selection.ids)
-  const built = buildScene(currentNodes, { showHidden })
+  const built = buildScene(currentNodes, { showHidden, textures: currentTextures.byId })
   if (currentRoot) {
     gizmo.detach()
     selection.set(built.frames, null)
@@ -576,6 +651,7 @@ function rebuildScene(fitCamera: boolean) {
     ...(currentLinks.count > 0 ? [`${currentLinks.count} link edge(s)`] : []),
     ...(labelNote ? [labelNote] : []),
     ...(mediaCount > 0 ? [`${mediaCount} media file(s)`] : []),
+    ...(textureNote ? [textureNote] : []),
   ]
   hudScene.textContent = `${currentDisplayName} — ${notes.join(', ')}`
   showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
