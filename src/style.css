@@ -57,29 +57,55 @@ canvas {
   flex: 0 0 auto;
 }
 
+/* Header row: the title button collapses, the × closes. Two buttons, because
+   a button cannot be nested inside another one. */
 .panel-header {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 7px 12px;
-  border: none;
+  align-items: stretch;
   border-radius: 8px;
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  text-align: left;
-  cursor: pointer;
 }
 
 .panel:not(.collapsed) .panel-header {
   border-radius: 8px 8px 0 0;
 }
 
-.panel-header:hover {
+.panel-header-main,
+.panel-close {
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.panel-header-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 4px 7px 12px;
+  border-radius: inherit;
+  text-align: left;
+}
+
+.panel-close {
+  padding: 7px 10px;
+  border-radius: inherit;
+  color: #6c7488;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.panel-header-main:hover,
+.panel-close:hover {
   background: rgba(255, 255, 255, 0.06);
+}
+
+.panel-close:hover {
+  color: #e6b7b7;
 }
 
 .panel-caret {
@@ -180,8 +206,14 @@ canvas {
   cursor: pointer;
 }
 
-#hud-modes button:hover {
+#hud-modes button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
+}
+
+/* No mode is armable without a selection (desktop toolbar parity). */
+#hud-modes button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 #hud-modes button.active {

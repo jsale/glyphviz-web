@@ -100,9 +100,9 @@ export class NodeTable {
       id: 'node-table',
       title: 'Node Table',
       hotkey: 'Alt+N',
-      collapsed: true,
-      onToggle: (collapsed) => {
-        if (this.ready && !collapsed) this.onExpand()
+      mode: 'collapsed',
+      onModeChange: (mode) => {
+        if (this.ready && mode === 'open') this.onExpand()
       },
     })
 

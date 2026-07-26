@@ -86,6 +86,7 @@ export class Selection {
   private order: number[] = []
   private members = new Set<number>()
   private overflow = 0
+  private boxesVisible = true
 
   /** Selected ids in scene row order; `[0]` is the primary. */
   get ids(): readonly number[] {
@@ -104,6 +105,22 @@ export class Selection {
   /** Selected nodes beyond MAX_HALOS, which are drawn without a halo. */
   get haloOverflow(): number {
     return this.overflow
+  }
+
+  /**
+   * Desktop `Viewport.show_selection_box`: the yellow boxes are a render-only
+   * decoration, so hiding them leaves the selection itself — primary node,
+   * gizmo target, every command — completely untouched. That is the point:
+   * a clean screengrab of a chosen state, without having to deselect and
+   * reselect afterwards.
+   */
+  get boxVisible(): boolean {
+    return this.boxesVisible
+  }
+
+  set boxVisible(value: boolean) {
+    this.boxesVisible = value
+    for (const box of this.attached) box.visible = value
   }
 
   has(nodeId: number): boolean {
@@ -140,6 +157,7 @@ export class Selection {
       }
       const box = this.pool[this.attached.length] ?? createSelectionBox()
       this.pool[this.attached.length] = box
+      box.visible = this.boxesVisible
       this.attached.push(box)
       glyph.add(box)
     }

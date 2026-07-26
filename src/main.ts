@@ -65,7 +65,8 @@ import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { Inspector } from './ui/inspector'
 import { NodeTable } from './ui/nodeTable'
-import { Panel } from './ui/panel'
+import { PANEL_MODE_EVENT, Panel } from './ui/panel'
+import type { PanelModeChangeDetail } from './ui/panel'
 import { SelectionPanel } from './ui/selectionPanel'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import linkCsv from './examples/link_example_gv_node.csv?raw'
@@ -205,7 +206,7 @@ hud.innerHTML = `
     <button id="hud-save-tags" hidden title="Write the companion label file alongside the node CSV.">Save gv_tag.csv</button>
   </div>
   <div id="hud-modes">
-    <button data-mode="translate" class="active">Move (W)</button>
+    <button data-mode="translate">Move (W)</button>
     <button data-mode="rotate">Rotate (E)</button>
     <button data-mode="scale">Scale (R)</button>
   </div>
@@ -348,6 +349,16 @@ function status(message: string) {
   statusTimer = window.setTimeout(() => (statusBar.textContent = ''), 4000)
 }
 
+// A closed panel leaves nothing on screen to click, so its hotkey is the only
+// way back — say so at the moment it goes, while the user is still looking.
+document.addEventListener(PANEL_MODE_EVENT, (e) => {
+  const { mode, title, hotkey } = (e as CustomEvent<PanelModeChangeDetail>).detail
+  if (mode !== 'closed') return
+  status(
+    hotkey ? `${title} panel closed — ${hotkey} brings it back.` : `${title} panel closed.`,
+  )
+})
+
 function worldPosOf(nodeId: number): THREE.Vector3 | null {
   // Called per gizmo tick — must stay O(depth): frames map lookup, and
   // getWorldPosition refreshes only the ancestor chain (no full-tree pass).
@@ -415,23 +426,18 @@ function refreshSelectionUi() {
   nodeTable.setSelection(selection.asSet(), selection.id)
   // "Solo to Selection" mixes by what is selected right now.
   if (audioMode === 'selected') refreshAudio()
+  // Desktop parity (_on_table_selection): the Move/Rotate/Size buttons are
+  // live only with a selection, and an emptied selection disarms the mode.
+  for (const b of modeButtons) b.disabled = !primary
   if (!primary) {
-    gizmo.detach()
+    setGizmoMode(null, false)
     inspector.clear()
     return
   }
-  // No gizmo on World Grids (their frame deliberately carries no scale, so
-  // gizmo modes would fight it) or Links (their own transform is inert —
-  // the edge follows its endpoints) — edit those through the inspector,
-  // like the desktop's panel/table. Simplest defaults.
-  const frame = currentFrames?.get(primary.id)
-  if (primary.type === NodeType.WorldGrid || primary.type === NodeType.Link || !frame) {
-    gizmo.detach()
-  } else {
-    gizmo.attach(frame)
-  }
+  updateGizmoAttachment()
   inspector.show(nodes, nodes.length === 1 ? worldPosOf(primary.id) : null)
-  if (selection.haloOverflow > 0) {
+  // Pointless to report a halo cap while no halos are being drawn.
+  if (selection.haloOverflow > 0 && selection.boxVisible) {
     status(`${selection.size} selected — halos drawn for the first ${MAX_HALOS}.`)
   }
 }
@@ -523,6 +529,13 @@ const selectionCommands = {
   setShowTags(value: boolean) {
     showTags = value
     status(value ? 'Tag labels on.' : 'Tag labels off.')
+  },
+  setShowSelectionBox(value: boolean) {
+    // Render-only, exactly as on the desktop: nothing about the selection
+    // changes, so every command stays pointed at the same nodes.
+    selection.boxVisible = value
+    selectionPanel.setShowSelectionBoxChecked(value)
+    status(value ? 'Selection box shown.' : 'Selection box hidden (selection still active).')
   },
   setTagsSelectedOnly(value: boolean) {
     tagsSelectedOnly = value
@@ -1359,16 +1372,22 @@ window.addEventListener('keydown', (e) => {
   const tag = document.activeElement?.tagName
   const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA'
 
-  // Panel toggles are window commands and fire even mid-edit; the selection
+  // Panel cycling is a window command and fires even mid-edit; the selection
   // chords stand down while a field has focus, so Ctrl+A there still means
-  // "select this text". Ctrl+N — which would have suited a future Node Table
-  // — is reserved by the browser and cannot be intercepted, hence P/E/B;
-  // Alt+N stays free for when that panel arrives.
+  // "select this text". Ctrl+N — which would have suited the Node Table — is
+  // reserved by the browser and cannot be intercepted, hence P/E/B and Alt+C/N.
+  // Each press advances open → collapsed → closed → open.
+  //
+  // Ctrl+Shift+B is the selection box. The desktop puts that on a bare Ctrl+B,
+  // which is already the Scene panel here — a divergence, but the panel chord
+  // predates it and is muscle memory in this app.
   if (e.ctrlKey || e.metaKey) {
     const key = e.key.toLowerCase()
-    if (key === 'p') inspector.panel.toggle()
-    else if (key === 'e') selectionPanel.panel.toggle()
-    else if (key === 'b') scenePanel.toggle()
+    if (key === 'b' && e.shiftKey) {
+      selectionCommands.setShowSelectionBox(!selection.boxVisible)
+    } else if (key === 'p') inspector.panel.cycle()
+    else if (key === 'e') selectionPanel.panel.cycle()
+    else if (key === 'b') scenePanel.cycle()
     else if (typing) return
     else if (key === 'a') selectAllToggle()
     else if (key === 'i') selectionCommands.invertSelection()
@@ -1382,8 +1401,8 @@ window.addEventListener('keydown', (e) => {
   // browser and cannot be intercepted.
   if (e.altKey && !e.ctrlKey && !e.metaKey) {
     const key = e.key.toLowerCase()
-    if (key === 'c') channelsPanel.panel.toggle()
-    else if (key === 'n') nodeTable.panel.toggle()
+    if (key === 'c') channelsPanel.panel.cycle()
+    else if (key === 'n') nodeTable.panel.cycle()
     else return
     e.preventDefault()
     return
@@ -1406,9 +1425,9 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'o' || e.key === 'O') cycleAttribute('geometry', e.shiftKey ? -1 : 1)
   else if (e.key === 'f' || e.key === 'F') setFollowSelected(!followSelected)
   else if (e.key === 'b' || e.key === 'B') toggleBackgroundBw()
-  else if (e.key === 'w' || e.key === 'W') setGizmoMode('translate')
-  else if (e.key === 'e' || e.key === 'E') setGizmoMode('rotate')
-  else if (e.key === 'r' || e.key === 'R') setGizmoMode('scale')
+  else if (e.key === 'w' || e.key === 'W') toggleGizmoMode('translate')
+  else if (e.key === 'e' || e.key === 'E') toggleGizmoMode('rotate')
+  else if (e.key === 'r' || e.key === 'R') toggleGizmoMode('scale')
   else if (e.key === 'N' && e.shiftKey) addChildOfSelection()
   else if (e.key === 'n') addNode()
   else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelection()
@@ -1539,14 +1558,76 @@ gizmo.setSpace('local')
 gizmo.setSize(0.8)
 scene.add(gizmo.getHelper())
 
+// Desktop parity (`MainWindow._gizmo_mode`, which starts at None): the modes
+// are MUTUALLY EXCLUSIVE AND OPTIONAL. Nothing is armed until a button — or
+// W/E/R — arms it, pressing the armed one again disarms it ("click again to
+// return to camera-only"), and with no mode armed no handles are drawn at all.
+// That is the third of the screengrab escapes, alongside the selection box and
+// closable panels: a selected node can be shown with no editing furniture on
+// it, without losing the selection.
 type GizmoMode = 'translate' | 'rotate' | 'scale'
-const modeButtons = [...hud.querySelectorAll<HTMLButtonElement>('#hud-modes button')]
-function setGizmoMode(mode: GizmoMode) {
-  gizmo.setMode(mode)
-  for (const b of modeButtons) b.classList.toggle('active', b.dataset.mode === mode)
+const MODE_LABELS: Record<GizmoMode, string> = {
+  translate: 'Move',
+  rotate: 'Rotate',
+  scale: 'Scale',
 }
+let gizmoMode: GizmoMode | null = null
+const modeButtons = [...hud.querySelectorAll<HTMLButtonElement>('#hud-modes button')]
+
+/**
+ * Attach the handles to the primary node, or detach when they have no business
+ * being on screen: no mode armed, nothing selected, or a node whose transform
+ * the gizmo must not touch. No gizmo on World Grids (their frame deliberately
+ * carries no scale, so gizmo modes would fight it) or Links (their own
+ * transform is inert — the edge follows its endpoints); edit those through the
+ * inspector, like the desktop's panel/table.
+ */
+function updateGizmoAttachment() {
+  const primary = selection.id !== null ? nodesById.get(selection.id) : undefined
+  const frame = primary ? currentFrames?.get(primary.id) : undefined
+  if (
+    gizmoMode === null ||
+    !primary ||
+    !frame ||
+    primary.type === NodeType.WorldGrid ||
+    primary.type === NodeType.Link
+  ) {
+    gizmo.detach()
+    return
+  }
+  gizmo.attach(frame)
+}
+
+function setGizmoMode(mode: GizmoMode | null, announce = true) {
+  const changed = gizmoMode !== mode
+  gizmoMode = mode
+  for (const b of modeButtons) b.classList.toggle('active', b.dataset.mode === mode)
+  if (mode !== null) gizmo.setMode(mode)
+  updateGizmoAttachment()
+  if (!announce || !changed) return
+  if (mode === null) return status('Gizmo off — camera only.')
+  // The buttons are disabled without a selection, but W/E/R can still arm a
+  // mode ahead of one, so say what is still missing.
+  status(
+    selection.size === 0
+      ? `${MODE_LABELS[mode]} gizmo on — select a node to use it.`
+      : `${MODE_LABELS[mode]} gizmo on.`,
+  )
+}
+
+/** Button click and W/E/R alike: the armed mode toggles back off. */
+function toggleGizmoMode(mode: GizmoMode) {
+  setGizmoMode(gizmoMode === mode ? null : mode)
+}
+
 for (const b of modeButtons) {
-  b.addEventListener('click', () => setGizmoMode(b.dataset.mode as GizmoMode))
+  const mode = b.dataset.mode as GizmoMode
+  b.disabled = true // no selection at boot, same as the desktop's toolbar
+  b.title =
+    `${MODE_LABELS[mode]} the selected node(s) by dragging the handles.\n` +
+    'Click again (or press the key again) to put the handles away and\n' +
+    'return to camera-only — the selection is kept.'
+  b.addEventListener('click', () => toggleGizmoMode(mode))
 }
 
 let dragStartTranslate: Vec3 | null = null

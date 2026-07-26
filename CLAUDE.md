@@ -120,7 +120,8 @@ something to decide now).
       - Panels (Scene / Selection / Properties) collapse to their header
         bar by click or Ctrl+B / Ctrl+E / Ctrl+P; Channels is Alt+C and
         the Node Table Alt+N. Ctrl+N is reserved by browsers and cannot
-        be intercepted, which is why the last two are Alt chords.
+        be intercepted, which is why the last two are Alt chords. Each
+        panel also CLOSES outright — see the screengrab-chrome item (h).
       - Select by tag text (shipped 2026-07-25), desktop
         `_on_select_by_tag`: a "Tag" keyword box + Select Matching Tags
         button in the Selection panel, sharing the Add-to-Selection
@@ -202,6 +203,42 @@ something to decide now).
         threshold. `src/gv/worldNode.ts` also gave buildScene the desktop's
         lowest-id-wins rule for picking the World row (it took the first in
         file order before).
+   h. Screengrab chrome (shipped 2026-07-26, Jeff's users' request): every
+      editing affordance that draws over the scene can now be put away
+      WITHOUT giving up the state it belongs to — users were deselecting,
+      grabbing the shot, then reselecting from scratch.
+      - Show Selection Box: the yellow halos hide while the selection stays
+        completely live (`Selection.boxVisible` in `src/render/picking.ts`
+        is render-only — primary node, gizmo target, every command, all
+        untouched). Ported from desktop `Viewport.show_selection_box`,
+        including its checkbox living in the Select By group rather than
+        with Visibility: it is what you reach for while working WITH a
+        selection, and unlike Hide/Show it changes no node data.
+        Divergence: the desktop's Ctrl+B is this app's Scene panel (that
+        chord predates the feature and is muscle memory here), so the web
+        key is Ctrl+Shift+B.
+      - Panels gained a third state: open → collapsed → CLOSED, cycled by
+        the same hotkeys, with a × in every header. A collapsed panel still
+        lays a bar over the scene, which is exactly what the screengrab
+        complaint was about. Collapse is kept because it is the only state
+        a MOUSE can return from — a closed panel's hotkey is its only way
+        back — so the bar is what keeps a parked panel discoverable; the
+        status line names the hotkey at the moment a panel closes, for the
+        same reason. One rule on top of the plain 3-cycle
+        (`nextPanelMode`): the hotkey only shrinks a panel further when the
+        hotkey is what shrank it, so a press on a parked panel always
+        OPENS it — otherwise the Node Table, which boots collapsed so its
+        bar can advertise Alt+N, would answer that first Alt+N by
+        vanishing.
+      - Gizmo modes are now optional and toggleable, which is desktop
+        parity that had been missed: `MainWindow._gizmo_mode` starts at
+        None, the Move/Rotate/Size buttons are checkable ("Click again to
+        return to camera-only") and disabled without a selection, and an
+        emptied selection disarms the mode. So nothing is armed at boot,
+        no handles draw until a button or W/E/R arms one, and pressing the
+        armed one again puts them away. Small web-only allowance: W/E/R
+        can arm a mode ahead of a selection (the desktop has no such
+        keys, only the disabled buttons), and the status line says so.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

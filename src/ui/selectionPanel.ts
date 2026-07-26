@@ -17,6 +17,7 @@ export interface SelectionPanelHost {
   selectMatching(criterion: SelectCriterion, value: number, additive: boolean): void
   /** Select every node whose tag text contains `keyword` (same checkbox). */
   selectMatchingTags(keyword: string, additive: boolean): void
+  setShowSelectionBox(show: boolean): void
   hideSelected(): void
   showSelected(): void
   isolateSelected(): void
@@ -54,6 +55,7 @@ export class SelectionPanel {
   private criterion = el('select')
   private value = el('select')
   private additive: HTMLInputElement
+  private showSelectionBox: HTMLInputElement
   private showHidden: HTMLInputElement
   private showTags: HTMLInputElement
   private tagsSelectedOnly: HTMLInputElement
@@ -81,6 +83,23 @@ export class SelectionPanel {
         '(Ctrl+click and Ctrl+Shift+drag in the 3D view are always additive.)',
     )
     this.additive = addCheck.input
+
+    // Render-only toggle for the yellow halo. It lives in the Select By group
+    // rather than with the visibility controls for the desktop's own reason:
+    // it is what you reach for while working WITH a selection, and unlike
+    // Hide/Show it changes nothing about the nodes or the selection itself.
+    const selBoxCheck = checkbox(
+      'Show Selection Box',
+      'Draw the yellow bounding box around selected nodes  [Ctrl+Shift+B]\n' +
+        'Uncheck for a clean screengrab of a chosen state without having to\n' +
+        'deselect — the selection stays live, so Move/Rotate/Scale, the\n' +
+        'inspector and the selection keys all keep working.',
+    )
+    this.showSelectionBox = selBoxCheck.input
+    this.showSelectionBox.checked = true // matches Selection.boxVisible
+    this.showSelectionBox.addEventListener('change', () =>
+      host.setShowSelectionBox(this.showSelectionBox.checked),
+    )
 
     const hiddenCheck = checkbox(
       'Show Hidden Nodes',
@@ -206,6 +225,7 @@ export class SelectionPanel {
       addCheck.row,
       this.labelled('Tag', this.tagKeyword),
       this.tagSearchButton,
+      selBoxCheck.row,
       el('div', { className: 'sel-section', textContent: 'Visibility' }),
       pair(hide, show),
       isolate,
@@ -272,6 +292,11 @@ export class SelectionPanel {
   /** Keep the checkbox in step when the T key toggles labels. */
   setShowTagsChecked(showTags: boolean): void {
     this.showTags.checked = showTags
+  }
+
+  /** Same, for Ctrl+Shift+B toggling the selection box from the viewport. */
+  setShowSelectionBoxChecked(show: boolean): void {
+    this.showSelectionBox.checked = show
   }
 
   /** The audio control only exists for scenes that actually loaded a video. */

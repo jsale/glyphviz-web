@@ -213,6 +213,34 @@ describe('multi-selection', () => {
     expect([...sel.ids]).toEqual([2, 1])
   })
 
+  it('hides and shows the boxes without touching the selection', () => {
+    const { root, frames } = buildAndUpdate(threeNodes())
+    const sel = new Selection()
+    sel.set(frames, [1, 2, 3])
+    const boxes = () => {
+      const found: THREE.Object3D[] = []
+      root.traverse((o) => {
+        if (o.userData.isSelectionBox) found.push(o)
+      })
+      return found
+    }
+
+    sel.boxVisible = false
+    expect(sel.boxVisible).toBe(false)
+    expect(boxes().every((b) => !b.visible)).toBe(true)
+    // The whole point: everything the selection means is untouched.
+    expect([...sel.ids]).toEqual([1, 2, 3])
+    expect(sel.id).toBe(1)
+
+    // A selection made while the boxes are off stays off — the flag belongs
+    // to the viewer, not to any one selection.
+    sel.set(frames, [2])
+    expect(boxes().every((b) => !b.visible)).toBe(true)
+
+    sel.boxVisible = true
+    expect(boxes().every((b) => b.visible)).toBe(true)
+  })
+
   it('caps halos past MAX_HALOS while keeping the selection complete', () => {
     const nodes = Array.from({ length: MAX_HALOS + 5 }, (_, i) =>
       makeNode({ id: i + 1, translate: { x: i * 3, y: 0, z: 0 } }),
