@@ -1,17 +1,24 @@
 // Procedural viewport backdrop, ported (behavior, not code) from the desktop
 // viewport's _draw_grid/_draw_axes (verified 2026-07-24):
 //
-// - Reference grid: 41×41 unlit lines on z = 0, color (0.22, 0.22, 0.28),
-//   spacing max(10, camDistance·0.04) — rescaling with the camera makes it
-//   feel infinite. Drawn only while the scene has NO real World Grid node;
-//   once one exists, its own lattice is the reference plane and the
-//   decoration's unrelated spacing would just fight it.
+// - Reference grid: 41×41 unlit lines on z = 0, spacing max(10,
+//   camDistance·0.04) — rescaling with the camera makes it feel infinite.
+//   Drawn only while the scene has NO real World Grid node; once one exists,
+//   its own lattice is the reference plane and the decoration's unrelated
+//   spacing would just fight it. Its colour is the World row's
+//   ref_grid_color_r/g/b (scene data, not a viewer preference).
 // - Origin axes: +X/+Y/+Z half-lines from the world origin in red/green/blue,
-//   span camDistance·0.15, always shown.
+//   span camDistance·0.15.
+//
+// Both are switchable from the Scene panel's Show Grid / Show Axes checkboxes,
+// the desktop's Display group (Viewport.show_grid / show_axes). Those two ARE
+// viewer preferences — nothing about them is written to the CSV — so unlike
+// the grid colour they don't survive a reload.
 
 import * as THREE from 'three'
+import type { Rgb } from '../gv/types'
+import { REF_GRID_DEFAULT_RGB } from '../gv/types'
 
-const GRID_COLOR = new THREE.Color(0.22, 0.22, 0.28)
 const GRID_COUNT = 20 // lines from −count..count each way
 const GRID_MIN_STEP = 10.0
 const GRID_STEP_PER_DISTANCE = 0.04
@@ -23,6 +30,10 @@ export class Backdrop {
   private axes: THREE.LineSegments
   /** Scene-content switch: false once a World Grid node exists. */
   showReferenceGrid = true
+  /** Show Grid checkbox — independent of the switch above; both must allow it. */
+  showGrid = true
+  /** Show Axes checkbox. */
+  showAxes = true
 
   constructor() {
     this.group.name = 'backdrop'
@@ -37,7 +48,13 @@ export class Backdrop {
     gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
     this.grid = new THREE.LineSegments(
       gridGeo,
-      new THREE.LineBasicMaterial({ color: GRID_COLOR }),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color(
+          REF_GRID_DEFAULT_RGB.r / 255,
+          REF_GRID_DEFAULT_RGB.g / 255,
+          REF_GRID_DEFAULT_RGB.b / 255,
+        ),
+      }),
     )
     this.grid.name = 'reference-grid'
     this.group.add(this.grid)
@@ -63,9 +80,16 @@ export class Backdrop {
     this.group.add(this.axes)
   }
 
+  /** Paint the reference grid the scene's ref_grid_color (0–255 channels). */
+  setGridColor(rgb: Rgb): void {
+    const material = this.grid.material as THREE.LineBasicMaterial
+    material.color.setRGB(rgb.r / 255, rgb.g / 255, rgb.b / 255)
+  }
+
   /** Call once per frame with the camera→orbit-target distance. */
   update(camDistance: number): void {
-    this.grid.visible = this.showReferenceGrid
+    this.grid.visible = this.showGrid && this.showReferenceGrid
+    this.axes.visible = this.showAxes
     const step = Math.max(GRID_MIN_STEP, camDistance * GRID_STEP_PER_DISTANCE)
     this.grid.scale.set(step, step, 1)
     const span = camDistance * AXES_SPAN_PER_DISTANCE

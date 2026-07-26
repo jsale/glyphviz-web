@@ -66,6 +66,15 @@ export const TAG_TEXT_ALPHA = 230
  */
 export const TAG_SHADOW_RGBA: Readonly<Rgba> = { r: 0, g: 0, b: 0, a: 200 }
 
+/**
+ * Colour of the procedural reference grid drawn under a scene that has no
+ * World Grid node — the desktop's REF_GRID_DEFAULT_RGB. Like the background it
+ * is read from the World (type 0) row (`ref_grid_color_r/g/b`), so it is scene
+ * data that saves and round-trips rather than a viewer preference. A real
+ * World Grid node paints its own lattice from its own colour and ignores this.
+ */
+export const REF_GRID_DEFAULT_RGB: Readonly<Rgb> = { r: 56, g: 56, b: 71 }
+
 /** Topology ids (`topo` column) — how *children* of this node are placed. */
 export const Topo = {
   None: 0,
@@ -247,6 +256,8 @@ export interface GvNode {
   tagColorMode: number
   /** World-node-only: the label colour used under TagColorMode.Uniform. */
   tagColor: Rgb
+  /** World-node-only: the procedural backdrop grid's colour. */
+  refGridColor: Rgb
 
   /** Unknown columns, preserved verbatim for round-tripping. */
   extras: Record<string, string>

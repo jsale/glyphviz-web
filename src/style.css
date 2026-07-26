@@ -308,6 +308,12 @@ canvas {
   border-top: 1px solid #2a3040;
 }
 
+/* Wider label column than the Create rows above: "Render Mode" and "Grid
+   Color" wrap onto two lines at the 64px the Create group uses. */
+#hud-world .hud-create-row span {
+  flex: 0 0 86px;
+}
+
 #hud-bg-color {
   flex: 1;
 }

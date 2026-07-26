@@ -12,6 +12,7 @@ import type { GvNode, Rgba, Vec3 } from './types'
 import {
   Geometry,
   NodeType,
+  REF_GRID_DEFAULT_RGB,
   RotationMode,
   TAG_DEFAULT_TEXT_RGB,
   TagColorMode,
@@ -78,6 +79,7 @@ function blankNode(id: number, d: NewObjectDefaults): GvNode {
     fogEnd: 0,
     tagColorMode: TagColorMode.Uniform,
     tagColor: { ...TAG_DEFAULT_TEXT_RGB },
+    refGridColor: { ...REF_GRID_DEFAULT_RGB },
     extras: {},
   }
 }

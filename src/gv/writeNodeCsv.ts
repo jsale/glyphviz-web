@@ -10,7 +10,7 @@
 // columns from `extras` are appended verbatim.
 
 import type { GvNode } from './types'
-import { RotationMode, TAG_DEFAULT_TEXT_RGB, TagColorMode } from './types'
+import { REF_GRID_DEFAULT_RGB, RotationMode, TAG_DEFAULT_TEXT_RGB, TagColorMode } from './types'
 
 const CRLF = '\r\n'
 
@@ -166,6 +166,20 @@ export function writeGvNodeCsv(nodes: GvNode[], options: WriteNodeCsvOptions = {
         { name: 'tag_color_r', value: (n) => fmtInt(n.tagColor.r) },
         { name: 'tag_color_g', value: (n) => fmtInt(n.tagColor.g) },
         { name: 'tag_color_b', value: (n) => fmtInt(n.tagColor.b) },
+      ],
+    },
+    {
+      // The backdrop grid's colour, World-row data like the tag styling above.
+      when: any(
+        (n) =>
+          n.refGridColor.r !== REF_GRID_DEFAULT_RGB.r ||
+          n.refGridColor.g !== REF_GRID_DEFAULT_RGB.g ||
+          n.refGridColor.b !== REF_GRID_DEFAULT_RGB.b,
+      ),
+      cols: [
+        { name: 'ref_grid_color_r', value: (n) => fmtInt(n.refGridColor.r) },
+        { name: 'ref_grid_color_g', value: (n) => fmtInt(n.refGridColor.g) },
+        { name: 'ref_grid_color_b', value: (n) => fmtInt(n.refGridColor.b) },
       ],
     },
   ]

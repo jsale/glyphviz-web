@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { cycleGeometry, cycleTargets, cycleTopology } from './gv/attrCycle'
+import { cycleColorIndex, cyclePalette, PALETTE_NAMES } from './gv/colorPalette'
 import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
@@ -44,6 +45,7 @@ import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
 import {
   backgroundRgb,
   ensureWorldNode,
+  refGridRgb,
   tagTextStyle,
   toggledBwBackground,
   worldNodeOf,
@@ -66,6 +68,12 @@ import {
 import type { AudioMode, TextureLibrary } from './render/textureLibrary'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
 import { nodeIdsInRect } from './render/rectSelect'
+import {
+  applyRenderMode,
+  RENDER_MODE_COUNT,
+  RENDER_MODE_NAMES,
+  RenderMode,
+} from './render/renderMode'
 import { invertLocalRotation } from './render/rotationInverse'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
@@ -228,10 +236,24 @@ hud.innerHTML = `
     <button id="hud-delete" title="Delete the selected node and all of its descendants — children are never reparented." disabled>Delete (Del)</button>
   </div>
   <div id="hud-world">
+    <label id="hud-show-grid" class="sel-check" title="Draw the procedural reference grid under the scene.&#10;A scene with a real World Grid node draws that instead — this is the backdrop only.">
+      <input type="checkbox" checked>Show Grid
+    </label>
+    <label id="hud-show-axes" class="sel-check" title="Draw the red/green/blue X/Y/Z axes at the world origin.">
+      <input type="checkbox" checked>Show Axes
+    </label>
+    <div class="hud-create-row" title="Colour of the reference grid — the World row's ref_grid_color, so it saves with the scene.&#10;A World Grid node (type 6) paints its own lattice from its own node colour instead.">
+      <span>Grid Color</span>
+      <input id="hud-grid-color" type="color" value="#383847">
+    </div>
     <div class="hud-create-row" title="Viewport background — the World row's color. A scene without a World row gets one the first time this changes.">
       <span>Background</span>
       <input id="hud-bg-color" type="color" value="#14141f">
       <button id="hud-bg-bw" title="Flip the background between black and white  [B]">B/W</button>
+    </div>
+    <div class="hud-create-row" title="Scene-wide blend mode for every glyph, link and overlay — the World row's render_mode.&#10;[8] cycles through the seven modes.">
+      <span>Render Mode</span>
+      <select id="hud-render-mode"></select>
     </div>
     <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
       <input type="checkbox">Follow Selected (F)
@@ -256,6 +278,10 @@ const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
 const bgColorInput = hud.querySelector<HTMLInputElement>('#hud-bg-color')!
 const bgBwButton = hud.querySelector<HTMLButtonElement>('#hud-bg-bw')!
+const showGridCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-grid input')!
+const showAxesCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-axes input')!
+const gridColorInput = hud.querySelector<HTMLInputElement>('#hud-grid-color')!
+const renderModeSelect = hud.querySelector<HTMLSelectElement>('#hud-render-mode')!
 const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
 
 // Selected while an opened file/folder scene is showing, so the combo never
@@ -1014,6 +1040,10 @@ function rebuildScene(fitCamera: boolean) {
   scene.background = built.background
   syncBackgroundInput() // the loaded scene's World row may set its own
   syncTagStyle() // ditto its tag colouring
+  syncGridColorInput() // ditto the backdrop grid's colour
+  // Materials are per build (and the cache is cleared with the scene), so the
+  // blend state has to be written onto the new ones.
+  syncRenderMode()
   // Pinned labels draw whatever the Labels settings say, so the overlay needs
   // this list even with labels off. An inspector edit to show_text lands here.
   pinnedTags = pinnedTagNodes(currentNodes)
@@ -1427,6 +1457,10 @@ window.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase()
     if (key === 'c') channelsPanel.panel.cycle()
     else if (key === 'n') nodeTable.panel.cycle()
+    // Alt+= / Alt+− step the PALETTE, the bare keys its index (below) — the
+    // desktop's pairing, and the reason the palette keys live up here.
+    else if (!typing && (key === '=' || key === '+')) cyclePaletteAttribute('palette', 1)
+    else if (!typing && (key === '-' || key === '_')) cyclePaletteAttribute('palette', -1)
     else return
     e.preventDefault()
     return
@@ -1449,6 +1483,12 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'o' || e.key === 'O') cycleAttribute('geometry', e.shiftKey ? -1 : 1)
   else if (e.key === 'f' || e.key === 'F') setFollowSelected(!followSelected)
   else if (e.key === 'b' || e.key === 'B') toggleBackgroundBw()
+  // = / − step color_index within each node's own palette (Alt+ steps the
+  // palette itself, handled above). '+' and '_' are the same physical keys with
+  // Shift, which the desktop's Key_Equal/Key_Minus match regardless.
+  else if (e.key === '=' || e.key === '+') cyclePaletteAttribute('index', 1)
+  else if (e.key === '-' || e.key === '_') cyclePaletteAttribute('index', -1)
+  else if (e.key === '8') cycleRenderMode()
   else if (e.key === 'w' || e.key === 'W') toggleGizmoMode('translate')
   else if (e.key === 'e' || e.key === 'E') toggleGizmoMode('rotate')
   else if (e.key === 'r' || e.key === 'R') toggleGizmoMode('scale')
@@ -1931,6 +1971,32 @@ function cycleAttribute(kind: 'geometry' | 'topo', step: number) {
   }
 }
 
+// --- Palette cycling (= / − step the index, Alt+= / Alt+− the palette) ----------
+// Desktop _cycle_selected_color_index / _cycle_selected_palette, on the same
+// `cycleTargets` subset as J/O. Both resolve the palette entry straight into
+// color_r/g/b — the palette is metadata that never renders on its own, so a
+// keypress is the only thing that ever repaints from it.
+
+function cyclePaletteAttribute(kind: 'index' | 'palette', step: number) {
+  const targets = cycleTargets(selectedNodes())
+  if (targets.length === 0) return status('No selection to cycle.')
+  if (kind === 'index') cycleColorIndex(targets, step)
+  else cyclePalette(targets, step)
+  rebuildScene(false) // repaints the glyphs, the table rows and the inspector
+  if (targets.length === 1) {
+    const node = targets[0]
+    status(
+      kind === 'index'
+        ? `Color index → ${node.colorIndex}`
+        : `Palette → ${PALETTE_NAMES[node.paletteId] ?? node.paletteId}`,
+    )
+  } else {
+    const sign = step > 0 ? '+1' : '−1'
+    const label = kind === 'index' ? 'color index' : 'palette'
+    status(`Cycled ${label} ${sign} on ${targets.length} node(s).`)
+  }
+}
+
 // --- Scene background (B / the Background row) ----------------------------------
 // The background IS the World row's color (node.py), so changing it edits a
 // real CSV field that saves and round-trips — and a scene with no World row
@@ -2004,6 +2070,84 @@ bgColorInput.addEventListener('input', () => {
   )
 })
 bgBwButton.addEventListener('click', toggleBackgroundBw)
+
+// --- Backdrop: Show Grid / Show Axes / Grid Color -------------------------------
+// The two checkboxes are the desktop Display group's (Viewport.show_grid /
+// show_axes) — viewer preferences, nothing written to the CSV. The colour is
+// scene data like the background: it IS the World row's ref_grid_color, so it
+// saves and round-trips, and a scene without a World row gets one synthesized.
+
+function syncGridColorInput() {
+  const rgb = refGridRgb(currentNodes)
+  gridColorInput.value = hexOfRgb(rgb)
+  backdrop.setGridColor(rgb)
+}
+
+showGridCheckbox.addEventListener('change', () => {
+  backdrop.showGrid = showGridCheckbox.checked
+  status(showGridCheckbox.checked ? 'Reference grid on.' : 'Reference grid off.')
+})
+
+showAxesCheckbox.addEventListener('change', () => {
+  backdrop.showAxes = showAxesCheckbox.checked
+  status(showAxesCheckbox.checked ? 'Origin axes on.' : 'Origin axes off.')
+})
+
+gridColorInput.addEventListener('input', () => {
+  const hadWorldRow = worldNodeOf(currentNodes) !== null
+  const hex = gridColorInput.value
+  const world = ensureWorldNode(currentNodes)
+  world.refGridColor = {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16),
+  }
+  // Only the backdrop reads this, so a change is one material colour — no
+  // rebuild, which keeps dragging the picker smooth. A row that did not exist a
+  // moment ago still needs one, to reach nodesById and the Node Table. (No
+  // table cell shows this field, so nothing else to repaint.)
+  syncGridColorInput()
+  if (!hadWorldRow) rebuildScene(false)
+})
+
+// --- Render modes (8 / the Render Mode row) -------------------------------------
+// The World row's render_mode: a scene-wide blend state, real CSV data that
+// saves and round-trips. The blend-state port lives in src/render/renderMode.ts;
+// 8 steps to the next mode, the desktop's _on_scene_render_mode_cycle.
+
+for (const mode of Object.keys(RENDER_MODE_NAMES).map(Number).sort((a, b) => a - b)) {
+  renderModeSelect.appendChild(
+    Object.assign(document.createElement('option'), {
+      value: String(mode),
+      textContent: RENDER_MODE_NAMES[mode],
+    }),
+  )
+}
+
+/** Point the combo at the scene's mode and push it onto the live materials. */
+function syncRenderMode() {
+  const mode = worldNodeOf(currentNodes)?.renderMode ?? RenderMode.Normal
+  renderModeSelect.value = String(mode)
+  if (currentRoot) applyRenderMode(currentRoot, mode)
+  applyRenderMode(backdrop.group, mode)
+}
+
+function setRenderMode(mode: number) {
+  const hadWorldRow = worldNodeOf(currentNodes) !== null
+  ensureWorldNode(currentNodes).renderMode = mode
+  // Blend state is per material, so switching modes is a walk over the ones
+  // already built — never a rebuild. Only a synthesized World row needs one.
+  syncRenderMode()
+  if (!hadWorldRow) rebuildScene(false)
+  status(`Render mode → ${mode}: ${RENDER_MODE_NAMES[mode] ?? mode}`)
+}
+
+function cycleRenderMode() {
+  const mode = worldNodeOf(currentNodes)?.renderMode ?? RenderMode.Normal
+  setRenderMode((mode + 1) % RENDER_MODE_COUNT)
+}
+
+renderModeSelect.addEventListener('change', () => setRenderMode(Number(renderModeSelect.value)))
 
 // --- Follow Selected (F) --------------------------------------------------------
 // Desktop View ▸ Follow Selected Node: the orbit pivot re-centres on the

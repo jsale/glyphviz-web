@@ -17,6 +17,7 @@
 // A single selection is the same code path: the anchor equals the node's own
 // value, so `+= (new − anchor)` is just `= new`.
 
+import { PALETTE_NAMES, paletteIndexCount, setColorIndex, setPalette } from '../gv/colorPalette'
 import { stepTextureId, textureChoices } from '../gv/media'
 import type { MediaIndex } from '../gv/media'
 import { shiftAxis } from '../gv/multiEdit'
@@ -311,6 +312,47 @@ export class Inspector {
       this.absoluteVec3Row('scale', (n) => n.scale),
     )
 
+    // Palette / Color Index sit directly above the colour picker, the desktop's
+    // own order (Palette, Color Index, Color) — because that IS the
+    // relationship: both write the literal colour the picker shows, and the
+    // picker then overrides it until the next palette edit. Both apply
+    // ABSOLUTELY to every selected node, like the desktop's _on_insp_palette_
+    // changed / _on_insp_color_index_changed.
+    const paletteSelect = el('select')
+    paletteSelect.dataset.insKey = 'palette'
+    for (const id of Object.keys(PALETTE_NAMES).map(Number).sort((a, b) => a - b)) {
+      paletteSelect.appendChild(el('option', { value: String(id), textContent: PALETTE_NAMES[id] }))
+    }
+    if (!PALETTE_NAMES[primary.paletteId]) {
+      paletteSelect.appendChild(
+        el('option', { value: String(primary.paletteId), textContent: `Unknown (${primary.paletteId})` }),
+      )
+    }
+    paletteSelect.value = String(primary.paletteId)
+    paletteSelect.title =
+      'Colour palette the =/− and Alt+=/Alt+− keys step through (palette_id).\n' +
+      'Choosing one re-resolves the node’s colour from the new palette at the\n' +
+      'current Color Index.'
+    paletteSelect.addEventListener('change', () => {
+      setPalette(this.nodes, Number(paletteSelect.value))
+      this.host.onNodesEdited(this.nodes)
+    })
+
+    const indexCount = paletteIndexCount(primary.paletteId)
+    const colorIndexInput = this.numberInput(
+      primary.colorIndex,
+      (v) => {
+        setColorIndex(this.nodes, v)
+        this.host.onNodesEdited(this.nodes)
+      },
+      { min: 0, max: indexCount - 1, integer: true, width: '70px' },
+    )
+    colorIndexInput.dataset.insKey = 'color-index'
+    colorIndexInput.title =
+      `Index within the palette above, 0–${indexCount - 1} (color_index; the =/− keys step it).\n` +
+      'Resolves immediately into a literal colour — the picker below then\n' +
+      'overrides that until you change the palette or index again.'
+
     const colorPicker = el('input', {
       type: 'color',
       value: toHex(primary.color.r, primary.color.g, primary.color.b),
@@ -324,6 +366,8 @@ export class Inspector {
       })
     })
     parts.push(
+      row('palette', paletteSelect),
+      row('color index', colorIndexInput),
       row(
         'color / alpha',
         colorPicker,

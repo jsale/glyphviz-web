@@ -311,6 +311,86 @@ something to decide now).
         - Selecting a link still draws no halo, matching the desktop's
           outline pass, which skips type 7 — the Properties panel, the
           Node Table row and the status line are the feedback.
+   j. Colour round 2 (shipped 2026-07-26, Jeff's request): the backdrop's
+      own switches, the palette system, and the scene render modes.
+      - Show Grid / Show Axes / Grid Color, the desktop's Display-group
+        checkboxes (`Viewport.show_grid` / `show_axes`) plus its Grid
+        Color button. The two checkboxes are pure viewer preferences —
+        nothing reaches the CSV, and they survive a scene load because
+        they live on the Backdrop, not the scene. The COLOUR is scene
+        data like the background: new tracked column
+        `ref_grid_color_r/g/b` on the World row, written only when it
+        leaves the default (56, 56, 71), with `ensureWorldNode` for a
+        scene that has none. Show Grid ANDs with the existing
+        scene-content switch (a real World Grid node still replaces the
+        procedural one), and neither the colour nor either checkbox
+        rebuilds the scene — one material colour, one `visible` flag.
+        - Placement: the Scene panel's world group, next to Background,
+          NOT the Selection panel where the desktop's other Display-group
+          items landed. These are backdrop settings and Background is
+          already a backdrop setting; grouping them beats matching a Qt
+          group box whose membership this app has already split once.
+      - Colour PALETTES, a port of `glyphviz_core/color_palette.py`
+        (`src/gv/colorPalette.ts`): 26 palettes (13 pairs, odd = the even
+        below it inverted), 20 literal colours for palette 0/1 and a
+        128-step gradient for 2–25. The model is ANTz's and is not what
+        you would guess — a node's rendered colour is ALWAYS the literal
+        `color_r/g/b`, and `palette_id`/`color_index` are dormant
+        metadata that resolve INTO it only when the user asks. Loading
+        never resolves; rendering never reads them; the colour picker
+        leaves them alone to go stale.
+        - `=` / `−` step `color_index` within each node's OWN palette
+          range, `Alt+=` / `Alt+−` step `palette_id` and re-wrap the
+          index — per node, on the same `cycleTargets` subset as J/O,
+          exactly like the desktop. Indices WRAP (modulo), never clamp.
+        - Properties panel gains `palette` + `color index` rows directly
+          above the colour picker, the desktop's own order, because that
+          IS the relationship: both write what the picker then shows.
+          Both apply ABSOLUTELY to every selected node (the desktop's
+          `_on_insp_palette_changed` / `_on_insp_color_index_changed`),
+          unlike the per-node cycle keys.
+        - Rounding is Python's half-to-EVEN, the same trap the Channels
+          colour tracks hit — `roundHalfToEven`, not `Math.round`.
+        - Parity: `tools/dump_palette_colors.py` runs the REAL
+          `resolve_palette_color` over all 26 palettes × every valid
+          index (plus out-of-range wraps);
+          `src/gv/colorPalette.parity.test.ts` diffs it EXACTLY, since
+          colours are integers.
+      - RENDER MODES (`src/render/renderMode.ts`), the World row's
+        `render_mode`: the desktop's seven scene-wide blend states
+        (Normal / Additive / Subtractive / Dark (Multiply) / Off /
+        Screen / Premultiplied Alpha), cycled by `8` and pickable from a
+        Scene-panel row. Already a parsed+written column; this makes it
+        do something.
+        - The desktop sets ONE global GL blend state per frame; WebGL has
+          none, so the same `glBlendEquation`/`glBlendFunc` arguments are
+          written as CustomBlending factors onto every material in the
+          scene content. Two consequences: three disables blending
+          outright for a material with `transparent: false`, so every
+          non-Normal mode forces transparency ON (the material's own
+          value is remembered and restored by Normal, so an ordinary
+          scene renders exactly as before); and materials are walked
+          UNIQUE, not per object — they are shared by the thousand, so
+          Event_Cloud costs a few hundred writes, not 209k.
+        - Divergence: the mode covers scene content only (glyphs, links,
+          plot/surface overlays, backdrop grid and axes) and leaves the
+          editing chrome — transform gizmo, selection halos — Normal,
+          where the desktop's global state catches those too. Under Dark
+          (Multiply) a yellow halo would vanish into the glyph it is
+          meant to outline; chrome you cannot see is chrome you cannot
+          use. Same line as Show Selection Box and the closable panels.
+      - Bug fixed in the same session (Jeff spotted it): `zSphereGeometry`
+        wound every triangle INWARD, so with FrontSide culling a sphere
+        drew the inside of its far hemisphere — a flat dark disc that
+        plot lines and links passed straight through. It looked
+        plausible in isolation because the vertex normals were right, so
+        it lit correctly; only something drawing behind a sphere gave it
+        away. Spheres and the pin head were the only glyphs affected
+        (the tube builder was already correct, and the World Grid globe
+        draws DoubleSide). `uvGeometry.test.ts` now checks the winding
+        of every round primitive against its own normals, with Three's
+        SphereGeometry/BoxGeometry as a control on the check itself —
+        the old code scores 0/1 on it.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

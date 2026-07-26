@@ -8,7 +8,13 @@
 // desktop's _ensure_world_node does.
 
 import type { GvNode, Rgb } from './types'
-import { NodeType, TAG_DEFAULT_TEXT_RGB, TagColorMode, WORLD_DEFAULT_BG } from './types'
+import {
+  NodeType,
+  REF_GRID_DEFAULT_RGB,
+  TAG_DEFAULT_TEXT_RGB,
+  TagColorMode,
+  WORLD_DEFAULT_BG,
+} from './types'
 import { createWorldNode } from './createNode'
 
 /**
@@ -43,6 +49,17 @@ export function tagTextStyle(nodes: readonly GvNode[]): { mode: number; rgb: Rgb
     mode: world?.tagColorMode ?? TagColorMode.Uniform,
     rgb: world ? { ...world.tagColor } : { ...TAG_DEFAULT_TEXT_RGB },
   }
+}
+
+/**
+ * The procedural backdrop grid's colour, falling back to the default when the
+ * file has no World row. Only the backdrop reads it, so a change needs no
+ * scene rebuild — unlike the World Grid node type, which colours its own
+ * lattice from its own node colour.
+ */
+export function refGridRgb(nodes: readonly GvNode[]): Rgb {
+  const world = worldNodeOf(nodes)
+  return world ? { ...world.refGridColor } : { ...REF_GRID_DEFAULT_RGB }
 }
 
 /**

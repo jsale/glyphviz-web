@@ -35,6 +35,7 @@ function makeLink(extras: Record<string, string>): GvNode {
     showText: 0,
     tagColorMode: 0,
     tagColor: { r: 255, g: 255, b: 200 },
+    refGridColor: { r: 56, g: 56, b: 71 },
     extras,
   }
 }

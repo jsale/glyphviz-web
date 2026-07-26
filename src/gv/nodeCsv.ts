@@ -7,7 +7,13 @@
 // columns are preserved verbatim in `extras`.
 
 import { tokenizeCsv } from './csv'
-import { GEOMETRY_MAX, TAG_DEFAULT_TEXT_RGB, TagColorMode, TOPO_MAX } from './types'
+import {
+  GEOMETRY_MAX,
+  REF_GRID_DEFAULT_RGB,
+  TAG_DEFAULT_TEXT_RGB,
+  TagColorMode,
+  TOPO_MAX,
+} from './types'
 import type { GvNode, GvNodeParseResult, GvParseIssue, Vec3 } from './types'
 
 export const REQUIRED_COLUMNS = [
@@ -64,6 +70,9 @@ const OPTIONAL_TRACKED_COLUMNS = [
   'tag_color_r',
   'tag_color_g',
   'tag_color_b',
+  'ref_grid_color_r',
+  'ref_grid_color_g',
+  'ref_grid_color_b',
 ] as const
 
 const TRACKED = new Set<string>([...REQUIRED_COLUMNS, ...OPTIONAL_TRACKED_COLUMNS])
@@ -239,6 +248,11 @@ export function parseGvNodeCsv(text: string): GvNodeParseResult {
         r: opt('tag_color_r', TAG_DEFAULT_TEXT_RGB.r, true),
         g: opt('tag_color_g', TAG_DEFAULT_TEXT_RGB.g, true),
         b: opt('tag_color_b', TAG_DEFAULT_TEXT_RGB.b, true),
+      },
+      refGridColor: {
+        r: opt('ref_grid_color_r', REF_GRID_DEFAULT_RGB.r, true),
+        g: opt('ref_grid_color_g', REF_GRID_DEFAULT_RGB.g, true),
+        b: opt('ref_grid_color_b', REF_GRID_DEFAULT_RGB.b, true),
       },
 
       extras: {},

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseGvNodeCsv } from './nodeCsv'
+import { REF_GRID_DEFAULT_RGB } from './types'
 import { writeGvNodeCsv } from './writeNodeCsv'
 import topologyExampleCsv from './fixtures/topology_example_gv_node.csv?raw'
 
@@ -121,5 +122,18 @@ describe('writeGvNodeCsv', () => {
     const reparsed = parseGvNodeCsv(colorOnly).nodes[0]
     expect(reparsed.tagColor).toEqual({ r: 10, g: 20, b: 30 })
     expect(reparsed.tagColorMode).toBe(0)
+  })
+
+  it('writes the reference-grid colour only when it leaves the default', () => {
+    const base =
+      'id,type,parent_id,branch_level,translate_x,translate_y,translate_z,rotate_x,rotate_y,rotate_z,scale_x,scale_y,scale_z,color_r,color_g,color_b,color_a,geometry,hide,topo'
+    const nodes = parseGvNodeCsv(`${base}\n1,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,255,1,0,0`).nodes
+    expect(nodes[0].refGridColor).toEqual(REF_GRID_DEFAULT_RGB)
+    expect(writeGvNodeCsv(nodes)).not.toContain('ref_grid_color')
+
+    nodes[0].refGridColor = { r: 90, g: 0, b: 120 }
+    const written = writeGvNodeCsv(nodes)
+    expect(written.split('\r\n')[0]).toContain('ref_grid_color_r')
+    expect(parseGvNodeCsv(written).nodes[0].refGridColor).toEqual({ r: 90, g: 0, b: 120 })
   })
 })
