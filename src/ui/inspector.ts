@@ -23,6 +23,7 @@ import { shiftAxis } from '../gv/multiEdit'
 import type { VectorField } from '../gv/multiEdit'
 import type { GvNode, Vec3 } from '../gv/types'
 import { GEOMETRY_NAMES, NODE_TYPE_NAMES, RotationMode, TOPO_NAMES } from '../gv/types'
+import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
 import { Panel } from './panel'
 
 export interface InspectorHost {
@@ -353,11 +354,52 @@ export class Inspector {
 
     const hide = el('input', { type: 'checkbox', checked: primary.hide !== 0 })
     hide.addEventListener('change', () => this.commit((n) => (n.hide = hide.checked ? 1 : 0)))
+
+    // "Always Show Text" (show_text): pins this node's label on screen
+    // whatever the scene-wide Labels settings say. A mixed selection shows
+    // the indeterminate state — Qt's PartiallyChecked — and a click resolves
+    // it by pushing ONE value onto every selected node, like the desktop's
+    // clicked (not toggled) handler.
+    const pinned = nodes.filter((n) => n.showText !== 0).length
+    const alwaysShow = el('input', { type: 'checkbox', checked: pinned > 0 })
+    alwaysShow.indeterminate = pinned > 0 && pinned < nodes.length
+    alwaysShow.addEventListener('change', () =>
+      this.commit((n) => (n.showText = alwaysShow.checked ? 1 : 0)),
+    )
+    // Its own labelled checkbox rather than a label-column row, because the
+    // wording is the control here — the same shape the desktop gives it,
+    // directly under the Tag Text box.
+    const alwaysShowRow = el('label', {
+      className: 'ins-check',
+      title:
+        'Keep this node’s label on screen whatever the scene-wide Labels settings say —\n' +
+        'neither Show Tag Labels nor Labels of Selected Only can turn it off, and it is\n' +
+        `exempt from the ${MAX_TAGS_PER_FRAME}/frame cap. Hiding the node still hides its label.\n` +
+        'Applies to every selected node. Saved with the scene (show_text).',
+    })
+    alwaysShowRow.append(alwaysShow, document.createTextNode('Always Show Text'))
+
     parts.push(
       row('hide', hide),
       row('text', this.textInput(primary.text, (n, v) => (n.text = v))),
-      row('link', this.textInput(primary.link, (n, v) => (n.link = v))),
+      alwaysShowRow,
     )
+    // Pinning a node that has nothing to say draws nothing, which reads as the
+    // checkbox not working. The desktop says so in its status bar; here the
+    // note sits with the control it is about.
+    const pinnedButEmpty = nodes.filter((n) => n.showText !== 0 && n.text === '').length
+    if (pinnedButEmpty > 0) {
+      parts.push(
+        el('div', {
+          className: 'ins-note',
+          textContent:
+            pinnedButEmpty === nodes.length && !multi
+              ? 'nothing to show yet — this node has no tag text'
+              : `${pinnedButEmpty} pinned node(s) have no tag text yet`,
+        }),
+      )
+    }
+    parts.push(row('link', this.textInput(primary.link, (n, v) => (n.link = v))))
 
     if (!multi) {
       const extras = Object.keys(primary.extras)

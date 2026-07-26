@@ -165,4 +165,25 @@ describe('parseGvNodeCsv', () => {
     const result = parseGvNodeCsv(csv([`${HEADER},ratio`, `${PLAIN_ROW},`]))
     expect(result.nodes[0].ratio).toBe(0.1)
   })
+
+  it('defaults the tag-styling columns to unpinned, uniform, pale yellow', () => {
+    const node = parseGvNodeCsv(csv([HEADER, PLAIN_ROW])).nodes[0]
+    expect(node.showText).toBe(0)
+    expect(node.tagColorMode).toBe(0)
+    expect(node.tagColor).toEqual({ r: 255, g: 255, b: 200 })
+  })
+
+  it('reads show_text and the World row’s tag colouring', () => {
+    const result = parseGvNodeCsv(
+      csv([
+        `${HEADER},show_text,tag_color_mode,tag_color_r,tag_color_g,tag_color_b`,
+        `${PLAIN_ROW},1,1,10,20,30`,
+      ]),
+    )
+    expect(result.nodes[0].showText).toBe(1)
+    expect(result.nodes[0].tagColorMode).toBe(1)
+    expect(result.nodes[0].tagColor).toEqual({ r: 10, g: 20, b: 30 })
+    // Tracked columns, so they must not also land in extras.
+    expect(result.nodes[0].extras).toEqual({})
+  })
 })

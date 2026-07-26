@@ -2,7 +2,8 @@
 // of the same names (main_window.py). Everything here is presentation: the
 // matching and hide-flag rules live in src/gv/selectionOps.ts.
 
-import type { GvNode } from '../gv/types'
+import type { GvNode, Rgb } from '../gv/types'
+import { TAG_DEFAULT_TEXT_RGB, TagColorMode } from '../gv/types'
 import type { CriterionValue, SelectCriterion } from '../gv/selectionOps'
 import { CRITERION_LABELS, criterionValues } from '../gv/selectionOps'
 import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
@@ -25,6 +26,10 @@ export interface SelectionPanelHost {
   setShowHidden(showHidden: boolean): void
   setShowTags(showTags: boolean): void
   setTagsSelectedOnly(selectedOnly: boolean): void
+  /** Scene data, not a viewer preference: writes the World row's tag_color_*. */
+  setTagColor(rgb: Rgb): void
+  /** Same, for tag_color_mode (Uniform ↔ Node). */
+  setTagColorMatchesNode(match: boolean): void
   setAudioMode(mode: AudioMode): void
 }
 
@@ -39,6 +44,22 @@ function button(label: string, title: string, onClick: () => void): HTMLButtonEl
   const b = el('button', { type: 'button', textContent: label, title })
   b.addEventListener('click', onClick)
   return b
+}
+
+function hexOfRgb(rgb: Rgb): string {
+  const channel = (c: number) =>
+    Math.round(Math.min(255, Math.max(0, c)))
+      .toString(16)
+      .padStart(2, '0')
+  return `#${channel(rgb.r)}${channel(rgb.g)}${channel(rgb.b)}`
+}
+
+function rgbOfHex(hex: string): Rgb {
+  return {
+    r: parseInt(hex.slice(1, 3), 16),
+    g: parseInt(hex.slice(3, 5), 16),
+    b: parseInt(hex.slice(5, 7), 16),
+  }
 }
 
 function checkbox(label: string, title: string): { row: HTMLLabelElement; input: HTMLInputElement } {
@@ -59,6 +80,9 @@ export class SelectionPanel {
   private showHidden: HTMLInputElement
   private showTags: HTMLInputElement
   private tagsSelectedOnly: HTMLInputElement
+  private tagColor = el('input')
+  private tagColorRow: HTMLLabelElement
+  private tagColorMatchesNode: HTMLInputElement
   private tagCount = el('div', { className: 'sel-hint' })
   private tagKeyword = el('input', { type: 'text', placeholder: 'keyword…' })
   private tagSearchButton: HTMLButtonElement
@@ -128,6 +152,36 @@ export class SelectionPanel {
     this.tagsSelectedOnly.addEventListener('change', () =>
       host.setTagsSelectedOnly(this.tagsSelectedOnly.checked),
     )
+
+    // Tag text styling. Grouped with the label toggles the way the desktop
+    // groups them, but unlike those two these persist to the World row —
+    // they are scene data that saves and round-trips, not viewer state.
+    this.tagColor.type = 'color'
+    this.tagColor.value = hexOfRgb(TAG_DEFAULT_TEXT_RGB)
+    this.tagColor.addEventListener('input', () => host.setTagColor(rgbOfHex(this.tagColor.value)))
+    // Shaped like the checkboxes it sits between rather than a label-column
+    // row: the swatch is small and the wording is what identifies it.
+    this.tagColorRow = el('label', {
+      className: 'sel-check',
+      title:
+        'Colour of tag label text, for every label in the scene.\n' +
+        'Ignored while "Tag Text Matches Node Color" is checked.\n' +
+        'Saved with the scene (the World row’s tag_color_r/g/b).\n' +
+        'The dark drop shadow behind the text is deliberately fixed — it is what\n' +
+        'keeps a label legible against both bright glyphs and bright backgrounds.',
+    })
+    this.tagColorRow.append(this.tagColor, document.createTextNode('Tag Color'))
+
+    const tagMatchCheck = checkbox(
+      'Tag Text Matches Node Color',
+      'Draw each label in its own node’s colour instead of the single Tag Color\n' +
+        'above, so a label reads as belonging to the glyph it names.',
+    )
+    this.tagColorMatchesNode = tagMatchCheck.input
+    this.tagColorMatchesNode.addEventListener('change', () => {
+      host.setTagColorMatchesNode(this.tagColorMatchesNode.checked)
+      this.refreshTagColorEnabled()
+    })
 
     // Video soundtracks. The desktop plays every loaded video's audio by
     // default; browsers refuse audible autoplay, so this starts muted and
@@ -234,6 +288,8 @@ export class SelectionPanel {
       el('div', { className: 'sel-section', textContent: 'Labels' }),
       tagCheck.row,
       tagSelectedCheck.row,
+      this.tagColorRow,
+      tagMatchCheck.row,
       this.tagCount,
       this.audioRow,
       el('div', {
@@ -280,6 +336,8 @@ export class SelectionPanel {
           (labelled > MAX_TAGS_PER_FRAME ? ` — over the ${MAX_TAGS_PER_FRAME}/frame cap` : '')
     this.showTags.disabled = labelled === 0
     this.tagsSelectedOnly.disabled = labelled === 0
+    this.tagColorMatchesNode.disabled = labelled === 0
+    this.refreshTagColorEnabled()
     // Small divergence: the desktop leaves the tag search live and answers
     // "No nodes tagged with …". A scene with no labels at all can never
     // answer anything else, so the row greys out instead — consistent with
@@ -292,6 +350,23 @@ export class SelectionPanel {
   /** Keep the checkbox in step when the T key toggles labels. */
   setShowTagsChecked(showTags: boolean): void {
     this.showTags.checked = showTags
+  }
+
+  /**
+   * Point the tag-styling controls at the loaded scene's World row. Called on
+   * every scene load: unlike the checkboxes above it, this is scene data, so a
+   * file that carries its own tag colour must show that colour, not the last
+   * one someone picked.
+   */
+  setTagStyle(mode: number, rgb: Rgb): void {
+    this.tagColorMatchesNode.checked = mode === TagColorMode.Node
+    this.tagColor.value = hexOfRgb(rgb)
+    this.refreshTagColorEnabled()
+  }
+
+  /** The single colour is meaningless while each label takes its node's. */
+  private refreshTagColorEnabled(): void {
+    this.tagColor.disabled = this.tagColorMatchesNode.disabled || this.tagColorMatchesNode.checked
   }
 
   /** Same, for Ctrl+Shift+B toggling the selection box from the viewport. */

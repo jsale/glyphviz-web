@@ -250,6 +250,67 @@ something to decide now).
           the buttons refused to. Jeff intends the desktop to move this
           way too — like region select, the web app is the reference
           here, so do NOT "fix" it back toward the desktop.
+   i. Tag text round 2 (shipped 2026-07-26, Jeff's request): three
+      desktop features the labels work had left out.
+      - Per-node PINNING, desktop `Node.show_text` + its "Always Show
+        Text" inspector checkbox: a pinned label draws whatever the
+        scene-wide Labels settings say and is exempt from the
+        500/frame cap (the desktop caps `selected[~is_pinned][:cap]`,
+        so the cap counts unpinned labels only). The node's own hide
+        flag still hides it. New tracked CSV column `show_text`,
+        written only when a scene pins something. The checkbox sits
+        under the `text` row with the desktop's own wording and its
+        tristate behaviour: a mixed selection shows indeterminate and
+        one click pushes ONE value onto every selected node (the
+        desktop connects `clicked`, not `toggled`, for this reason).
+        Pinning a node with no text draws nothing, which reads as a
+        broken checkbox — the desktop says so in its status bar, this
+        says it in the panel next to the control.
+        - `placeLabels` takes a PRECOMPUTED pinned list
+          (`pinnedTagNodes`, refreshed per scene build) instead of
+          rescanning: with labels off, a scene that pins three of
+          209k nodes must cost three checks a frame. The desktop
+          rescans behind a cached has-any-pinned flag.
+      - Tag text COLOURING, desktop `tag_color_mode` + `tag_color_r/g/b`
+        on the World row: a colour picker and a "Tag Text Matches Node
+        Color" checkbox. Both are World-row CSV fields like the
+        background, so they save and round-trip and a scene with no
+        World row gets one synthesized (`ensureWorldNode`); neither
+        needs a scene rebuild, since only the overlay reads them. The
+        fixed pieces stay fixed on both sides: the face alpha (230) and
+        the dark drop shadow, which is what keeps a label legible
+        against both bright glyphs and bright backgrounds.
+        - Placement: the desktop keeps these in its Display group,
+          which in this app is the Selection panel's Labels section
+          (that is where Show Tag Labels already lives) — NOT the
+          per-node Properties panel, which here is purely the
+          inspector.
+      - LINKS are now selectable and labelled. A link's label anchors
+        to the MIDDLE of the edge it draws (desktop
+        `_link_label_anchor`), falling back to the link row's own
+        position when an endpoint is missing; links sweep after
+        ordinary nodes so node labels win the frame cap first.
+        - Picking is a ray-to-segment pass over the batched edges
+          (`LinkPicker` in `linkOverlay.ts`) at the desktop's pick
+          width `max(ratio·20, 5)` PIXELS, re-derived to world units at
+          each candidate's depth. It pushes into the same sorted
+          intersection list as the glyph proxies, so nearest still wins
+          and a solid World Grid still occludes. Prisms pick along
+          their axis, like every other link — the desktop's pick pass
+          draws a line for a link whatever its geometry.
+        - Divergence: the desktop ALSO draws a fallback pick sphere at
+          every link's own position. A link usually sits on its A-end
+          node, so always drawing it lets links swallow clicks meant
+          for the glyph underneath; here it exists only for a link
+          whose edge never drew, which is the case the desktop's own
+          comment gives as its reason.
+        - Region select now sweeps links in at that same edge midpoint
+          (it excluded them before, because a link's own frame says
+          nothing about where its edge is). The desktop catches them by
+          pixel; a midpoint is this app's centre-projection equivalent.
+        - Selecting a link still draws no halo, matching the desktop's
+          outline pass, which skips type 7 — the Properties panel, the
+          Node Table row and the status line are the feedback.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

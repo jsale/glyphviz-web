@@ -18,6 +18,13 @@ export interface Rgba {
   a: number
 }
 
+/** An opaque colour: the tag-text styling and the viewport background. */
+export interface Rgb {
+  r: number
+  g: number
+  b: number
+}
+
 /** Node type ids (`type` column). Unlisted values render as plain glyphs. */
 export const NodeType = {
   World: 0,
@@ -32,6 +39,32 @@ export const NodeType = {
  * desktop's WORLD_DEFAULT_BG_RGB. A scene WITH one takes its color_r/g/b.
  */
 export const WORLD_DEFAULT_BG: Readonly<Rgba> = { r: 20, g: 20, b: 31, a: 255 }
+
+/**
+ * Tag-text styling, read from the World (type 0) row only — like the
+ * background, these are scene data rather than viewer preferences, so they
+ * save and round-trip. UNIFORM paints every label the World row's
+ * `tag_color_r/g/b`; NODE paints each label its own node's colour, so a label
+ * reads as belonging to the thing it names.
+ */
+export const TagColorMode = {
+  Uniform: 0,
+  Node: 1,
+} as const
+
+/**
+ * Pale yellow — the colour tag text was hardcoded to before it became
+ * settable, so a scene with no World row (or an older file) looks unchanged.
+ */
+export const TAG_DEFAULT_TEXT_RGB: Readonly<Rgb> = { r: 255, g: 255, b: 200 }
+/** Face-pass alpha, fixed on both sides (QColor(..., 230)). */
+export const TAG_TEXT_ALPHA = 230
+/**
+ * The dark drop shadow behind tag text is deliberately NOT settable: it is
+ * what keeps a label legible against both bright glyphs and bright
+ * backgrounds, whatever colour the text itself takes.
+ */
+export const TAG_SHADOW_RGBA: Readonly<Rgba> = { r: 0, g: 0, b: 0, a: 200 }
 
 /** Topology ids (`topo` column) — how *children* of this node are placed. */
 export const Topo = {
@@ -199,11 +232,21 @@ export interface GvNode {
   text: string
   /** Inline URL/file link (GlyphViz-only column). */
   link: string
+  /**
+   * 1 = pin this node's label on screen whatever the scene-wide tag settings
+   * say (the inspector's "Always Show Text"), and exempt it from the all-tags
+   * frame cap. The node's own hide flag still hides it.
+   */
+  showText: number
   /** World-node-only scene blend mode. */
   renderMode: number
   fogEnabled: number
   fogStart: number
   fogEnd: number
+  /** World-node-only: TagColorMode — one colour for every label, or each node's own. */
+  tagColorMode: number
+  /** World-node-only: the label colour used under TagColorMode.Uniform. */
+  tagColor: Rgb
 
   /** Unknown columns, preserved verbatim for round-tripping. */
   extras: Record<string, string>

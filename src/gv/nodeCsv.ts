@@ -7,7 +7,7 @@
 // columns are preserved verbatim in `extras`.
 
 import { tokenizeCsv } from './csv'
-import { GEOMETRY_MAX, TOPO_MAX } from './types'
+import { GEOMETRY_MAX, TAG_DEFAULT_TEXT_RGB, TagColorMode, TOPO_MAX } from './types'
 import type { GvNode, GvNodeParseResult, GvParseIssue, Vec3 } from './types'
 
 export const REQUIRED_COLUMNS = [
@@ -55,10 +55,15 @@ const OPTIONAL_TRACKED_COLUMNS = [
   'scale_rate_z',
   'text',
   'link',
+  'show_text',
   'render_mode',
   'fog_enabled',
   'fog_start',
   'fog_end',
+  'tag_color_mode',
+  'tag_color_r',
+  'tag_color_g',
+  'tag_color_b',
 ] as const
 
 const TRACKED = new Set<string>([...REQUIRED_COLUMNS, ...OPTIONAL_TRACKED_COLUMNS])
@@ -224,10 +229,17 @@ export function parseGvNodeCsv(text: string): GvNodeParseResult {
       scaleRate: optVec3('scale_rate'),
       text: cell('text') ?? '',
       link: cell('link') ?? '',
+      showText: opt('show_text', 0, true),
       renderMode: opt('render_mode', 0, true),
       fogEnabled: opt('fog_enabled', 0, true),
       fogStart: opt('fog_start', 0, false),
       fogEnd: opt('fog_end', 0, false),
+      tagColorMode: opt('tag_color_mode', TagColorMode.Uniform, true),
+      tagColor: {
+        r: opt('tag_color_r', TAG_DEFAULT_TEXT_RGB.r, true),
+        g: opt('tag_color_g', TAG_DEFAULT_TEXT_RGB.g, true),
+        b: opt('tag_color_b', TAG_DEFAULT_TEXT_RGB.b, true),
+      },
 
       extras: {},
     }

@@ -34,6 +34,9 @@ function makeNode(overrides: Partial<GvNode>): GvNode {
     fogEnabled: 0,
     fogStart: 0,
     fogEnd: 0,
+    showText: 0,
+    tagColorMode: 0,
+    tagColor: { r: 255, g: 255, b: 200 },
     extras: {},
     ...overrides,
   }
@@ -90,18 +93,41 @@ describe('nodeIdsInRect', () => {
     expect([...nodeIdsInRect(nodes, frames, cam, flipped, VIEWPORT)]).toEqual([1])
   })
 
-  it('skips World, Camera, World Grid, Link, and hidden rows', () => {
+  it('skips World, Camera, World Grid and hidden rows', () => {
     const nodes = [
       makeNode({ id: 1, type: NodeType.World }),
       makeNode({ id: 2, type: NodeType.Camera }),
       makeNode({ id: 3, type: NodeType.WorldGrid, geometry: Geometry.GridSolid }),
-      makeNode({ id: 4, type: NodeType.Link }),
       makeNode({ id: 5, hide: 1 }),
       makeNode({ id: 6 }),
     ]
     const { frames } = build(nodes)
     const all = { x1: 0, y1: 0, x2: VIEWPORT.width, y2: VIEWPORT.height }
     expect([...nodeIdsInRect(nodes, frames, cam, all, VIEWPORT)]).toEqual([6])
+  })
+
+  it('sweeps a link in by the midpoint of its edge, not by its own frame', () => {
+    const nodes = [
+      makeNode({ id: 1, translate: { x: -5, y: 0, z: 0 } }),
+      makeNode({ id: 2, translate: { x: 5, y: 0, z: 0 } }),
+      // The link row sits on its A-end, as authored links usually do.
+      makeNode({
+        id: 3,
+        type: NodeType.Link,
+        parentId: 1,
+        extras: { child_id: '2' },
+        translate: { x: -5, y: 0, z: 0 },
+      }),
+    ]
+    const { frames } = build(nodes)
+    const a = screenOf(frames, cam, 1)
+    const b = screenOf(frames, cam, 2)
+    const middle = { x1: (a.x + b.x) / 2 - 5, y1: a.y - 20, x2: (a.x + b.x) / 2 + 5, y2: a.y + 20 }
+    // Neither endpoint is in the box, but the edge's midpoint is.
+    expect([...nodeIdsInRect(nodes, frames, cam, middle, VIEWPORT)]).toEqual([3])
+    // Over the A-end, where the link's own frame is, only the glyph matches.
+    const overA = { x1: a.x - 5, y1: a.y - 20, x2: a.x + 5, y2: a.y + 20 }
+    expect([...nodeIdsInRect(nodes, frames, cam, overA, VIEWPORT)]).toEqual([1])
   })
 
   it('includes hidden rows when showHidden is on', () => {

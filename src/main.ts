@@ -38,17 +38,23 @@ import {
 } from './gv/selectionOps'
 import type { SelectCriterion } from './gv/selectionOps'
 import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOps'
-import type { GvNode, GvParseIssue, Vec3 } from './gv/types'
-import { GEOMETRY_NAMES, Geometry, NodeType, TOPO_NAMES, Topo } from './gv/types'
+import type { GvNode, GvParseIssue, Rgb, Vec3 } from './gv/types'
+import { GEOMETRY_NAMES, Geometry, NodeType, TagColorMode, TOPO_NAMES, Topo } from './gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
-import { backgroundRgb, ensureWorldNode, toggledBwBackground, worldNodeOf } from './gv/worldNode'
+import {
+  backgroundRgb,
+  ensureWorldNode,
+  tagTextStyle,
+  toggledBwBackground,
+  worldNodeOf,
+} from './gv/worldNode'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
 import { DynamicNodes } from './render/dynamicNodes'
 import { clearMaterialCache } from './render/glyphGeometry'
-import { LabelOverlay } from './render/labelOverlay'
+import { LabelOverlay, pinnedTagNodes } from './render/labelOverlay'
 import {
   applyAudioMode,
   disposeTextures,
@@ -455,6 +461,10 @@ let showHidden = false
 // Tag labels are off by default, matching the desktop ("press T to see labels").
 let showTags = false
 let tagsSelectedOnly = false
+// Nodes whose show_text pins their label, and the World row's tag styling —
+// both cached per scene build so the per-frame overlay never rescans the scene.
+let pinnedTags: GvNode[] = []
+let tagStyle = tagTextStyle([])
 // Muted by default: browsers block audible autoplay, so the desktop's
 // everything-audible default is not reachable until the user asks for it.
 let audioMode: AudioMode = 'muted'
@@ -538,6 +548,17 @@ const selectionCommands = {
   },
   setTagsSelectedOnly(value: boolean) {
     tagsSelectedOnly = value
+  },
+  setTagColor(rgb: Rgb) {
+    writeTagStyle((world) => {
+      world.tagColor = { ...rgb }
+    })
+  },
+  setTagColorMatchesNode(match: boolean) {
+    writeTagStyle((world) => {
+      world.tagColorMode = match ? TagColorMode.Node : TagColorMode.Uniform
+    })
+    status(match ? 'Tag text follows each node’s colour.' : 'Tag text uses one colour.')
   },
   setAudioMode(mode: AudioMode) {
     audioMode = mode
@@ -992,6 +1013,10 @@ function rebuildScene(fitCamera: boolean) {
   scene.add(currentRoot)
   scene.background = built.background
   syncBackgroundInput() // the loaded scene's World row may set its own
+  syncTagStyle() // ditto its tag colouring
+  // Pinned labels draw whatever the Labels settings say, so the overlay needs
+  // this list even with labels off. An inspector edit to show_text lands here.
+  pinnedTags = pinnedTagNodes(currentNodes)
   nodesById = new Map(currentNodes.map((n) => [n.id, n]))
   // Before any setSelection below: orderedIds resolves the primary through the
   // table's display order, which has to be describing THIS node list.
@@ -1943,6 +1968,27 @@ function setBackground(r: number, g: number, b: number) {
   nodeTable.refreshVisible() // the World row's colour cell
 }
 
+// --- Tag text styling (the Labels group) ---------------------------------------
+// Like the background above, these ARE World-row fields (tag_color_mode /
+// tag_color_r/g/b), so they save and round-trip rather than living as a viewer
+// preference — and a scene with no World row gets one synthesized here too.
+
+/** Mirror the scene's tag styling into the panel and the per-frame cache. */
+function syncTagStyle() {
+  tagStyle = tagTextStyle(currentNodes)
+  selectionPanel.setTagStyle(tagStyle.mode, tagStyle.rgb)
+}
+
+function writeTagStyle(mutate: (world: GvNode) => void) {
+  const hadWorldRow = worldNodeOf(currentNodes) !== null
+  mutate(ensureWorldNode(currentNodes))
+  syncTagStyle()
+  // Only labels read these, and the overlay repaints every frame from the
+  // cache above — so unlike a geometry edit, nothing needs rebuilding. A row
+  // that did not exist a moment ago does, to reach nodesById and the table.
+  if (!hadWorldRow) rebuildScene(false)
+}
+
 function toggleBackgroundBw() {
   const value = toggledBwBackground(backgroundRgb(currentNodes))
   setBackground(value, value, value)
@@ -2108,6 +2154,9 @@ renderer.setAnimationLoop(() => {
       selectedOnly: tagsSelectedOnly,
       showHidden,
       isSelected: (id) => selection.has(id),
+      pinned: pinnedTags,
+      tagColorMode: tagStyle.mode,
+      tagColor: tagStyle.rgb,
     })
   }
 })

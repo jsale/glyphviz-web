@@ -17,6 +17,7 @@
 // overlay rework.
 
 import * as THREE from 'three'
+import { linkChildId } from '../gv/links'
 import { isBulkSelectable } from '../gv/selectionOps'
 import type { GvNode } from '../gv/types'
 import { NodeType } from '../gv/types'
@@ -42,11 +43,16 @@ export interface RectSelectOptions {
 /**
  * Ids of the nodes whose world position projects inside `rect`.
  *
+ * A Link (type 7) row projects the MIDPOINT of the edge it draws instead of
+ * its own frame, which usually sits on top of the A-end glyph and says
+ * nothing about where the edge is — the same anchor its label uses. The
+ * desktop sweeps links in by pixel (its region pick is the same colour-ID
+ * pass as its click pick); a midpoint is this app's centre-projection
+ * equivalent.
+ *
  * Excluded, matching the desktop's pick pass: World/Camera rows, World Grids
  * (never click or region targets — a grid usually fills the view under its
- * children), hidden nodes unless `showHidden`, and Link rows, whose own frame
- * is inert — the edge is drawn between its endpoints, not at the frame, so a
- * projected link position would mean nothing on screen.
+ * children), and hidden nodes unless `showHidden`.
  *
  * Frame world matrices must be current; call `root.updateMatrixWorld(true)`
  * first if anything moved since the last render.
@@ -71,14 +77,31 @@ export function nodeIdsInRect(
   const viewMatrix = camera.matrixWorldInverse
   const world = new THREE.Vector3()
   const view = new THREE.Vector3()
+  const other = new THREE.Vector3()
 
   for (const node of nodes) {
-    if (!isBulkSelectable(node) || node.type === NodeType.Link) continue
+    if (!isBulkSelectable(node)) continue
     if (node.hide !== 0 && !options.showHidden) continue
-    const frame = frames.get(node.id)
-    if (!frame) continue
 
-    world.setFromMatrixPosition(frame.matrixWorld)
+    if (node.type === NodeType.Link) {
+      const a = frames.get(node.parentId)
+      const b = frames.get(linkChildId(node))
+      // An endpoint-less link draws no edge; its own frame is all there is.
+      if (a && b) {
+        world.setFromMatrixPosition(a.matrixWorld)
+        other.setFromMatrixPosition(b.matrixWorld)
+        world.add(other).multiplyScalar(0.5)
+      } else {
+        const frame = frames.get(node.id)
+        if (!frame) continue
+        world.setFromMatrixPosition(frame.matrixWorld)
+      }
+    } else {
+      const frame = frames.get(node.id)
+      if (!frame) continue
+      world.setFromMatrixPosition(frame.matrixWorld)
+    }
+
     view.copy(world).applyMatrix4(viewMatrix)
     // Three looks down −Z in view space; anything at or behind the near
     // plane has no meaningful screen position (and projects mirrored).

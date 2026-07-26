@@ -40,6 +40,9 @@ function makeGrid(overrides: Partial<GvNode>): GvNode {
     fogEnabled: 0,
     fogStart: 0,
     fogEnd: 0,
+    showText: 0,
+    tagColorMode: 0,
+    tagColor: { r: 255, g: 255, b: 200 },
     extras: {},
     ...overrides,
   }

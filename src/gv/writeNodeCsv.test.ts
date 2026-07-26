@@ -88,4 +88,38 @@ describe('writeGvNodeCsv', () => {
     expect(reparsed.nodes[0].text).toBe('Hello, "world"')
     expect(reparsed.nodes[0].extras.note).toBe('keep-me')
   })
+
+  it('writes show_text only for a scene that pins a label', () => {
+    const base =
+      'id,type,parent_id,branch_level,translate_x,translate_y,translate_z,rotate_x,rotate_y,rotate_z,scale_x,scale_y,scale_z,color_r,color_g,color_b,color_a,geometry,hide,topo'
+    const nodes = parseGvNodeCsv(`${base}\n1,5,0,0,0,0,0,0,0,0,1,1,1,0,0,0,255,1,0,0`).nodes
+    expect(writeGvNodeCsv(nodes)).not.toContain('show_text')
+
+    nodes[0].showText = 1
+    const written = writeGvNodeCsv(nodes)
+    expect(written.split('\r\n')[0]).toContain('show_text')
+    expect(parseGvNodeCsv(written).nodes[0].showText).toBe(1)
+  })
+
+  it('writes the tag colour and its mode independently, and only when set', () => {
+    const base =
+      'id,type,parent_id,branch_level,translate_x,translate_y,translate_z,rotate_x,rotate_y,rotate_z,scale_x,scale_y,scale_z,color_r,color_g,color_b,color_a,geometry,hide,topo'
+    const nodes = parseGvNodeCsv(`${base}\n1,0,0,0,0,0,0,0,0,0,1,1,1,0,0,0,255,1,0,0`).nodes
+    const plain = writeGvNodeCsv(nodes)
+    expect(plain).not.toContain('tag_color')
+
+    // Match-node-colour without ever picking a colour: mode only.
+    nodes[0].tagColorMode = 1
+    const modeOnly = writeGvNodeCsv(nodes)
+    expect(modeOnly.split('\r\n')[0]).toContain('tag_color_mode')
+    expect(modeOnly).not.toContain('tag_color_r')
+
+    nodes[0].tagColorMode = 0
+    nodes[0].tagColor = { r: 10, g: 20, b: 30 }
+    const colorOnly = writeGvNodeCsv(nodes)
+    expect(colorOnly.split('\r\n')[0]).not.toContain('tag_color_mode')
+    const reparsed = parseGvNodeCsv(colorOnly).nodes[0]
+    expect(reparsed.tagColor).toEqual({ r: 10, g: 20, b: 30 })
+    expect(reparsed.tagColorMode).toBe(0)
+  })
 })

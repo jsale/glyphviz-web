@@ -16,7 +16,7 @@
 
 import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
-import { NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
+import { Geometry, NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { worldNodeOf } from '../gv/worldNode'
 import { createGlyphObject, createPickProxy } from './glyphGeometry'
@@ -289,6 +289,25 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   }
 
   const links = buildLinkOverlay(nodes, frames, root, (m) => warnings.add(m))
+
+  // A link whose edge never drew — either endpoint missing (the desktop's
+  // "pending" state) or dangling — would otherwise have nothing on screen to
+  // click, so it falls back to the desktop's own answer: a pick sphere at the
+  // link row's own position, which is exactly where its label anchors too.
+  //
+  // Divergence: the desktop draws that sphere for EVERY link, on top of the
+  // edge. A link usually sits at its A-end node, so drawing it always would
+  // let links quietly swallow clicks meant for the glyph underneath them —
+  // and the desktop's own comment gives the endpoint-less case as its reason
+  // for existing.
+  for (const node of nodes) {
+    if (node.type !== NodeType.Link) continue
+    if (node.hide !== 0 && options.showHidden !== true) continue
+    if (links.nodeIds.has(node.id)) continue
+    const proxy = createPickProxy(Geometry.SphereSolid)
+    if (proxy) frames.get(node.id)?.add(proxy)
+  }
+
   const overlays = buildTopologyOverlay(nodes, frames, root, {
     showHidden: options.showHidden,
   })

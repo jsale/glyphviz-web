@@ -10,7 +10,7 @@
 // columns from `extras` are appended verbatim.
 
 import type { GvNode } from './types'
-import { RotationMode } from './types'
+import { RotationMode, TAG_DEFAULT_TEXT_RGB, TagColorMode } from './types'
 
 const CRLF = '\r\n'
 
@@ -131,6 +131,12 @@ export function writeGvNodeCsv(nodes: GvNode[], options: WriteNodeCsvOptions = {
       cols: [{ name: 'link', value: (n) => n.link }],
     },
     {
+      // No ANTz/GaiaViz column slot, so an omitted column means 0 — which is
+      // the default, so only a scene that pins something needs to write it.
+      when: any((n) => n.showText !== 0),
+      cols: [{ name: 'show_text', value: (n) => fmtInt(n.showText) }],
+    },
+    {
       when: any((n) => n.renderMode !== 0),
       cols: [{ name: 'render_mode', value: (n) => fmtInt(n.renderMode) }],
     },
@@ -140,6 +146,26 @@ export function writeGvNodeCsv(nodes: GvNode[], options: WriteNodeCsvOptions = {
         { name: 'fog_enabled', value: (n) => fmtInt(n.fogEnabled) },
         { name: 'fog_start', value: (n) => fmtFloat(n.fogStart) },
         { name: 'fog_end', value: (n) => fmtFloat(n.fogEnd) },
+      ],
+    },
+    // Tag styling, World-row data like the fog fields above. The two groups
+    // are independent: a scene may recolour its labels without leaving the
+    // uniform mode, or switch to per-node colour without ever picking one.
+    {
+      when: any((n) => n.tagColorMode !== TagColorMode.Uniform),
+      cols: [{ name: 'tag_color_mode', value: (n) => fmtInt(n.tagColorMode) }],
+    },
+    {
+      when: any(
+        (n) =>
+          n.tagColor.r !== TAG_DEFAULT_TEXT_RGB.r ||
+          n.tagColor.g !== TAG_DEFAULT_TEXT_RGB.g ||
+          n.tagColor.b !== TAG_DEFAULT_TEXT_RGB.b,
+      ),
+      cols: [
+        { name: 'tag_color_r', value: (n) => fmtInt(n.tagColor.r) },
+        { name: 'tag_color_g', value: (n) => fmtInt(n.tagColor.g) },
+        { name: 'tag_color_b', value: (n) => fmtInt(n.tagColor.b) },
       ],
     },
   ]

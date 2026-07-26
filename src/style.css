@@ -383,6 +383,16 @@ canvas {
   color: #9aa3b5;
 }
 
+/* A checkbox whose own wording is the control (Always Show Text), so it runs
+   the full panel width instead of sitting in the label column. */
+.ins-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  cursor: pointer;
+}
+
 .ins-value {
   flex: 1;
   word-break: break-word;
@@ -526,6 +536,15 @@ canvas {
   gap: 6px;
   margin: 5px 0;
   cursor: pointer;
+}
+
+.sel-check input[type='color'] {
+  width: 34px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  background: none;
 }
 
 .sel-section {

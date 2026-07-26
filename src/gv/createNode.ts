@@ -9,7 +9,15 @@
 //   parent's topology, for the same reason.
 
 import type { GvNode, Rgba, Vec3 } from './types'
-import { Geometry, NodeType, RotationMode, Topo, WORLD_DEFAULT_BG } from './types'
+import {
+  Geometry,
+  NodeType,
+  RotationMode,
+  TAG_DEFAULT_TEXT_RGB,
+  TagColorMode,
+  Topo,
+  WORLD_DEFAULT_BG,
+} from './types'
 
 /** The subset of fields the New Object Defaults panel controls. */
 export interface NewObjectDefaults {
@@ -63,10 +71,13 @@ function blankNode(id: number, d: NewObjectDefaults): GvNode {
     scaleRate: { x: 0, y: 0, z: 0 },
     text: '',
     link: '',
+    showText: 0,
     renderMode: 0,
     fogEnabled: 0,
     fogStart: 0,
     fogEnd: 0,
+    tagColorMode: TagColorMode.Uniform,
+    tagColor: { ...TAG_DEFAULT_TEXT_RGB },
     extras: {},
   }
 }

@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import type { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { applyFrameTransform, buildScene } from './buildScene'
+import { pickNodeId } from './picking'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
 import { Geometry, NodeType, RotationMode, Topo } from '../gv/types'
 import type { GvNode } from '../gv/types'
@@ -37,6 +38,9 @@ function makeNode(overrides: Partial<GvNode>): GvNode {
     fogEnabled: 0,
     fogStart: 0,
     fogEnd: 0,
+    showText: 0,
+    tagColorMode: 0,
+    tagColor: { r: 255, g: 255, b: 200 },
     extras: {},
     ...overrides,
   }
@@ -183,6 +187,17 @@ describe('link edges', () => {
     expect(proxies).toBe(0)
   })
 
+  it('gives a link with no drawable edge a pick target at its own position', () => {
+    // The edge cannot draw (no B-end), so the desktop's fallback sphere is
+    // the only thing a click could land on.
+    const { frames } = buildScene([makeNode({ id: 1 }), makeLink(2, 1, 0)])
+    let proxies = 0
+    frames.get(2)!.traverse((o) => {
+      if (o.userData.isPickProxy) proxies++
+    })
+    expect(proxies).toBeGreaterThan(0)
+  })
+
   it('renders the link example scene: 6 ring lines + 6 spoke prisms, no warnings', () => {
     const parsed = parseGvNodeCsv(linkExampleCsv)
     expect(parsed.errors).toEqual([])
@@ -193,5 +208,109 @@ describe('link edges', () => {
     // Three line batches (thin/thick/translucent) + one prism batch.
     expect(lineBatches(root)).toHaveLength(3)
     expect(prismBatches(root)).toHaveLength(1)
+  })
+})
+
+// Links are click targets on their EDGE, which is what a user sees — the
+// desktop draws each one as a thick line into its pick FBO; here the picker
+// runs the equivalent ray-to-segment test (see LinkPicker).
+describe('link picking', () => {
+  const VIEWPORT = { width: 800, height: 600 }
+
+  function pickCamera(): THREE.PerspectiveCamera {
+    const cam = new THREE.PerspectiveCamera(60, VIEWPORT.width / VIEWPORT.height, 0.1, 1000)
+    cam.position.set(0, 0, 50)
+    cam.lookAt(0, 0, 0)
+    cam.updateMatrixWorld(true)
+    return cam
+  }
+
+  /** Build, size the overlay (pick widths are pixel widths), refresh matrices. */
+  function buildForPicking(nodes: GvNode[]) {
+    const built = buildScene(nodes)
+    built.links.setResolution(VIEWPORT.width, VIEWPORT.height)
+    built.root.updateMatrixWorld(true)
+    return built
+  }
+
+  /** Click at the screen position of `worldPoint`, offset by `dxPx` pixels. */
+  function pickAtWorld(
+    root: THREE.Object3D,
+    cam: THREE.PerspectiveCamera,
+    worldPoint: [number, number, number],
+    dxPx = 0,
+    dyPx = 0,
+  ): number | null {
+    const ndc = new THREE.Vector3(...worldPoint).project(cam)
+    const raycaster = new THREE.Raycaster()
+    raycaster.setFromCamera(
+      new THREE.Vector2(
+        ndc.x + (dxPx * 2) / VIEWPORT.width,
+        ndc.y - (dyPx * 2) / VIEWPORT.height,
+      ),
+      cam,
+    )
+    return pickNodeId(raycaster, root)
+  }
+
+  const spanned = () => [
+    makeNode({ id: 1, translate: { x: -10, y: 0, z: 0 } }),
+    makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+    makeLink(3, 1, 2),
+  ]
+
+  it('picks a link by clicking the edge it draws, well away from either glyph', () => {
+    const { root } = buildForPicking(spanned())
+    const cam = pickCamera()
+    expect(pickAtWorld(root, cam, [0, 0, 0])).toBe(3)
+    // …and the endpoint glyphs still win over their own edge.
+    expect(pickAtWorld(root, cam, [-10, 0, 0])).toBe(1)
+  })
+
+  it('misses once the click is further off the edge than its pick width', () => {
+    const { root } = buildForPicking(spanned())
+    const cam = pickCamera()
+    // Default ratio 0.1 → max(0.1·20, 5) = 5px wide, so ±2.5px hits.
+    expect(pickAtWorld(root, cam, [0, 0, 0], 0, 2)).toBe(3)
+    expect(pickAtWorld(root, cam, [0, 0, 0], 0, 30)).toBeNull()
+  })
+
+  it('widens the target with ratio, like the drawn line', () => {
+    const { root } = buildForPicking([
+      makeNode({ id: 1, translate: { x: -10, y: 0, z: 0 } }),
+      makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+      makeLink(3, 1, 2, { ratio: 2 }), // max(2·20, 5) = 40px
+    ])
+    const cam = pickCamera()
+    expect(pickAtWorld(root, cam, [0, 0, 0], 0, 15)).toBe(3)
+    expect(pickAtWorld(root, cam, [0, 0, 0], 0, 30)).toBeNull()
+  })
+
+  it('picks a Textured Prism link along its axis, like every other link', () => {
+    const { root } = buildForPicking([
+      makeNode({ id: 1, translate: { x: -10, y: 0, z: 0 } }),
+      makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+      makeLink(3, 1, 2, { geometry: Geometry.TexturedPrism }),
+    ])
+    expect(pickAtWorld(root, pickCamera(), [0, 0, 0])).toBe(3)
+  })
+
+  it('never picks a hidden link', () => {
+    const nodes = spanned()
+    nodes[2].hide = 1
+    const { root } = buildForPicking(nodes)
+    expect(pickAtWorld(root, pickCamera(), [0, 0, 0])).toBeNull()
+  })
+
+  it('prefers the nearer of two overlapping links', () => {
+    const { root } = buildForPicking([
+      makeNode({ id: 1, translate: { x: -10, y: 0, z: 0 } }),
+      makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+      makeNode({ id: 3, translate: { x: -10, y: 0, z: 20 } }),
+      makeNode({ id: 4, translate: { x: 10, y: 0, z: 20 } }),
+      makeLink(5, 1, 2),
+      makeLink(6, 3, 4), // 20 units nearer the camera at z = 50
+    ])
+    expect(pickAtWorld(root, pickCamera(), [0, 0, 20])).toBe(6)
   })
 })

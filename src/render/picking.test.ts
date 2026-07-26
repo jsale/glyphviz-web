@@ -34,6 +34,9 @@ function makeNode(overrides: Partial<GvNode>): GvNode {
     fogEnabled: 0,
     fogStart: 0,
     fogEnd: 0,
+    showText: 0,
+    tagColorMode: 0,
+    tagColor: { r: 255, g: 255, b: 200 },
     extras: {},
     ...overrides,
   }
@@ -81,17 +84,28 @@ describe('pickNodeId', () => {
     expect(pickNodeId(rayAt(0.3, 0.2), root)).toBe(1)
   })
 
-  it('never picks hidden, World, Camera, or Link nodes', () => {
+  it('never picks hidden, World or Camera nodes', () => {
     const { root } = buildAndUpdate([
       makeNode({ id: 1, hide: 1 }),
       makeNode({ id: 2, type: NodeType.World, translate: { x: 5, y: 0, z: 0 } }),
       makeNode({ id: 3, type: NodeType.Camera, translate: { x: 10, y: 0, z: 0 } }),
-      makeNode({ id: 4, type: NodeType.Link, translate: { x: 15, y: 0, z: 0 } }),
     ])
     expect(pickNodeId(rayAt(0, 0), root)).toBeNull()
     expect(pickNodeId(rayAt(5, 0), root)).toBeNull()
     expect(pickNodeId(rayAt(10, 0), root)).toBeNull()
-    expect(pickNodeId(rayAt(15, 0), root)).toBeNull()
+  })
+
+  it('picks an edgeless Link at its own frame, but not a hidden one', () => {
+    // Link picking proper (clicking the drawn edge) lives in
+    // linkOverlay.test.ts; this is the fallback target buildScene parks on a
+    // link that has no B-end to draw towards. The ray is deliberately off the
+    // proxy sphere's polar axis, where its tessellation degenerates to a
+    // point and a dead-centre ray grazes between triangles.
+    const link = (id: number, x: number, hide = 0) =>
+      makeNode({ id, type: NodeType.Link, translate: { x, y: 0, z: 0 }, hide })
+    const { root } = buildAndUpdate([link(1, 0), link(2, 15, 1)])
+    expect(pickNodeId(rayAt(0.3, 0.2), root)).toBe(1)
+    expect(pickNodeId(rayAt(15.3, 0.2), root)).toBeNull()
   })
 
   it('never picks a World Grid, but its solid surface occludes glyphs behind it', () => {
