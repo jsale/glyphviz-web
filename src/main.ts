@@ -426,15 +426,14 @@ function refreshSelectionUi() {
   nodeTable.setSelection(selection.asSet(), selection.id)
   // "Solo to Selection" mixes by what is selected right now.
   if (audioMode === 'selected') refreshAudio()
-  // Desktop parity (_on_table_selection): the Move/Rotate/Size buttons are
-  // live only with a selection, and an emptied selection disarms the mode.
-  for (const b of modeButtons) b.disabled = !primary
+  // The armed gizmo mode SURVIVES this, including an emptied selection: it is
+  // a mode you are in until you turn it off, and the handles simply come and
+  // go with whatever is selected. See setGizmoMode for why this diverges.
+  updateGizmoAttachment()
   if (!primary) {
-    setGizmoMode(null, false)
     inspector.clear()
     return
   }
-  updateGizmoAttachment()
   inspector.show(nodes, nodes.length === 1 ? worldPosOf(primary.id) : null)
   // Pointless to report a halo cap while no halos are being drawn.
   if (selection.haloOverflow > 0 && selection.boxVisible) {
@@ -1565,6 +1564,17 @@ scene.add(gizmo.getHelper())
 // That is the third of the screengrab escapes, alongside the selection box and
 // closable panels: a selected node can be shown with no editing furniture on
 // it, without losing the selection.
+//
+// ONE DELIBERATE DIVERGENCE (Jeff, 2026-07-26): the armed mode is STICKY. The
+// desktop clears it the moment the selection empties, but that line lives in
+// `_on_table_selection` right next to the one disabling the buttons — it reads
+// as a consequence of keeping a checked button from also being a disabled one,
+// not as an interaction decision. A mode that turns itself off is only
+// tolerable when there is no other way out, and there is one: the button and
+// the key both toggle. So here the mode persists until it is turned off, the
+// buttons stay ENABLED with nothing selected (which also settles W/E/R being
+// able to arm ahead of a selection), and the handles just come and go with the
+// selection. Jeff intends the desktop to move this way too.
 type GizmoMode = 'translate' | 'rotate' | 'scale'
 const MODE_LABELS: Record<GizmoMode, string> = {
   translate: 'Move',
@@ -1622,11 +1632,11 @@ function toggleGizmoMode(mode: GizmoMode) {
 
 for (const b of modeButtons) {
   const mode = b.dataset.mode as GizmoMode
-  b.disabled = true // no selection at boot, same as the desktop's toolbar
   b.title =
     `${MODE_LABELS[mode]} the selected node(s) by dragging the handles.\n` +
-    'Click again (or press the key again) to put the handles away and\n' +
-    'return to camera-only — the selection is kept.'
+    'Stays armed while you select your way around the scene; click again\n' +
+    '(or press the key again) to put the handles away and return to\n' +
+    'camera-only, which leaves the selection alone.'
   b.addEventListener('click', () => toggleGizmoMode(mode))
 }
 

@@ -206,14 +206,8 @@ canvas {
   cursor: pointer;
 }
 
-#hud-modes button:hover:not(:disabled) {
+#hud-modes button:hover {
   background: rgba(255, 255, 255, 0.08);
-}
-
-/* No mode is armable without a selection (desktop toolbar parity). */
-#hud-modes button:disabled {
-  opacity: 0.45;
-  cursor: default;
 }
 
 #hud-modes button.active {

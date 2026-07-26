@@ -232,13 +232,24 @@ something to decide now).
         vanishing.
       - Gizmo modes are now optional and toggleable, which is desktop
         parity that had been missed: `MainWindow._gizmo_mode` starts at
-        None, the Move/Rotate/Size buttons are checkable ("Click again to
-        return to camera-only") and disabled without a selection, and an
-        emptied selection disarms the mode. So nothing is armed at boot,
-        no handles draw until a button or W/E/R arms one, and pressing the
-        armed one again puts them away. Small web-only allowance: W/E/R
-        can arm a mode ahead of a selection (the desktop has no such
-        keys, only the disabled buttons), and the status line says so.
+        None and the Move/Rotate/Size buttons are checkable ("Click again
+        to return to camera-only"). So nothing is armed at boot, no
+        handles draw until a button or W/E/R arms one, and pressing the
+        armed one again puts them away.
+        - Divergence, agreed with Jeff 2026-07-26: the armed mode is
+          STICKY and the buttons are never disabled. The desktop clears
+          the mode and greys the buttons the moment the selection empties
+          — but both live in the same three lines of
+          `_on_table_selection`, so the clear reads as a consequence of
+          not wanting a checked button that is also a disabled one, not
+          as an interaction decision. It is a mode you are in until you
+          turn it off; a mode that turns itself off is only tolerable
+          when there is no other way out, and the button and key both
+          toggle. The handles simply come and go with the selection. This
+          also settles W/E/R being able to arm ahead of a selection while
+          the buttons refused to. Jeff intends the desktop to move this
+          way too — like region select, the web app is the reference
+          here, so do NOT "fix" it back toward the desktop.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
