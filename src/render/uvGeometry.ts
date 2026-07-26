@@ -77,9 +77,14 @@ export function zSphereGeometry(radius = 1, slices = 48, stacks = 24): THREE.Buf
     for (let i = 0; i < slices; i++) {
       const a = j * stride + i
       const b = a + stride
+      // Counter-clockwise seen from OUTSIDE, so the front face is the one the
+      // camera sees and FrontSide culling keeps it: longitude (i) advances
+      // before latitude (j). Wound the other way round, a sphere renders as
+      // the INSIDE of its far hemisphere — uniformly dark, since the normals
+      // still point outward, and transparent to anything passing behind it.
       // Pole rows collapse to a point: emit one triangle there, not two.
-      if (j !== 0) indices.push(a, b, a + 1)
-      if (j !== stacks - 1) indices.push(b, b + 1, a + 1)
+      if (j !== 0) indices.push(a, a + 1, b)
+      if (j !== stacks - 1) indices.push(b, a + 1, b + 1)
     }
   }
   return buildGeometry(positions, normals, uvs, indices)

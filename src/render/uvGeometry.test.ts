@@ -35,6 +35,61 @@ function uvRange(geo: THREE.BufferGeometry) {
   return { minU, maxU, minV, maxV }
 }
 
+/**
+ * Fraction of triangles wound counter-clockwise seen from outside — i.e. whose
+ * geometric normal agrees with the vertex normals the builder emitted.
+ *
+ * This is what backface culling reads. A shape wound the other way round still
+ * lights correctly (the normals it carries are right), so it looks plausible
+ * in isolation and only gives itself away as a dark silhouette that things
+ * pass straight through — which is exactly how an inverted sphere shipped
+ * unnoticed until Jeff spotted a plot line drawing over one (2026-07-26).
+ */
+function outwardWoundFraction(geo: THREE.BufferGeometry): number {
+  const pos = geo.getAttribute('position')
+  const normal = geo.getAttribute('normal')
+  const index = geo.getIndex()
+  const at = (i: number) => new THREE.Vector3().fromBufferAttribute(pos, i)
+  let outward = 0
+  let counted = 0
+  const count = index ? index.count : pos.count
+  for (let t = 0; t < count; t += 3) {
+    const [i0, i1, i2] = index
+      ? [index.getX(t), index.getX(t + 1), index.getX(t + 2)]
+      : [t, t + 1, t + 2]
+    const v0 = at(i0)
+    const face = at(i1).sub(v0).cross(at(i2).sub(v0))
+    if (face.lengthSq() < 1e-18) continue // degenerate (pole fans)
+    const outwardRef = new THREE.Vector3()
+      .fromBufferAttribute(normal, i0)
+      .add(new THREE.Vector3().fromBufferAttribute(normal, i1))
+      .add(new THREE.Vector3().fromBufferAttribute(normal, i2))
+    counted++
+    if (face.dot(outwardRef) > 0) outward++
+  }
+  return counted === 0 ? 0 : outward / counted
+}
+
+describe('triangle winding', () => {
+  // Every solid renders FrontSide (the desktop's paintGL runs with
+  // GL_CULL_FACE on), so a back-to-front shape is invisible from outside.
+  it('winds every round primitive outward', () => {
+    expect(outwardWoundFraction(zSphereGeometry(1, 32, 16))).toBe(1)
+    expect(outwardWoundFraction(zTubeGeometry(1, 0, 2, { capBottom: true }))).toBe(1)
+    expect(
+      outwardWoundFraction(zTubeGeometry(1, 1, 2, { capBottom: true, capTop: true })),
+    ).toBe(1)
+    // The pin's needle is a frustum, and its head is a small sphere.
+    expect(outwardWoundFraction(zTubeGeometry(0.03, 0.12, 1.1))).toBe(1)
+    expect(outwardWoundFraction(zSphereGeometry(0.12, 16, 8))).toBe(1)
+  })
+
+  it('agrees with Three’s own primitives, so the check itself is sound', () => {
+    expect(outwardWoundFraction(new THREE.SphereGeometry(1, 16, 8))).toBe(1)
+    expect(outwardWoundFraction(new THREE.BoxGeometry(1, 1, 1))).toBe(1)
+  })
+})
+
 describe('zSphereGeometry', () => {
   const sphere = zSphereGeometry(1, 32, 16)
 
