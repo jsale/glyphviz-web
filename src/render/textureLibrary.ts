@@ -61,9 +61,12 @@ function configure(texture: THREE.Texture): THREE.Texture {
   texture.magFilter = THREE.LinearFilter
   texture.minFilter = THREE.LinearMipmapLinearFilter
   texture.generateMipmaps = true
-  // Media files are authored in sRGB; the renderer's output is sRGB too, so
-  // saying so is what keeps a map's colours from washing out.
-  texture.colorSpace = THREE.SRGBColorSpace
+  // No colour-space conversion, matching the desktop: it uploads the file's
+  // bytes and GL_MODULATEs them against the node colour with no decode step.
+  // The renderer writes raw values too (see lighting.ts), so a texel that
+  // arrives as 128 leaves as 128 — decoding to linear here would darken every
+  // map instead.
+  texture.colorSpace = THREE.NoColorSpace
   texture.needsUpdate = true
   return texture
 }
@@ -130,7 +133,7 @@ async function decodeVideo(blob: Blob, entry: MediaEntry): Promise<[THREE.Textur
   const texture = new THREE.VideoTexture(element)
   texture.wrapS = THREE.RepeatWrapping
   texture.wrapT = THREE.RepeatWrapping
-  texture.colorSpace = THREE.SRGBColorSpace
+  texture.colorSpace = THREE.NoColorSpace // raw, as in configure()
   // VideoTexture must not mipmap: frames arrive continuously and regenerating
   // the chain per frame costs far more than the filtering is worth.
   texture.minFilter = THREE.LinearFilter

@@ -57,6 +57,7 @@ import type { SceneBuildResult } from './render/buildScene'
 import { DynamicNodes } from './render/dynamicNodes'
 import { clearMaterialCache } from './render/glyphGeometry'
 import { LabelOverlay, pinnedTagNodes } from './render/labelOverlay'
+import { applyDesktopColorPipeline, SceneLighting } from './render/lighting'
 import {
   applyAudioMode,
   disposeTextures,
@@ -160,6 +161,7 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 // glyphs — z-topologies place children inside the parent) without z-fighting
 // at the far end of large scenes.
 const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
+applyDesktopColorPipeline(renderer)
 renderer.setPixelRatio(window.devicePixelRatio)
 renderer.setSize(window.innerWidth, window.innerHeight)
 app.appendChild(renderer.domElement)
@@ -174,11 +176,10 @@ const scene = new THREE.Scene()
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.001, 1000)
 camera.up.set(0, 0, 1)
 
-// Fixed-function-GL-flavored lighting: soft ambient plus one key light.
-scene.add(new THREE.AmbientLight(0xffffff, 0.6))
-const key = new THREE.DirectionalLight(0xffffff, 1.6)
-key.position.set(3, -4, 5)
-scene.add(key)
+// The desktop's own light rig and colour handling, coefficient for
+// coefficient — see lighting.ts. The key light is camera-relative, so it is
+// re-aimed once per frame in the animation loop.
+const lighting = new SceneLighting(scene)
 
 const controls = new OrbitControls(camera, renderer.domElement)
 // No damping: the camera stops dead when the mouse button comes up. Inertial
@@ -2283,6 +2284,9 @@ renderer.setAnimationLoop(() => {
   // already moved this frame, so the pivot lands on where it actually is.
   applyFollowTarget()
   controls.update()
+  // The key light lives in eye space on the desktop, so it follows the camera
+  // the controls just moved.
+  lighting.update(camera)
   backdrop.update(camera.position.distanceTo(controls.target))
   // Edges, plot lines and surface meshes chase the nodes they connect (gizmo
   // drags mutate frames between rebuilds), so refresh them every frame like

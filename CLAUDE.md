@@ -391,6 +391,52 @@ something to decide now).
         of every round primitive against its own normals, with Three's
         SphereGeometry/BoxGeometry as a control on the check itself —
         the old code scores 0/1 on it.
+   k. Lighting + colour pipeline parity (shipped 2026-07-27, several of
+      Jeff's users reported web colours reading duller and washed out
+      next to the desktop's). `src/render/lighting.ts` replaces the
+      approximated rig with the desktop's own `initializeGL` numbers.
+      Three things were wrong, and they compounded:
+      - Brightness. The desktop shades
+        `C · (0.2 + 0.3 + 1.0·max(N·L, 0))` clamped at 1 — GL's default
+        GL_LIGHT_MODEL_AMBIENT (never overridden) plus GL_LIGHT0's own
+        ambient and diffuse, with `glColorMaterial(AMBIENT_AND_DIFFUSE)`
+        putting the node colour in both terms and no `glMaterialfv` call
+        anywhere, so the specular light lands on a default-black
+        material and contributes nothing. Half the albedo is there
+        before any light arrives and anything facing the light
+        saturates, which is why desktop glyphs read as flat vivid
+        colour. Three (since r155) takes intensity in physical units and
+        divides by π in `BRDF_Lambert`, so the coefficients are π-scaled
+        on the way in: ambient 0.5π, key π. The old 0.6/1.6 pair peaked
+        at 0.70 of albedo where the desktop peaks at 1.5-clamped-to-1.
+      - Direction. `glLightfv(GL_LIGHT0, GL_POSITION, [1,2,1,0])` is
+        specified in `initializeGL` while the modelview is still
+        identity, so the direction is captured in EYE space and the key
+        light is bolted to the camera — shading does not change as the
+        scene is orbited. The web's was world-fixed at (3,−4,5). The
+        light and its target stay OUT of the scene graph and are aimed
+        per frame from the camera, rather than parenting them to the
+        camera, which would mean putting the camera into the scene where
+        every existing traversal would have to start ignoring it.
+      - Colour space. Fixed-function GL has none: a CSV byte lands in the
+        framebuffer as-is and the shading multiply happens on
+        sRGB-encoded numbers. Three's managed pipeline treated the same
+        values as linear and encoded the result on output, lifting every
+        midtone and desaturating — crimson (220,20,60) left as
+        (204,66,113). `applyDesktopColorPipeline` sets
+        `outputColorSpace = LinearSRGBColorSpace` (identity OETF, sRGB
+        drawing buffer) and pins NoToneMapping for GL's clamp; scene
+        textures move to `NoColorSpace` to match, since a
+        decoded-to-linear map under a raw output is the same mismatch
+        reversed. Every colour in the app is built with the numeric
+        `THREE.Color(r, g, b)` triplet, which is already raw working
+        space, so nothing else needed changing — and the unlit chrome
+        (grid, links, halos, background clear) now matches the desktop
+        exactly too, where before it was uniformly brightened.
+      - Divergence: the desktop's Gouraud (per-vertex, `GL_SMOOTH`)
+        shading is per-FRAGMENT here, which is what MeshLambertMaterial
+        does. Visible only as smoother terminators on the low-poly
+        primitives.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
