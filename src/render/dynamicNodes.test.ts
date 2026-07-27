@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { DynamicNodes } from './dynamicNodes'
 import { buildScene, RENDER_SCALE_FLOOR } from './buildScene'
 import { clearMaterialCache } from './glyphGeometry'
+import { RenderMode, applyRenderMode } from './renderMode'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
 import type { GvNode } from '../gv/types'
 
@@ -88,6 +89,66 @@ describe('DynamicNodes', () => {
     // The other node kept the build-time colour.
     expect(untouched.color.getHex()).not.toBe(0xff0000)
     expect(untouched.opacity).toBe(1)
+    dynamic.dispose()
+  })
+
+  it('recompiles a built-opaque material when an alpha track fades it out', () => {
+    // Breathing_Century: every glyph is authored at its FINAL alpha and a
+    // color_a track fades it to 0 until its year arrives. Three bakes
+    // transparency into the program (#define OPAQUE forces alpha to 1), so a
+    // material built opaque goes on drawing solid at opacity 0 unless the flag
+    // flip is followed by a recompile.
+    clearMaterialCache()
+    const nodes = scene({ color_a: 255 })
+    const built = buildScene(nodes)
+    const dynamic = new DynamicNodes(nodes, built.frames, { ...NO_SETS, appearance: new Set([1]) }, new Map())
+    const material = glyphMaterial(built.frames.get(1)!)
+    expect(material.transparent).toBe(false)
+
+    material.needsUpdate = false
+    nodes[0].color.a = 0
+    dynamic.update()
+    expect(material.opacity).toBe(0)
+    expect(material.transparent).toBe(true)
+    expect(material.version).toBeGreaterThan(0)
+
+    // Still transparent the next frame — no per-frame recompile.
+    const version = material.version
+    nodes[0].color.a = 100
+    dynamic.update()
+    expect(material.version).toBe(version)
+
+    // Back to solid: one more flip, and one more recompile.
+    nodes[0].color.a = 255
+    dynamic.update()
+    expect(material.transparent).toBe(false)
+    expect(material.version).toBeGreaterThan(version)
+    dynamic.dispose()
+  })
+
+  it('leaves a render mode’s forced transparency in charge of the flag', () => {
+    clearMaterialCache()
+    const nodes = scene({ color_a: 255 })
+    const built = buildScene(nodes)
+    const dynamic = new DynamicNodes(nodes, built.frames, { ...NO_SETS, appearance: new Set([1]) }, new Map())
+    const material = glyphMaterial(built.frames.get(1)!)
+
+    // Additive forces transparency on; a fully opaque frame must not undo it.
+    applyRenderMode(built.root, RenderMode.Additive)
+    expect(material.transparent).toBe(true)
+    nodes[0].color.a = 255
+    dynamic.update()
+    expect(material.transparent).toBe(true)
+
+    // Off ignores alpha outright, so a faded frame must not turn it back on.
+    applyRenderMode(built.root, RenderMode.Off)
+    nodes[0].color.a = 0
+    dynamic.update()
+    expect(material.transparent).toBe(false)
+
+    // Back to Normal, which restores what the node itself now asks for.
+    applyRenderMode(built.root, RenderMode.Normal)
+    expect(material.transparent).toBe(true)
     dynamic.dispose()
   })
 

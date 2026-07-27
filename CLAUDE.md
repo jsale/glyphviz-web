@@ -812,6 +812,25 @@ something to decide now).
        guess the conventional companion names (no folder to scan).
        Not done: the desktop's rate-pause snapshot restore (the panel's
        Rate Motion checkbox just freezes in place).
+     - Bug fixed 2026-07-27 (Jeff reported it on Breathing_Century, the
+       only example in the corpus built this way): an animated `color_a`
+       could not fade a glyph OUT. Three bakes transparency into the
+       shader program — `parameters.opaque` (transparent false AND
+       NormalBlending) emits `#define OPAQUE`, and `opaque_fragment`
+       then forces `diffuseColor.a = 1.0` — so flipping
+       `material.transparent` at run time does nothing until a
+       recompile. Every glyph authored at `color_a` 255 went on drawing
+       solid at opacity 0. Breathing_Century's whole animation is that
+       flip (each of ~1,700 glyphs is born transparent and snaps solid
+       the year it happened), which is why nothing else in the corpus
+       showed it: the fade-INS worked, because a material built at the
+       example's ghosted 175 was already compiled transparent. Per-frame
+       opacity writes now go through `setNaturalTransparency`
+       (renderMode.ts, where `applyToMaterial` already handled the same
+       hazard) — the flag is only touched when it actually changes, so a
+       steady scene pays nothing, and a render mode's forced
+       transparency stays in charge where it has one (Additive et al.
+       force it on, Off forces it off and ignores alpha outright).
    - ~~Plot/Surface overlays~~ (shipped 2026-07-25): the last two
      topologies whose children already placed correctly but whose
      connecting geometry never drew. `src/render/topologyOverlay.ts`

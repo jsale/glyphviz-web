@@ -166,11 +166,34 @@ function applyToMaterial(material: THREE.Material, state: BlendState): void {
   material.blendEquation = state.blendEquation
   material.blendSrc = state.blendSrc
   material.blendDst = state.blendDst
-  const transparent = state.transparent ?? (material.userData.baseTransparent as boolean)
-  if (material.transparent !== transparent) {
-    material.transparent = transparent
-    // Transparency is compiled into the program's defines, unlike the blend
-    // factors, which are plain GL state.
-    material.needsUpdate = true
-  }
+  // Remembered so a later per-frame opacity write (dynamicNodes) cannot undo a
+  // mode's forced transparency — or force it where Off ignores alpha outright.
+  material.userData.forcedTransparent = state.transparent
+  setTransparent(material, state.transparent ?? (material.userData.baseTransparent as boolean))
+}
+
+/**
+ * Set the transparency a material would have on its OWN account — what an
+ * animated `color_a` asks for — leaving the active render mode's override in
+ * charge where it has one.
+ *
+ * Anything that changes `material.opacity` at run time has to come through
+ * here: three compiles transparency into the program (`#define OPAQUE` forces
+ * `diffuseColor.a = 1.0` in the fragment shader), so a material built opaque
+ * IGNORES a later opacity of 0 until the flag flip is followed by a recompile.
+ * The flag is only touched when it actually changes, so a steady scene pays
+ * nothing and a node crossing the boundary pays one program-cache lookup.
+ */
+export function setNaturalTransparency(material: THREE.Material, transparent: boolean): void {
+  material.userData.baseTransparent = transparent
+  const forced = (material.userData.forcedTransparent ?? null) as boolean | null
+  setTransparent(material, forced ?? transparent)
+}
+
+function setTransparent(material: THREE.Material, transparent: boolean): void {
+  if (material.transparent === transparent) return
+  material.transparent = transparent
+  // Transparency is compiled into the program's defines, unlike the blend
+  // factors, which are plain GL state.
+  material.needsUpdate = true
 }

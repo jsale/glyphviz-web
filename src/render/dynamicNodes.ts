@@ -24,6 +24,7 @@ import type { GvNode } from '../gv/types'
 import { NodeType } from '../gv/types'
 import { gridDrawScale } from '../gv/worldGrid'
 import { applyFrameTransform, drawScaleCorrection } from './buildScene'
+import { setNaturalTransparency } from './renderMode'
 
 export interface DynamicSets {
   /** Nodes whose translate/rotate/scale can change. */
@@ -130,7 +131,10 @@ export class DynamicNodes {
       const b = node.color.b / 255
       for (const material of materials) {
         material.opacity = opacity
-        material.transparent = opacity < 1
+        // NOT a plain assignment: three bakes transparency into the shader
+        // program, so a glyph whose CSV alpha was 255 would go on drawing solid
+        // at opacity 0 (Breathing_Century's whole animation is that flip).
+        setNaturalTransparency(material, opacity < 1)
         const colored = material as THREE.Material & { color?: THREE.Color }
         colored.color?.setRGB(r, g, b)
       }
