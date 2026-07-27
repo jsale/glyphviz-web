@@ -260,7 +260,7 @@ hud.innerHTML = `
     <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
       <input type="checkbox">Follow Selected (F)
     </label>
-    <label id="hud-show-fps" class="sel-check" title="Frame rate, this app's CPU time per frame, and the draw calls and triangles the last frame sent to the GPU.&#10;Shown bottom-left; switch it off for a clean screengrab.">
+    <label id="hud-show-fps" class="sel-check" title="Frame rate, this app's CPU time per frame, and the draw calls and triangles the last frame sent to the GPU.&#10;Shown bottom-right; switch it off for a clean screengrab.">
       <input type="checkbox" checked>Show FPS
     </label>
   </div>
@@ -379,8 +379,9 @@ const inspector = new Inspector({
 })
 app.appendChild(inspector.element)
 
-// Bottom-left, directly above the status line — the desktop keeps its FPS
-// label in the status bar too. On permanently by default, like the desktop's.
+// Bottom-right, opposite the status line — the desktop's status bar reads the
+// same way, message left and the FPS label added as a permanent right-hand
+// widget. On by default, like the desktop's.
 const fpsMeter = new FpsMeter()
 app.appendChild(fpsMeter.element)
 showFpsCheckbox.addEventListener('change', () => {

@@ -769,13 +769,17 @@ canvas {
   user-select: none;
 }
 
-/* Sits directly above the status line, in the corner the Node Table's 324px
-   inset leaves free. Tabular figures so a changing frame rate doesn't jitter
-   the line it sits on. */
+/* Bottom RIGHT, opposite the status line — which is how the desktop's status
+   bar reads too (message on the left, the fps label added as a permanent
+   right-hand widget). The left column stacks up to four panels and already
+   overruns the viewport height; the corner the Node Table's 324px inset
+   leaves free on this side is the one that stays empty. Tabular figures so a
+   changing frame rate doesn't jitter the line it sits on. */
 #fps-meter {
   position: fixed;
-  left: 12px;
-  bottom: 34px;
+  right: 12px;
+  bottom: 12px;
+  text-align: right;
   color: #7f8798;
   font: 11px/1.4 ui-monospace, 'Cascadia Mono', Consolas, monospace;
   font-variant-numeric: tabular-nums;
