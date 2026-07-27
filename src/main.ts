@@ -78,6 +78,7 @@ import {
 import { invertLocalRotation } from './render/rotationInverse'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
+import { FpsMeter } from './ui/fpsMeter'
 import { Inspector } from './ui/inspector'
 import { NodeTable } from './ui/nodeTable'
 import { PANEL_MODE_EVENT, Panel } from './ui/panel'
@@ -259,6 +260,9 @@ hud.innerHTML = `
     <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
       <input type="checkbox">Follow Selected (F)
     </label>
+    <label id="hud-show-fps" class="sel-check" title="Frame rate, this app's CPU time per frame, and the draw calls and triangles the last frame sent to the GPU.&#10;Shown bottom-left; switch it off for a clean screengrab.">
+      <input type="checkbox" checked>Show FPS
+    </label>
   </div>
   <div id="hud-hint">or drop a scene folder, .zip or CSV anywhere</div>
 `
@@ -284,6 +288,7 @@ const showAxesCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-axes inp
 const gridColorInput = hud.querySelector<HTMLInputElement>('#hud-grid-color')!
 const renderModeSelect = hud.querySelector<HTMLSelectElement>('#hud-render-mode')!
 const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
+const showFpsCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-fps input')!
 
 // Selected while an opened file/folder scene is showing, so the combo never
 // claims a built-in that isn't on screen.
@@ -353,6 +358,10 @@ function issueText(i: GvParseIssue): string {
 // --- Selection + inspector ---------------------------------------------------
 
 const selection = new Selection()
+// The halos are one batched object for the whole selection, and they are
+// chrome rather than scene content — so they hang off the scene, not the built
+// root, and outlive every rebuild.
+scene.add(selection.object)
 let nodesById = new Map<number, GvNode>()
 
 const inspector = new Inspector({
@@ -369,6 +378,14 @@ const inspector = new Inspector({
   },
 })
 app.appendChild(inspector.element)
+
+// Bottom-left, directly above the status line — the desktop keeps its FPS
+// label in the status bar too. On permanently by default, like the desktop's.
+const fpsMeter = new FpsMeter()
+app.appendChild(fpsMeter.element)
+showFpsCheckbox.addEventListener('change', () => {
+  fpsMeter.visible = showFpsCheckbox.checked
+})
 
 const statusBar = document.createElement('div')
 statusBar.id = 'status-bar'
@@ -1038,6 +1055,11 @@ function rebuildScene(fitCamera: boolean) {
   currentLinks.setResolution(pixelWidth, pixelHeight)
   currentOverlays.setResolution(pixelWidth, pixelHeight)
   scene.add(currentRoot)
+  // Selection halos are written in world space, so the setSelection at the end
+  // of this function needs matrices that exist — a freshly built frame has
+  // never been through a render pass. The renderer's own pass this frame then
+  // finds everything already up to date.
+  currentRoot.updateMatrixWorld()
   scene.background = built.background
   syncBackgroundInput() // the loaded scene's World row may set its own
   syncTagStyle() // ditto its tag colouring
@@ -2278,7 +2300,8 @@ renderer.setAnimationLoop(() => {
   // A channel frame or a gizmo drag rewrites node fields without a rebuild, so
   // the table's visible rows have to be repainted from them. Only the ~30 rows
   // on screen are touched, and nothing at all while the panel is collapsed.
-  if (tickAnimation(dtMs) || gizmo.dragging) nodeTable.refreshVisible()
+  const nodesMoved = tickAnimation(dtMs) || gizmo.dragging
+  if (nodesMoved) nodeTable.refreshVisible()
 
   // After the animation tick, like the desktop's paintGL: the followed node has
   // already moved this frame, so the pivot lands on where it actually is.
@@ -2293,6 +2316,11 @@ renderer.setAnimationLoop(() => {
   // the desktop's redraw.
   currentLinks?.update()
   currentOverlays?.update()
+  // Selection halos are world-space geometry for the same batching reason, so
+  // they follow the same rule: rewritten only while something is moving, from
+  // the last pass's matrices. Every other way a node moves (an inspector edit,
+  // a drag release) ends in a rebuildScene, whose setSelection rewrites them.
+  if (nodesMoved) selection.refreshHalos()
   renderer.render(scene, camera)
   // After render: world matrices are the ones just drawn, so labels track
   // gizmo drags without a scene rebuild.
@@ -2307,4 +2335,7 @@ renderer.setAnimationLoop(() => {
       tagColor: tagStyle.rgb,
     })
   }
+  // Bracket the whole loop, and read the counters after the render call so
+  // they describe the frame just drawn.
+  fpsMeter.frame(now, performance.now(), renderer.info.render)
 })

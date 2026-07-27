@@ -115,8 +115,10 @@ something to decide now).
         is NOT a divergence to reconcile in this direction — Jeff intends
         to change desktop GlyphViz to match this behavior when he gets to
         it (2026-07-25), so the web app is the reference here.
-      - Halos are one draw call each, so past `MAX_HALOS` (1000) the
-        selection stays complete and only the highlight stops drawing.
+      - Halos are ONE batched draw for the whole selection (see item l),
+        so `MAX_HALOS` (250,000) is a memory guard rather than a budget;
+        past it the selection stays complete and only the highlight
+        stops drawing.
       - Panels (Scene / Selection / Properties) collapse to their header
         bar by click or Ctrl+B / Ctrl+E / Ctrl+P; Channels is Alt+C and
         the Node Table Alt+N. Ctrl+N is reserved by browsers and cannot
@@ -437,6 +439,61 @@ something to decide now).
         shading is per-FRAGMENT here, which is what MeshLambertMaterial
         does. Visible only as smoother terminators on the low-poly
         primitives.
+   l. Frame-rate readout + halo batching (shipped 2026-07-27, Jeff's
+      request — he wanted numbers to chase a performance problem with,
+      and had found that a Ctrl+A highlighted well under half of what it
+      selected).
+      - `src/ui/fpsMeter.ts`, ported from desktop `Viewport.paintGL`'s
+        counter (frames ÷ elapsed, emitted once elapsed ≥ 1 s) and
+        `MainWindow._on_fps_updated`'s permanent `f"{fps:.1f} fps"`
+        status-bar label — same window and rounding, so a number read
+        here compares with one read there on the same scene. It adds two
+        things the desktop has no need of: the animation loop's own CPU
+        ms per frame (mean and the window's WORST frame), which is what
+        separates "our JavaScript is the bottleneck" from "the GPU is",
+        and the last frame's `renderer.info.render` draw calls and
+        triangles, which is what the batching work all over this app
+        exists to hold down. Bottom-left above the status line; a Show
+        FPS checkbox in the Scene panel's world group puts it away for a
+        screengrab (item h's rule), and there is deliberately no hotkey
+        — the desktop has none and the free single keys are worth more
+        to future parity work. `FrameSampler` holds the counting with no
+        DOM in it, the way `nextPanelMode` holds the panel state machine,
+        because this suite runs in plain node.
+      - Selection halos are now ONE draw call for the entire selection
+        (`Selection` in `src/render/picking.ts`), which is what raised
+        `MAX_HALOS` from 1,000 to 250,000 — past Event_Cloud's 209k, so
+        a Select All is complete on every example in the corpus. The old
+        halo was a LineSegments parented to the glyph: tracking was free
+        (the glyph's own draw matrix, 0.2 floor included, placed the box)
+        but each cost a draw call, and the cap that bought silently left
+        most of a big selection un-outlined while the selection itself
+        stayed complete — the nodes still took edits, which is exactly
+        how Jeff noticed.
+        - The trade it makes is the one `linkOverlay`/`topologyOverlay`
+          already made: vertices are WORLD space, written from each
+          glyph's `matrixWorld` (8 corners = a centre plus three scaled
+          axis vectors, no `applyMatrix4`), so they have to be rewritten
+          when a node moves — `refreshHalos()`, called from the animation
+          loop under the same `tickAnimation() || gizmo.dragging`
+          condition the Node Table repaint uses, and one frame stale for
+          the same documented reason. A still scene costs nothing at all.
+          Every other way a node moves ends in a `rebuildScene`, whose
+          `setSelection` rewrites them anyway — which is why that
+          function now calls `updateMatrixWorld()` on the freshly added
+          root: a frame that has never been through a render pass has no
+          world matrix to read.
+        - The object hangs off the SCENE, not the built root: it is
+          chrome, so it outlives every rebuild, stays out of
+          `fitCameraTo`'s bounds and out of `applyRenderMode`'s walk
+          (which skipped it by `isSelectionBox` before). It also no
+          longer sits in the raycaster's path — 12 line segments per
+          selected node were being tested on every click.
+        - Buffers grow geometrically and never shrink, `setDrawRange`
+          picks out the live slots, and growth builds a NEW geometry and
+          disposes the old one, because under the WebGL renderer
+          `BufferAttribute.dispose()` only fires an event nobody listens
+          to — the GL buffers are freed by the GEOMETRY's dispose.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

@@ -747,7 +747,7 @@ canvas {
   color: #6c7488;
 }
 
-/* --- Region select band + status line ------------------------------------ */
+/* --- Region select band + status line + FPS ------------------------------ */
 
 #rubber-band {
   position: fixed;
@@ -764,6 +764,21 @@ canvas {
   max-width: calc(100vw - 24px);
   color: #9aa3b5;
   font: 12px/1.5 system-ui, sans-serif;
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Sits directly above the status line, in the corner the Node Table's 324px
+   inset leaves free. Tabular figures so a changing frame rate doesn't jitter
+   the line it sits on. */
+#fps-meter {
+  position: fixed;
+  left: 12px;
+  bottom: 34px;
+  color: #7f8798;
+  font: 11px/1.4 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
   text-shadow: 0 1px 3px #000;
   pointer-events: none;
   user-select: none;

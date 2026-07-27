@@ -2,8 +2,14 @@
 // picking hits solid silhouettes (invisible solid proxies — see
 // createPickProxy), and the highlight is a yellow wireframe box at ±1.05 in
 // the node's unit local space (viewport.py _draw_selected_outlines: color
-// 1.0/0.95/0.1, line width 1.5, unlit), attached to the glyph so the node's
-// draw matrix — including the 0.2 scale floor — makes it track rendered size.
+// 1.0/0.95/0.1, line width 1.5, unlit), sized by the glyph's own draw matrix —
+// including the 0.2 scale floor — so it tracks rendered size. Every halo in a
+// selection is drawn by a single batched object; see `Selection`.
+//
+// (line width 1.5 is not reproducible: WebGL's core lines are 1 px whatever a
+// LineBasicMaterial asks for. The fat-line addon the links use could do it,
+// but at 3 instanced quads per halo edge, which is the opposite of what a
+// Select All needs.)
 
 import * as THREE from 'three'
 
@@ -43,44 +49,55 @@ export function pickNodeId(raycaster: THREE.Raycaster, root: THREE.Object3D): nu
   return null
 }
 
-/** The yellow ±1.05 bounding-box halo. Add as a child of the node's glyph. */
-export function createSelectionBox(): THREE.LineSegments {
-  const b = SELECTION_BOX_HALF
-  const positions: number[] = []
-  for (const sx of [-b, b]) {
-    for (const sy of [-b, b]) positions.push(sx, sy, -b, sx, sy, b)
-  }
-  for (const sx of [-b, b]) {
-    for (const sz of [-b, b]) positions.push(sx, -b, sz, sx, b, sz)
-  }
-  for (const sy of [-b, b]) {
-    for (const sz of [-b, b]) positions.push(-b, sy, sz, b, sy, sz)
-  }
-  const geo = new THREE.BufferGeometry()
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
-  const box = new THREE.LineSegments(
-    geo,
-    new THREE.LineBasicMaterial({ color: SELECTION_COLOR, linewidth: 1.5 }),
-  )
-  box.name = 'selection-box'
-  box.userData.isSelectionBox = true
-  return box
-}
-
 /** id → frame, as returned by buildScene. */
 export type FrameLookup = ReadonlyMap<number, THREE.Object3D>
 
 /**
- * Halos are one LineSegments each, parented to the node's glyph so the draw
- * matrix (including the 0.2 scale floor) makes them track rendered size — but
- * that means one extra draw call per selected node. Select All on the 65k-node
- * Org_Event_Network would grind, so past this many the selection stays
- * complete and only the halos stop being drawn (see `haloOverflow`).
+ * Ceiling on how many halos are drawn at once — a memory guard, not a draw
+ * budget: every halo lives in ONE batched object (see `Selection`), so the
+ * cost of the next one is 8 vertices and 24 indices, 192 bytes of GPU buffer.
+ * At this cap that is ~48 MB, and it clears Event_Cloud's 209k nodes, so a
+ * Select All draws complete on every example in the corpus.
+ *
+ * (It used to be 1,000, when each halo was its own draw call. That silently
+ * left most of a Ctrl+A selection un-outlined while the selection itself was
+ * complete — the nodes still took edits, which is exactly how it was noticed.)
+ *
+ * Past the cap the selection still stays complete and only the highlight
+ * stops drawing; `haloOverflow` reports how many.
  */
-export const MAX_HALOS = 1000
+export const MAX_HALOS = 250_000
+
+/** Vertices per halo: the 8 box corners, indexed into 12 edges. */
+const CORNERS = 8
+/** Indices per halo: 12 edges × 2 ends. */
+const INDICES = 24
 
 /**
- * Multi-selection holder: parks a yellow halo on each selected node's glyph.
+ * The 12 box edges as corner-index pairs. A corner index packs its three signs
+ * as bits — x = bit 2, y = bit 1, z = bit 0, set meaning + — so an edge is any
+ * pair differing in exactly one bit.
+ */
+const BOX_EDGES = [
+  0, 1, 2, 3, 4, 5, 6, 7, // along z
+  0, 2, 1, 3, 4, 6, 5, 7, // along y
+  0, 4, 1, 5, 2, 6, 3, 7, // along x
+]
+
+/**
+ * Multi-selection holder: draws a yellow halo around each selected node's
+ * glyph, all of them in ONE batched LineSegments (`object`, which the app adds
+ * to the scene once and keeps forever — it is chrome, not scene content, so it
+ * lives outside the built root and survives every rebuild).
+ *
+ * Halos used to be a LineSegments per node, parented to the glyph: tracking
+ * came free (the glyph's own draw matrix, 0.2 scale floor included, positioned
+ * the box) but each cost a draw call, which is what forced a 1,000-node cap.
+ * Batching flips that trade — the boxes are written in WORLD space, so they
+ * have to be refreshed whenever a node moves (`refreshHalos`, called from the
+ * animation loop exactly as linkOverlay and topologyOverlay already are). The
+ * box is still the glyph's own ±1.05 cube: its corners are the glyph's
+ * matrixWorld applied to those signs, which is what parenting used to compute.
  *
  * The *primary* node — the one the gizmo attaches to and the inspector reads
  * its field values from — is the first selected node in scene row order,
@@ -93,12 +110,36 @@ export const MAX_HALOS = 1000
  * while the outline pass skips them.
  */
 export class Selection {
-  private pool: THREE.LineSegments[] = []
-  private attached: THREE.LineSegments[] = []
+  /** The glyphs a halo is drawn around, in halo-slot order. */
+  private glyphs: THREE.Object3D[] = []
   private order: number[] = []
   private members = new Set<number>()
   private overflow = 0
   private boxesVisible = true
+  private readonly maxHalos: number
+  private capacity = 0
+  private positions = new THREE.BufferAttribute(new Float32Array(0), 3)
+
+  /** The whole selection's halos, as one object. Add it to the scene once. */
+  readonly object: THREE.LineSegments
+
+  constructor(options: { maxHalos?: number } = {}) {
+    this.maxHalos = options.maxHalos ?? MAX_HALOS
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', this.positions)
+    this.object = new THREE.LineSegments(
+      geometry,
+      new THREE.LineBasicMaterial({ color: SELECTION_COLOR }),
+    )
+    this.object.name = 'selection-boxes'
+    this.object.userData.isSelectionBox = true
+    this.object.raycast = () => {} // chrome is never a pick target
+    // Vertices are world-space and rewritten as nodes move; culling them
+    // against a bounding sphere that would have to be recomputed just as often
+    // buys nothing (the same call linkOverlay makes).
+    this.object.frustumCulled = false
+    this.object.visible = false
+  }
 
   /** Selected ids in scene row order; `[0]` is the primary. */
   get ids(): readonly number[] {
@@ -132,7 +173,12 @@ export class Selection {
 
   set boxVisible(value: boolean) {
     this.boxesVisible = value
-    for (const box of this.attached) box.visible = value
+    this.syncVisibility()
+  }
+
+  /** How many halos are actually being drawn. */
+  get haloCount(): number {
+    return this.glyphs.length
   }
 
   has(nodeId: number): boolean {
@@ -149,29 +195,98 @@ export class Selection {
    * dropped. `null` or an empty list clears.
    */
   set(frames: FrameLookup, ids: number | null | Iterable<number>): void {
-    for (const box of this.attached) box.removeFromParent()
-    this.attached.length = 0
+    this.glyphs.length = 0
     this.order.length = 0
     this.members.clear()
     this.overflow = 0
-    if (ids === null) return
 
-    for (const nodeId of typeof ids === 'number' ? [ids] : ids) {
+    for (const nodeId of ids === null ? [] : typeof ids === 'number' ? [ids] : ids) {
       const frame = frames.get(nodeId)
       if (!frame || this.members.has(nodeId)) continue // not in the scene at all
       this.members.add(nodeId)
       this.order.push(nodeId)
       const glyph = frame.children.find((c) => c.userData.isGlyph)
       if (!glyph) continue
-      if (this.attached.length >= MAX_HALOS) {
+      if (this.glyphs.length >= this.maxHalos) {
         this.overflow++
         continue
       }
-      const box = this.pool[this.attached.length] ?? createSelectionBox()
-      this.pool[this.attached.length] = box
-      box.visible = this.boxesVisible
-      this.attached.push(box)
-      glyph.add(box)
+      this.glyphs.push(glyph)
     }
+
+    this.reserve(this.glyphs.length)
+    this.object.geometry.setDrawRange(0, this.glyphs.length * INDICES)
+    this.syncVisibility()
+    this.refreshHalos()
+  }
+
+  /**
+   * Rewrite every halo's world-space corners from the glyph matrices. Cheap
+   * and allocation-free (8 corners of a parallelepiped are three axis vectors
+   * added to a centre), but O(selection), so the app calls it only when
+   * something can have moved — a gizmo drag, a Channels/rate tick, a rebuild —
+   * exactly like the link and topology overlays. Reads the matrixWorld state
+   * left by the last render pass and never forces a recompute of its own.
+   */
+  refreshHalos(): void {
+    if (this.glyphs.length === 0) return // nothing drawn, nothing to upload
+    const b = SELECTION_BOX_HALF
+    const p = this.positions.array as Float32Array
+    for (let i = 0; i < this.glyphs.length; i++) {
+      const e = this.glyphs[i].matrixWorld.elements
+      // Half-extent along each of the glyph's own (scaled, rotated) axes.
+      const ax = e[0] * b
+      const ay = e[1] * b
+      const az = e[2] * b
+      const bx = e[4] * b
+      const by = e[5] * b
+      const bz = e[6] * b
+      const cx = e[8] * b
+      const cy = e[9] * b
+      const cz = e[10] * b
+      let o = i * CORNERS * 3
+      for (let corner = 0; corner < CORNERS; corner++) {
+        const sx = corner & 4 ? 1 : -1
+        const sy = corner & 2 ? 1 : -1
+        const sz = corner & 1 ? 1 : -1
+        p[o++] = e[12] + sx * ax + sy * bx + sz * cx
+        p[o++] = e[13] + sx * ay + sy * by + sz * cy
+        p[o++] = e[14] + sx * az + sy * bz + sz * cz
+      }
+    }
+    // Upload only the slots in use — the buffer keeps its high-water size, and
+    // a 250k-capacity full upload every animated frame would not be free.
+    this.positions.clearUpdateRanges()
+    this.positions.addUpdateRange(0, this.glyphs.length * CORNERS * 3)
+    this.positions.needsUpdate = true
+  }
+
+  /** Grow the vertex/index buffers to hold `count` halos (never shrink). */
+  private reserve(count: number): void {
+    if (count <= this.capacity) return
+    // Geometric growth: a rubber-band sweep or a run of Ctrl+click grows the
+    // selection one step at a time, and each step would otherwise reallocate.
+    this.capacity = Math.max(64, this.capacity * 2, count)
+    this.positions = new THREE.BufferAttribute(new Float32Array(this.capacity * CORNERS * 3), 3)
+    this.positions.setUsage(THREE.DynamicDrawUsage)
+    // The index pattern is fixed per slot, so it is written once per growth
+    // and never touched again as the selection changes.
+    const index = new Uint32Array(this.capacity * INDICES)
+    for (let i = 0; i < this.capacity; i++) {
+      for (let k = 0; k < INDICES; k++) index[i * INDICES + k] = i * CORNERS + BOX_EDGES[k]
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute('position', this.positions)
+    geometry.setIndex(new THREE.BufferAttribute(index, 1))
+    // A whole new geometry rather than new attributes on the old one, because
+    // disposing the GEOMETRY is what frees the outgrown GL buffers — under the
+    // WebGL renderer BufferAttribute.dispose() only fires an event nobody
+    // listens to. Growth is O(log n) over a session, so the churn is nothing.
+    this.object.geometry.dispose()
+    this.object.geometry = geometry
+  }
+
+  private syncVisibility(): void {
+    this.object.visible = this.boxesVisible && this.glyphs.length > 0
   }
 }

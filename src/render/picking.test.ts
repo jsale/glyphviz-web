@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { buildScene } from './buildScene'
-import { createSelectionBox, MAX_HALOS, pickNodeId, Selection, SELECTION_BOX_HALF } from './picking'
+import { pickNodeId, Selection, SELECTION_BOX_HALF } from './picking'
 import { Geometry, NodeType } from '../gv/types'
 import type { GvNode } from '../gv/types'
 
@@ -134,43 +134,78 @@ describe('pickNodeId', () => {
   })
 })
 
-describe('selection box', () => {
-  it('spans ±1.05 in unit local space (desktop halo size)', () => {
-    const box = createSelectionBox()
-    box.geometry.computeBoundingBox()
-    const bb = box.geometry.boundingBox!
-    expect(bb.min.x).toBeCloseTo(-SELECTION_BOX_HALF)
-    expect(bb.max.z).toBeCloseTo(SELECTION_BOX_HALF)
-    // 12 edges as line segments = 24 vertices.
-    expect(box.geometry.getAttribute('position').count).toBe(24)
+/** World-space bounding box of each drawn halo, in halo-slot order. */
+function haloBoxes(sel: Selection): THREE.Box3[] {
+  const position = sel.object.geometry.getAttribute('position')
+  const corner = new THREE.Vector3()
+  return Array.from({ length: sel.haloCount }, (_, i) => {
+    const box = new THREE.Box3()
+    for (let c = 0; c < 8; c++) box.expandByPoint(corner.fromBufferAttribute(position, i * 8 + c))
+    return box
   })
+}
 
-  it('attaches to the selected node glyph and tracks its rendered size', () => {
-    const { root, frames } = buildAndUpdate([
+describe('selection box', () => {
+  it('draws a ±1.05 box in the glyph’s own space, at its rendered size', () => {
+    const { frames } = buildAndUpdate([
       makeNode({ id: 1 }),
       makeNode({ id: 2, translate: { x: 5, y: 0, z: 0 }, scale: { x: 0.1, y: 0.1, z: 0.1 } }),
     ])
     const sel = new Selection()
     sel.set(frames, 2)
     expect(sel.id).toBe(2)
-    root.updateMatrixWorld(true)
-    const box = root.getObjectByName('selection-box')!
-    // Parent chain includes the glyph's 0.2-floor correction: world scale
-    // of the halo matches the drawn size (0.2), not the raw 0.1.
-    const ws = box.getWorldScale(new THREE.Vector3())
-    expect(ws.x).toBeCloseTo(0.2)
+    expect(sel.haloCount).toBe(1)
+
+    // The drawn scale carries the glyph's 0.2 floor, not the raw 0.1 — so the
+    // halo is ±1.05 × 0.2 around the node, exactly as parenting used to make it.
+    const [box] = haloBoxes(sel)
+    expect(box.min.x).toBeCloseTo(5 - SELECTION_BOX_HALF * 0.2)
+    expect(box.max.x).toBeCloseTo(5 + SELECTION_BOX_HALF * 0.2)
+    expect(box.min.z).toBeCloseTo(-SELECTION_BOX_HALF * 0.2)
+    expect(box.max.z).toBeCloseTo(SELECTION_BOX_HALF * 0.2)
+
+    // 12 edges × 2 ends per halo, indexed into the 8 corners.
+    expect(sel.object.geometry.drawRange.count).toBe(24)
 
     sel.set(frames, null)
     expect(sel.id).toBeNull()
-    expect(root.getObjectByName('selection-box')).toBeUndefined()
+    expect(sel.haloCount).toBe(0)
+    expect(sel.object.visible).toBe(false)
+    expect(sel.object.geometry.drawRange.count).toBe(0)
+  })
+
+  it('turns with the node it outlines', () => {
+    // rotate_y is HTR heading, a rotation about Z: the axis-aligned bounds of
+    // the turned box spread by √2 in X/Y and keep their Z, which an unrotated
+    // box would not do.
+    const { frames } = buildAndUpdate([makeNode({ id: 1, rotate: { x: 0, y: 45, z: 0 } })])
+    const sel = new Selection()
+    sel.set(frames, 1)
+    const [box] = haloBoxes(sel)
+    expect(box.max.x).toBeCloseTo(SELECTION_BOX_HALF * Math.SQRT2)
+    expect(box.max.z).toBeCloseTo(SELECTION_BOX_HALF)
+  })
+
+  it('follows a glyph that moves, once refreshed', () => {
+    const { root, frames } = buildAndUpdate([makeNode({ id: 1 })])
+    const sel = new Selection()
+    sel.set(frames, 1)
+    expect(haloBoxes(sel)[0].max.x).toBeCloseTo(SELECTION_BOX_HALF)
+
+    // What a Channels frame or a gizmo drag does between rebuilds.
+    frames.get(1)!.position.x = 20
+    root.updateMatrixWorld(true)
+    sel.refreshHalos()
+    expect(haloBoxes(sel)[0].max.x).toBeCloseTo(20 + SELECTION_BOX_HALF)
   })
 
   it('selects glyph-less nodes (hidden, links) without a halo — nav/inspector reach them', () => {
-    const { root, frames } = buildAndUpdate([makeNode({ id: 1, hide: 1 })])
+    const { frames } = buildAndUpdate([makeNode({ id: 1, hide: 1 })])
     const sel = new Selection()
     sel.set(frames, 1)
     expect(sel.id).toBe(1)
-    expect(root.getObjectByName('selection-box')).toBeUndefined()
+    expect(sel.haloCount).toBe(0)
+    expect(sel.object.visible).toBe(false)
   })
 
   it('refuses to select ids with no frame in the scene', () => {
@@ -188,16 +223,8 @@ describe('multi-selection', () => {
     makeNode({ id: 3, translate: { x: 10, y: 0, z: 0 } }),
   ]
 
-  function haloCount(root: THREE.Object3D): number {
-    let n = 0
-    root.traverse((o) => {
-      if (o.userData.isSelectionBox) n++
-    })
-    return n
-  }
-
   it('halos every selected node and keeps the first as primary', () => {
-    const { root, frames } = buildAndUpdate(threeNodes())
+    const { frames } = buildAndUpdate(threeNodes())
     const sel = new Selection()
     sel.set(frames, [2, 3])
     expect(sel.id).toBe(2)
@@ -205,19 +232,27 @@ describe('multi-selection', () => {
     expect([...sel.ids]).toEqual([2, 3])
     expect(sel.has(3)).toBe(true)
     expect(sel.has(1)).toBe(false)
-    expect(haloCount(root)).toBe(2)
+    expect(sel.haloCount).toBe(2)
+    // One draw call for the whole selection, whatever its size — the reason
+    // the cap is a memory guard rather than a budget of a few hundred.
+    expect(haloBoxes(sel).map((b) => b.max.x)).toEqual(
+      [5, 10].map((x) => expect.closeTo(x + SELECTION_BOX_HALF)),
+    )
   })
 
-  it('reuses halos and detaches the ones no longer selected', () => {
-    const { root, frames } = buildAndUpdate(threeNodes())
+  it('drops the halos of nodes no longer selected', () => {
+    const { frames } = buildAndUpdate(threeNodes())
     const sel = new Selection()
     sel.set(frames, [1, 2, 3])
-    expect(haloCount(root)).toBe(3)
+    expect(sel.haloCount).toBe(3)
     sel.set(frames, [3])
-    expect(haloCount(root)).toBe(1)
+    expect(sel.haloCount).toBe(1)
     expect(sel.id).toBe(3)
+    // Only the live slot is drawn, even though the buffer keeps its size.
+    expect(sel.object.geometry.drawRange.count).toBe(24)
+    expect(haloBoxes(sel)[0].max.x).toBeCloseTo(10 + SELECTION_BOX_HALF)
     sel.set(frames, [])
-    expect(haloCount(root)).toBe(0)
+    expect(sel.haloCount).toBe(0)
     expect(sel.id).toBeNull()
   })
 
@@ -229,42 +264,91 @@ describe('multi-selection', () => {
   })
 
   it('hides and shows the boxes without touching the selection', () => {
-    const { root, frames } = buildAndUpdate(threeNodes())
+    const { frames } = buildAndUpdate(threeNodes())
     const sel = new Selection()
     sel.set(frames, [1, 2, 3])
-    const boxes = () => {
-      const found: THREE.Object3D[] = []
-      root.traverse((o) => {
-        if (o.userData.isSelectionBox) found.push(o)
-      })
-      return found
-    }
+    expect(sel.object.visible).toBe(true)
 
     sel.boxVisible = false
     expect(sel.boxVisible).toBe(false)
-    expect(boxes().every((b) => !b.visible)).toBe(true)
+    expect(sel.object.visible).toBe(false)
     // The whole point: everything the selection means is untouched.
     expect([...sel.ids]).toEqual([1, 2, 3])
     expect(sel.id).toBe(1)
+    expect(sel.haloCount).toBe(3)
 
     // A selection made while the boxes are off stays off — the flag belongs
     // to the viewer, not to any one selection.
     sel.set(frames, [2])
-    expect(boxes().every((b) => !b.visible)).toBe(true)
+    expect(sel.object.visible).toBe(false)
 
     sel.boxVisible = true
-    expect(boxes().every((b) => b.visible)).toBe(true)
+    expect(sel.object.visible).toBe(true)
   })
 
-  it('caps halos past MAX_HALOS while keeping the selection complete', () => {
-    const nodes = Array.from({ length: MAX_HALOS + 5 }, (_, i) =>
+  it('caps halos past the limit while keeping the selection complete', () => {
+    // The real MAX_HALOS is a memory guard in the hundreds of thousands; the
+    // capping rule is what this checks, so the instance gets its own small one.
+    const nodes = Array.from({ length: 8 }, (_, i) =>
       makeNode({ id: i + 1, translate: { x: i * 3, y: 0, z: 0 } }),
     )
-    const { root, frames } = buildAndUpdate(nodes)
+    const { frames } = buildAndUpdate(nodes)
+    const sel = new Selection({ maxHalos: 5 })
+    sel.set(frames, nodes.map((n) => n.id))
+    expect(sel.size).toBe(8)
+    expect(sel.haloCount).toBe(5)
+    expect(sel.haloOverflow).toBe(3)
+  })
+
+  it('outlines every node of a Select All far past the old 1,000 draw-call cap', () => {
+    // The reported symptom: Ctrl+A on a few thousand nodes highlighted well
+    // under half of them, while the selection itself was complete (the rest
+    // still took edits). One batched object is what makes the count a
+    // non-issue — 2,500 halos, one draw call, no overflow.
+    const nodes = Array.from({ length: 2500 }, (_, i) =>
+      makeNode({ id: i + 1, translate: { x: i * 3, y: 0, z: 0 } }),
+    )
+    const { frames } = buildAndUpdate(nodes)
     const sel = new Selection()
     sel.set(frames, nodes.map((n) => n.id))
-    expect(sel.size).toBe(MAX_HALOS + 5)
-    expect(haloCount(root)).toBe(MAX_HALOS)
-    expect(sel.haloOverflow).toBe(5)
+    expect(sel.size).toBe(2500)
+    expect(sel.haloCount).toBe(2500)
+    expect(sel.haloOverflow).toBe(0)
+    expect(sel.object.geometry.drawRange.count).toBe(2500 * 24)
+    // Spot-check the far end: the last node's box is around the last node.
+    expect(haloBoxes(sel)[2499].max.x).toBeCloseTo(2499 * 3 + SELECTION_BOX_HALF)
+  })
+
+  it('clears a selection that stops fitting when the scene rebuilds', () => {
+    // What rebuildScene does: null the selection against the NEW frames, then
+    // re-apply the surviving ids. Nothing may be left pointing at old glyphs.
+    const first = buildAndUpdate(threeNodes())
+    const sel = new Selection()
+    sel.set(first.frames, [1, 2, 3])
+    const second = buildAndUpdate([makeNode({ id: 1 })])
+    sel.set(second.frames, null)
+    expect(sel.haloCount).toBe(0)
+    sel.set(second.frames, [1, 2, 3])
+    expect([...sel.ids]).toEqual([1])
+    expect(sel.haloCount).toBe(1)
+  })
+
+  it('grows its buffers across many selection sizes without losing a halo', () => {
+    // 200 nodes crosses the initial 64-slot reservation twice; every halo has
+    // to survive the reallocation, positions and indices alike.
+    const nodes = Array.from({ length: 200 }, (_, i) =>
+      makeNode({ id: i + 1, translate: { x: i * 3, y: 0, z: 0 } }),
+    )
+    const { frames } = buildAndUpdate(nodes)
+    const sel = new Selection()
+    for (const n of [1, 70, 200]) {
+      sel.set(frames, nodes.slice(0, n).map((node) => node.id))
+      expect(sel.haloCount).toBe(n)
+      const boxes = haloBoxes(sel)
+      expect(boxes).toHaveLength(n)
+      expect(boxes[n - 1].max.x).toBeCloseTo((n - 1) * 3 + SELECTION_BOX_HALF)
+      const index = sel.object.geometry.getIndex()!
+      expect(index.getX((n - 1) * 24)).toBe((n - 1) * 8)
+    }
   })
 })
