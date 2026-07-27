@@ -333,6 +333,29 @@ canvas {
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* Eye separation: dimmed while stereo is off, but still adjustable — the
+   desktop's slider is live in both states, so a comfortable value can be set
+   before switching the pair on. */
+#hud-stereo-sep-row.disabled {
+  opacity: 0.5;
+}
+
+#hud-stereo-sep {
+  flex: 1;
+  min-width: 0;
+  height: 14px;
+  accent-color: #7f8db0;
+}
+
+/* Beats `#hud-world .hud-create-row span`, which would give the readout the
+   86px label column. */
+#hud-world #hud-stereo-sep-value {
+  flex: 0 0 38px;
+  text-align: right;
+  color: #9aa3b5;
+  font-variant-numeric: tabular-nums;
+}
+
 #hud-hint {
   color: #6c7488;
   margin-top: 2px;

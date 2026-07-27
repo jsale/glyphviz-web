@@ -82,6 +82,8 @@ import {
   RenderMode,
 } from './render/renderMode'
 import { invertLocalRotation } from './render/rotationInverse'
+import { eyeForX, StereoRig } from './render/stereo'
+import type { StereoEye } from './render/stereo'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { FpsMeter } from './ui/fpsMeter'
@@ -269,6 +271,14 @@ hud.innerHTML = `
     <label id="hud-show-fps" class="sel-check" title="Frame rate, this app's CPU time per frame, and the draw calls and triangles the last frame sent to the GPU.&#10;Shown bottom-right; switch it off for a clean screengrab.">
       <input type="checkbox" checked>Show FPS
     </label>
+    <label id="hud-stereo" class="sel-check" title="Side-by-side stereo pair, free-viewed by crossing your eyes — no glasses, no headset.&#10;Camera orbit/pan/zoom and click/double-click selection still work; rubber-band region select is disabled while active.">
+      <input type="checkbox">Stereo 3D (Cross-Eye)
+    </label>
+    <div class="hud-create-row" id="hud-stereo-sep-row" title="Distance between the two eyes, as a percentage of the camera's distance to the pivot — so the depth effect holds as you zoom.&#10;Lower if the pair is hard to fuse, higher for more depth.">
+      <span>Eye Separation</span>
+      <input id="hud-stereo-sep" type="range" min="5" max="150" step="1" value="30">
+      <span id="hud-stereo-sep-value">3.0%</span>
+    </div>
   </div>
   <div id="hud-hint">or drop a scene folder, .zip or CSV anywhere</div>
 `
@@ -295,6 +305,10 @@ const gridColorInput = hud.querySelector<HTMLInputElement>('#hud-grid-color')!
 const renderModeSelect = hud.querySelector<HTMLSelectElement>('#hud-render-mode')!
 const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
 const showFpsCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-fps input')!
+const stereoCheckbox = hud.querySelector<HTMLInputElement>('#hud-stereo input')!
+const stereoSepRow = hud.querySelector<HTMLDivElement>('#hud-stereo-sep-row')!
+const stereoSepSlider = hud.querySelector<HTMLInputElement>('#hud-stereo-sep')!
+const stereoSepValue = hud.querySelector<HTMLSpanElement>('#hud-stereo-sep-value')!
 
 // Selected while an opened file/folder scene is showing, so the combo never
 // claims a built-in that isn't on screen.
@@ -393,6 +407,76 @@ app.appendChild(fpsMeter.element)
 showFpsCheckbox.addEventListener('change', () => {
   fpsMeter.visible = showFpsCheckbox.checked
 })
+
+// --- Cross-eye stereo --------------------------------------------------------
+//
+// The desktop's `Viewport.stereo_mode`: the whole scene is drawn twice, side by
+// side in the one canvas, and crossing your eyes fuses the pair into 3D with no
+// glasses and no headset. All of the camera maths lives in render/stereo.ts;
+// what is left here is the frame loop's split, and the three screen-space
+// gestures that have to know which half the pointer is in.
+//
+// The frame counters are read once per frame afterwards, so they have to
+// survive two render calls: three resets them at the top of every `render()`
+// unless told otherwise, which would leave the FPS panel reporting one eye.
+// Resetting once per frame here makes the readout the whole frame's cost in
+// both modes.
+renderer.info.autoReset = false
+
+const stereo = new StereoRig()
+
+/** Distance from the camera to the orbit pivot — what the separation scales. */
+function orbitDistance(): number {
+  return camera.position.distanceTo(controls.target)
+}
+
+/** This frame's screen halves, or null when drawing mono. */
+function stereoEyesNow(): [StereoEye, StereoEye] | null {
+  return stereo.eyes(window.innerWidth, orbitDistance())
+}
+
+/**
+ * Fat-line widths are pixels measured against the viewport being drawn into, so
+ * in stereo they have to be told about the half — otherwise every link and plot
+ * line renders at double its intended width. The two halves differ by at most
+ * the odd pixel; the left one stands for both.
+ */
+function applyLineResolution() {
+  const width = stereoEyesNow()?.[0].width ?? window.innerWidth
+  const pixelWidth = width * window.devicePixelRatio
+  const pixelHeight = window.innerHeight * window.devicePixelRatio
+  currentLinks?.setResolution(pixelWidth, pixelHeight)
+  currentOverlays?.setResolution(pixelWidth, pixelHeight)
+}
+
+function setStereo(on: boolean) {
+  if (stereo.enabled === on) return
+  stereo.enabled = on
+  stereoCheckbox.checked = on
+  stereoSepRow.classList.toggle('disabled', !on)
+  if (!on) {
+    // Hand the viewport back whole, and the gizmo back its ordinary camera.
+    renderer.setScissorTest(false)
+    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight)
+    gizmo.camera = camera
+  }
+  applyLineResolution()
+  status(
+    on
+      ? `Stereo 3D on — cross your eyes to fuse the pair. Eye separation ${stereo.separationPct.toFixed(1)}%. Region select is off while stereo is on.`
+      : 'Stereo 3D off.',
+  )
+}
+
+stereoCheckbox.addEventListener('change', () => setStereo(stereoCheckbox.checked))
+
+// The desktop's slider, tick for tick: 0.5–15.0% in tenths of a percent, so a
+// number set here can be read straight across to the other app.
+stereoSepSlider.addEventListener('input', () => {
+  stereo.separationPct = Number(stereoSepSlider.value) / 10
+  stereoSepValue.textContent = `${stereo.separationPct.toFixed(1)}%`
+})
+stereoSepRow.classList.add('disabled')
 
 const statusBar = document.createElement('div')
 statusBar.id = 'status-bar'
@@ -1068,10 +1152,7 @@ function rebuildScene(fitCamera: boolean) {
   currentLinks = built.links
   currentOverlays = built.overlays
   currentFrames = built.frames
-  const pixelWidth = window.innerWidth * window.devicePixelRatio
-  const pixelHeight = window.innerHeight * window.devicePixelRatio
-  currentLinks.setResolution(pixelWidth, pixelHeight)
-  currentOverlays.setResolution(pixelWidth, pixelHeight)
+  applyLineResolution()
   scene.add(currentRoot)
   // Selection halos are written in world space, so the setSelection at the end
   // of this function needs matrices that exist — a freshly built frame has
@@ -1152,7 +1233,15 @@ function fitCameraTo(root: THREE.Object3D) {
   }
   const center = box.getCenter(new THREE.Vector3())
   const sphere = box.getBoundingSphere(new THREE.Sphere())
-  const distance = Math.max(1, (sphere.radius / Math.tan((camera.fov * Math.PI) / 360)) * 1.2)
+  let distance = Math.max(1, (sphere.radius / Math.tan((camera.fov * Math.PI) / 360)) * 1.2)
+  if (stereo.enabled) {
+    // Each eye only gets half the width, so a scene framed for the full canvas
+    // spills out the sides of both halves — the desktop's `_fit_distance`
+    // halves `w` for the same reason. Pull back until the narrower axis fits.
+    const halfV = (camera.fov * Math.PI) / 360
+    const halfH = Math.atan(Math.tan(halfV) * (camera.aspect / 2))
+    distance = Math.max(distance, (sphere.radius / Math.sin(Math.min(halfV, halfH))) * 1.2)
+  }
   const dir = new THREE.Vector3(0.7, -1, 0.55).normalize()
   camera.position.copy(center).addScaledVector(dir, distance)
   camera.near = 0.001
@@ -1391,6 +1480,26 @@ function finishRubberBand(additive: boolean) {
   status(`${ids.size} node(s) in region.`)
 }
 
+/**
+ * The camera a pointer at canvas-relative `x` is looking through.
+ *
+ * Mono: the scene camera. Stereo: the eye that drew the half the pointer is in,
+ * re-projected to full-canvas coordinates so the ordinary NDC maths below still
+ * applies — the same idea as the desktop re-rendering its pick pass with the
+ * matching eye's matrices (`_pick_node`).
+ */
+function cameraForPointer(x: number): THREE.PerspectiveCamera {
+  const eyes = stereoEyesNow()
+  if (!eyes) return camera
+  return stereo.pickCamera(
+    camera,
+    eyeForX(eyes, x),
+    window.innerWidth,
+    window.innerHeight,
+    orbitDistance(),
+  )
+}
+
 function pickAt(clientX: number, clientY: number): number | null {
   if (!currentRoot) return null
   const rect = renderer.domElement.getBoundingClientRect()
@@ -1398,12 +1507,19 @@ function pickAt(clientX: number, clientY: number): number | null {
     ((clientX - rect.left) / rect.width) * 2 - 1,
     -((clientY - rect.top) / rect.height) * 2 + 1,
   )
-  raycaster.setFromCamera(ndc, camera)
+  raycaster.setFromCamera(ndc, cameraForPointer(clientX - rect.left))
   return pickNodeId(raycaster, currentRoot)
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return
+  // Region select is off in stereo, matching the desktop: one screen rectangle
+  // spans two different projections of the scene, so there is no single node
+  // set it names. Single-node picking still works in either half.
+  if (e.shiftKey && stereo.enabled && !gizmo.dragging && gizmo.axis === null) {
+    status('Region select is disabled in stereo 3D — click to select, or switch stereo off.')
+    return
+  }
   // Shift over a gizmo handle stays a gizmo drag — TransformControls owns
   // the pointer there.
   if (e.shiftKey && !gizmo.dragging && gizmo.axis === null) {
@@ -1669,6 +1785,34 @@ gizmo.setMode('translate')
 gizmo.setSpace('local')
 gizmo.setSize(0.8)
 scene.add(gizmo.getHelper())
+
+// In stereo the handles are drawn twice, once per eye, and a pointer measured
+// against the whole canvas would grab at neither. So before TransformControls
+// sees a pointer event, hand it the camera for the half the pointer is in —
+// document capture runs ahead of the canvas's own listeners, whatever order
+// they were registered in.
+//
+// Never mid-drag: the drag plane belongs to the eye the grab started in, and
+// swapping it under a moving pointer would jump the node.
+for (const type of ['pointermove', 'pointerdown'] as const) {
+  document.addEventListener(
+    type,
+    (e) => {
+      if (!stereo.enabled || gizmo.dragging) return
+      const eyes = stereoEyesNow()
+      if (!eyes) return
+      const rect = renderer.domElement.getBoundingClientRect()
+      gizmo.camera = stereo.gizmoCamera(
+        camera,
+        eyeForX(eyes, e.clientX - rect.left),
+        window.innerWidth,
+        window.innerHeight,
+        orbitDistance(),
+      )
+    },
+    true,
+  )
+}
 
 // Desktop parity (`MainWindow._gizmo_mode`, which starts at None): the modes
 // are MUTUALLY EXCLUSIVE AND OPTIONAL. Nothing is armed until a button — or
@@ -2333,14 +2477,7 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix()
   renderer.setSize(window.innerWidth, window.innerHeight)
   labels.setSize(window.innerWidth, window.innerHeight, window.devicePixelRatio)
-  currentLinks?.setResolution(
-    window.innerWidth * window.devicePixelRatio,
-    window.innerHeight * window.devicePixelRatio,
-  )
-  currentOverlays?.setResolution(
-    window.innerWidth * window.devicePixelRatio,
-    window.innerHeight * window.devicePixelRatio,
-  )
+  applyLineResolution()
 })
 
 renderer.setAnimationLoop(() => {
@@ -2361,9 +2498,12 @@ renderer.setAnimationLoop(() => {
   applyFollowTarget()
   controls.update()
   // The key light lives in eye space on the desktop, so it follows the camera
-  // the controls just moved.
+  // the controls just moved. Both stereo eyes share that camera's orientation,
+  // so one aim serves both — the light is directional and a lateral shift of
+  // the eye does not turn it.
+  const distance = orbitDistance()
   lighting.update(camera)
-  backdrop.update(camera.position.distanceTo(controls.target))
+  backdrop.update(distance)
   // Edges, plot lines and surface meshes chase the nodes they connect (gizmo
   // drags mutate frames between rebuilds), so refresh them every frame like
   // the desktop's redraw.
@@ -2374,19 +2514,47 @@ renderer.setAnimationLoop(() => {
   // the last pass's matrices. Every other way a node moves (an inspector edit,
   // a drag release) ends in a rebuildScene, whose setSelection rewrites them.
   if (nodesMoved) selection.refreshHalos()
-  renderer.render(scene, camera)
-  // After render: world matrices are the ones just drawn, so labels track
-  // gizmo drags without a scene rebuild.
-  if (currentFrames) {
-    labels.render(currentNodes, currentFrames, camera, {
-      showTags,
-      selectedOnly: tagsSelectedOnly,
-      showHidden,
-      isSelected: (id) => selection.has(id),
-      pinned: pinnedTags,
-      tagColorMode: tagStyle.mode,
-      tagColor: tagStyle.rgb,
-    })
+
+  const labelState = {
+    showTags,
+    selectedOnly: tagsSelectedOnly,
+    showHidden,
+    isSelected: (id: number) => selection.has(id),
+    pinned: pinnedTags,
+    tagColorMode: tagStyle.mode,
+    tagColor: tagStyle.rgb,
+  }
+  // Labels are painted after each render pass, so the world matrices they
+  // project are the ones just drawn (gizmo drags move frames between rebuilds).
+  const eyes = stereo.eyes(window.innerWidth, distance)
+  renderer.info.reset()
+  if (eyes) {
+    const height = window.innerHeight
+    // Scissor per half so each pass clears only its own side of the canvas —
+    // WebGL's clear obeys the scissor box, which is what lets the two eyes
+    // share one buffer without a full-frame clear wiping the first.
+    renderer.setScissorTest(true)
+    if (currentFrames) labels.clear()
+    for (const index of [0, 1] as const) {
+      const eye = eyes[index]
+      const eyeCamera = stereo.camera(camera, eye, height, distance, index)
+      renderer.setViewport(eye.x, 0, eye.width, height)
+      renderer.setScissor(eye.x, 0, eye.width, height)
+      renderer.render(scene, eyeCamera)
+      if (currentFrames) {
+        labels.paint(currentNodes, currentFrames, eyeCamera, labelState, {
+          x: eye.x,
+          y: 0,
+          width: eye.width,
+          height,
+        })
+      }
+    }
+    renderer.setScissorTest(false)
+    renderer.setViewport(0, 0, window.innerWidth, height)
+  } else {
+    renderer.render(scene, camera)
+    if (currentFrames) labels.render(currentNodes, currentFrames, camera, labelState)
   }
   // Bracket the whole loop, and read the counters after the render call so
   // they describe the frame just drawn.

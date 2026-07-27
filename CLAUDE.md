@@ -546,6 +546,69 @@ something to decide now).
       - A new scene resets the limit (desktop `set_nodes`); it otherwise
         survives every edit, which is why the scene HUD line says
         `N drawn (\ limit)` rather than leaving it to be inferred.
+   n. Cross-eye stereo 3D (shipped 2026-07-27, Jeff's request — the last
+      desktop feature this app was missing): a Stereo 3D (Cross-Eye)
+      checkbox and an Eye Separation slider in the Scene panel's world
+      group draw the scene TWICE, side by side in the one canvas, so
+      crossing your eyes fuses the pair into 3D with no glasses and no
+      headset. `src/render/stereo.ts`; the camera maths is
+      `Viewport._setup_stereo_eye_matrices` argument for argument.
+      - The screen-LEFT half gets the RIGHT eye's camera. That is what
+        makes it cross-eye rather than parallel/wall-eyed viewing, and it
+        is the whole reason the halves are not interchangeable.
+      - Both eyes SHARE one orientation — the eye is displaced along the
+        camera's own right axis and nothing is re-aimed. This is the
+        desktop's second attempt: a per-eye look-at gives each eye a
+        slightly different forward vector, and since that basis comes
+        from cross(forward, up) it destabilises differently in each eye
+        as the camera orbits toward the pole, twisting the halves against
+        each other. Convergence instead comes from an OFF-AXIS frustum
+        shifted by `-offset · near / distance`, which puts zero parallax
+        exactly at the orbit pivot and adds no vertical parallax — the
+        thing that makes a toe-in pair tiring to free-view. The shift is
+        proportional to `near`, so it is the same ANGULAR shift at this
+        app's 0.001 near plane as at the desktop's 0.1.
+      - Separation is a PERCENTAGE of the orbit distance (desktop
+        `stereo_separation_pct`), so the depth effect holds as the camera
+        zooms. The slider is the desktop's own: 0.5–15.0% in tenths,
+        default 3.0%, and live in both states so a value can be set
+        before switching the pair on — a number set here reads straight
+        across to the other app.
+      - Screen-space gestures that had to learn about the split:
+        - Picking re-projects the eye that drew the half the pointer is
+          in back onto FULL-canvas coordinates (`remapProjectionToCanvas`
+          — a plain affine squeeze folded into the projection matrix), so
+          every existing pointer-to-NDC path works unchanged. It is this
+          app's equivalent of the desktop re-rendering its colour-ID pick
+          pass with that eye's matrices (`_pick_node`).
+        - The transform gizmo is handed that same remapped camera from a
+          document-CAPTURE pointer listener, which runs ahead of
+          TransformControls' own — and never mid-drag, since the drag
+          plane belongs to the eye the grab started in. The desktop had
+          nothing to port here: its manipulation is a screen-delta drag
+          with no drawn handles, so stereo never affected it.
+        - Region select is DISABLED in stereo, desktop parity: one screen
+          rectangle spans two projections of the scene and names no
+          single node set. A Shift+drag says so in the status line rather
+          than silently doing nothing.
+      - Labels paint per eye into that eye's half (desktop
+        `_draw_tags_qpainter_stereo`), each pass carrying its own
+        500-label frame cap, as on the desktop. `placeLabels` grew a
+        viewport offset for it and `LabelOverlay` split into
+        `clear()` + `paint()`.
+      - Two things that are pixels-per-viewport, not pixels-per-canvas,
+        and would otherwise be wrong by 2×: fat-line resolution (links,
+        plot lines) follows the half; and `fitCameraTo` pulls back for
+        the halved aspect, the desktop's `_fit_distance` halving `w`.
+      - `renderer.info.autoReset` is off and the counters are reset once
+        per frame, so the FPS panel reports BOTH eyes. Stereo costs
+        exactly double the draw calls and triangles — measured on the
+        Topology example, 114 → 228 calls and 87k → 175k triangles — and
+        the readout should say so.
+      - No hotkey: the desktop's is a menu item and a checkbox with no
+        shortcut, and the free single keys are worth more to later parity
+        work. The HUD chrome (panels, FPS, status line) still spans the
+        whole canvas, exactly as the desktop's panels and status bar do.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -829,7 +892,9 @@ something to decide now).
      is 315 MB and is never shipped wholesale). Lower priority per Jeff
      (2026-07-25): folder drop and zip already let users draw from their
      own copy of the GlyphViz examples.
-8. WebXR/stereo: deliberately deferred until basic parity exists.
+8. WebXR (headset stereo): still deliberately deferred until basic parity
+   exists. The free-view cross-eye pair shipped as 6n and is a different
+   thing — one canvas, no device, no session lifecycle.
 
 ## Collaboration notes
 

@@ -139,6 +139,14 @@ export function placeLabels(
   state: LabelOverlayState,
   width: number,
   height: number,
+  /**
+   * Where this viewport's left edge sits on the canvas. Non-zero only in
+   * cross-eye stereo, where each eye projects into its own half — the desktop's
+   * `_project_tagged_nodes(mv, pr, vx, vy, vw, vh)`, whose sub-rect exists for
+   * exactly the same reason.
+   */
+  offsetX = 0,
+  offsetY = 0,
 ): LabelPlacement[] {
   const placed: LabelPlacement[] = []
   if (width === 0 || height === 0) return placed
@@ -163,8 +171,8 @@ export function placeLabels(
 
     placed.push({
       text: node.text,
-      x: Math.floor(((ndcX + 1) / 2) * width),
-      y: Math.floor((1 - (ndcY + 1) / 2) * height),
+      x: offsetX + Math.floor(((ndcX + 1) / 2) * width),
+      y: offsetY + Math.floor((1 - (ndcY + 1) / 2) * height),
       ...(perNodeColor ? { rgb: { r: node.color.r, g: node.color.g, b: node.color.b } } : {}),
     })
     return true
@@ -230,10 +238,42 @@ export class LabelOverlay {
     camera: THREE.Camera,
     state: LabelOverlayState,
   ): void {
+    this.clear()
+    this.paint(nodes, frames, camera, state)
+  }
+
+  /** Wipe the overlay. Paired with `paint` when a frame draws more than once. */
+  clear(): void {
     this.ctx.clearRect(0, 0, this.width, this.height)
     this.drawnCount = 0
+  }
 
-    const placed = placeLabels(nodes, frames, camera, state, this.width, this.height)
+  /**
+   * Paint one viewport's labels, ADDING to whatever is already on the canvas.
+   *
+   * `viewport` defaults to the whole canvas; cross-eye stereo calls this once
+   * per half, each with that half's own eye camera — the desktop's
+   * `_draw_tags_qpainter_stereo`, which likewise runs its projection pass per
+   * eye. Each pass carries its own frame cap, so a capped scene draws up to 500
+   * labels in each half, exactly as on the desktop.
+   */
+  paint(
+    nodes: readonly GvNode[],
+    frames: ReadonlyMap<number, THREE.Object3D>,
+    camera: THREE.Camera,
+    state: LabelOverlayState,
+    viewport?: { x: number; y: number; width: number; height: number },
+  ): void {
+    const placed = placeLabels(
+      nodes,
+      frames,
+      camera,
+      state,
+      viewport ? viewport.width : this.width,
+      viewport ? viewport.height : this.height,
+      viewport?.x ?? 0,
+      viewport?.y ?? 0,
+    )
     if (placed.length === 0) return
 
     // Two single-colour passes, shadow then face — the desktop's own trick for
@@ -267,6 +307,6 @@ export class LabelOverlay {
         this.ctx.fillText(p.text, p.x + LABEL_OFFSET_X, p.y)
       }
     }
-    this.drawnCount = placed.length
+    this.drawnCount += placed.length
   }
 }
