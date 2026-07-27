@@ -54,6 +54,12 @@ import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
 import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
+import {
+  DRAW_LIMIT_DOUBLE,
+  DRAW_LIMIT_HALVE,
+  drawLimitTotal,
+  nextDrawLimit,
+} from './render/drawLimit'
 import { DynamicNodes } from './render/dynamicNodes'
 import { clearMaterialCache } from './render/glyphGeometry'
 import { LabelOverlay, pinnedTagNodes } from './render/labelOverlay'
@@ -503,6 +509,9 @@ function cycleGridSelection() {
 // --- Bulk selection + visibility (desktop's Select By / Visibility groups) ---
 
 let showHidden = false
+// ANTz \ decimation: null = every node draws; a number caps the drawn set to
+// that many rows in file order. Applied at build time (src/render/drawLimit.ts).
+let drawLimit: number | null = null
 // Tag labels are off by default, matching the desktop ("press T to see labels").
 let showTags = false
 let tagsSelectedOnly = false
@@ -889,6 +898,10 @@ function loadScene(source: SceneSource) {
 
   saveTagsButton.hidden = !hasAnyLabel(currentNodes) || deriveTagFilename(currentFilename) === null
 
+  // A new scene shows everything (desktop set_nodes). Carrying a limit across
+  // loads would hide most of the file the user just opened with no clue why.
+  drawLimit = null
+
   loadChannels(source)
 
   // The old scene's textures die with it, and every cached material that
@@ -1037,7 +1050,11 @@ function loadBuiltIn(name: string) {
 
 function rebuildScene(fitCamera: boolean) {
   const prevSelected = new Set(selection.ids)
-  const built = buildScene(currentNodes, { showHidden, textures: currentTextures.byId })
+  const built = buildScene(currentNodes, {
+    showHidden,
+    textures: currentTextures.byId,
+    drawLimit,
+  })
   if (currentRoot) {
     gizmo.detach()
     selection.set(built.frames, null)
@@ -1100,7 +1117,10 @@ function rebuildScene(fitCamera: boolean) {
   const mediaCount = currentMedia?.index.entries.length ?? 0
   const notes = [
     `${currentNodes.length} node(s)`,
-    `${built.drawnCount} drawn`,
+    // Called out rather than left to be inferred from a shrunken "drawn": a
+    // limit survives every edit until it is doubled back off, and this line is
+    // the only place that says so once the status message has scrolled away.
+    drawLimit === null ? `${built.drawnCount} drawn` : `${built.drawnCount} drawn (\\ limit)`,
     ...(currentLinks.count > 0 ? [`${currentLinks.count} link edge(s)`] : []),
     ...(built.overlays.plotCount > 0 ? [`${built.overlays.plotCount} plot line(s)`] : []),
     ...(built.overlays.quadCount > 0
@@ -1513,6 +1533,10 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === '=' || e.key === '+') cyclePaletteAttribute('index', 1)
   else if (e.key === '-' || e.key === '_') cyclePaletteAttribute('index', -1)
   else if (e.key === '8') cycleRenderMode()
+  // ANTz decimation. '|' is the same physical key with Shift, which is exactly
+  // how the desktop reads it (Key_Bar is what Windows sends for Shift+\).
+  else if (e.key === '\\') adjustDrawLimit(DRAW_LIMIT_HALVE)
+  else if (e.key === '|') adjustDrawLimit(DRAW_LIMIT_DOUBLE)
   else if (e.key === 'w' || e.key === 'W') toggleGizmoMode('translate')
   else if (e.key === 'e' || e.key === 'E') toggleGizmoMode('rotate')
   else if (e.key === 'r' || e.key === 'R') toggleGizmoMode('scale')
@@ -2019,6 +2043,34 @@ function cyclePaletteAttribute(kind: 'index' | 'palette', step: number) {
     const label = kind === 'index' ? 'color index' : 'palette'
     status(`Cycled ${label} ${sign} on ${targets.length} node(s).`)
   }
+}
+
+// --- Draw limit (\ halves, Shift+\ doubles) -------------------------------------
+// Desktop _adjust_draw_limit. The arithmetic and the status wording are its own,
+// so a readout here compares directly with one read on the desktop; what differs
+// is that the cut is applied by rebuilding the scene graph rather than by
+// breaking out of a draw loop — see src/render/drawLimit.ts for why a
+// render-time `visible = false` would not have paid off.
+
+function adjustDrawLimit(factor: number) {
+  const total = drawLimitTotal(currentNodes, { showHidden })
+  if (total === 0) return status('Nothing to decimate.')
+  const next = nextDrawLimit(drawLimit, total, factor)
+  if (next === drawLimit) {
+    // Already at 1, or already showing everything.
+    return status(
+      drawLimit === null
+        ? `All ${total} nodes visible  (\\ to halve)`
+        : `Draw limit: ${drawLimit} / ${total} nodes  (Shift+\\ to double)`,
+    )
+  }
+  drawLimit = next
+  rebuildScene(false)
+  status(
+    drawLimit === null
+      ? `All ${total} nodes visible  (\\ halve · Shift+\\ double)`
+      : `Draw limit: ${drawLimit} / ${total} nodes  (\\ halve · Shift+\\ double)`,
+  )
 }
 
 // --- Scene background (B / the Background row) ----------------------------------

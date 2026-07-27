@@ -19,6 +19,7 @@ import type { GvNode } from '../gv/types'
 import { Geometry, NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { worldNodeOf } from '../gv/worldNode'
+import { drawLimitPlan } from './drawLimit'
 import { createGlyphObject, createPickProxy } from './glyphGeometry'
 import { buildLinkOverlay, LinkOverlay } from './linkOverlay'
 import { localRotationMatrix } from './rotation'
@@ -159,6 +160,14 @@ export interface BuildSceneOptions {
    * format no browser decodes, or a file the folder never supplied.
    */
   textures?: ReadonlyMap<number, THREE.Texture>
+  /**
+   * The ANTz `\` decimation cap: draw only the first N eligible nodes in file
+   * order, null for all of them. Applied HERE rather than by hiding glyphs at
+   * render time, because a hidden Object3D still costs a matrix recompute
+   * every frame — see src/render/drawLimit.ts for the measurements and for the
+   * overlay nodes that keep a bare frame past the cut.
+   */
+  drawLimit?: number | null
 }
 
 export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): SceneBuildResult {
@@ -198,6 +207,12 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     }
   }
 
+  // null when nothing is decimated, which is every scene until the \ key is
+  // pressed — the load-time path pays nothing for this.
+  const limit = drawLimitPlan(nodes, options.drawLimit ?? null, {
+    showHidden: options.showHidden,
+  })
+
   let drawnCount = 0
   // id → frame, first row wins (mirrors byId) — link endpoint resolution
   // must be O(1), never a getObjectByName scene scan.
@@ -221,6 +236,11 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     }
     visited.add(node.id)
 
+    // Past the draw limit with nothing below that needs placing: the whole
+    // subtree contributes no Object3D. `keep` is upward-closed, so one test
+    // covers it (drawLimit.ts).
+    if (limit && !limit.keep.has(node.id)) return
+
     const frame = new THREE.Object3D()
     frame.name = `gv:${node.id}`
     frame.userData.nodeId = node.id
@@ -236,7 +256,10 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     const drawable =
       !NON_VISUAL_TYPES.has(node.type) &&
       node.type !== NodeType.Link &&
-      (node.hide === 0 || options.showHidden === true)
+      (node.hide === 0 || options.showHidden === true) &&
+      // Kept-but-not-drawn nodes exist only to place an overlay endpoint or a
+      // descendant; they carry a frame and no glyph.
+      (!limit || limit.draw.has(node.id))
 
     if (drawable && node.type === NodeType.WorldGrid) {
       // Bespoke draw path: ±1-unit plate/globe scaled by the RAW node scale

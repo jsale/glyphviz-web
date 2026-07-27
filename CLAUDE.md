@@ -494,6 +494,58 @@ something to decide now).
           disposes the old one, because under the WebGL renderer
           `BufferAttribute.dispose()` only fires an event nobody listens
           to — the GL buffers are freed by the GEOMETRY's dispose.
+   m. Draw-limit decimation (shipped 2026-07-27, Jeff's request — the
+      ANTz `\` / `Shift+\` keys, and a direct check of whether this app
+      had the desktop's own bug): `\` halves the drawn node count,
+      `Shift+\` (`|`) doubles it back, null = show all. The model is the
+      desktop's `_draw_limit` exactly — a PREFIX of the eligible rows in
+      file order, not a stride, so visibility never depends on the
+      camera and the frame rate a limit buys holds still as the scene is
+      orbited. `src/render/drawLimit.ts`; the arithmetic, the denominator
+      and the status wording are `_adjust_draw_limit`'s own, so a readout
+      here compares directly with one read on the desktop.
+      - It DID have the same bug, in the platform's own dialect. The
+        desktop's first attempt bought almost nothing (700k nodes:
+        0.4 → 1.6 fps) because ~900 ms of fixed O(N) Python scans ran per
+        frame regardless of the limit; its revisit (`6f042f7`, the
+        `_SceneScan` cache) is what made it 0.4 → 229 fps. Three.js is
+        retained-mode, so the analogous trap is `glyph.visible = false`:
+        the Object3D stays in the graph and `Scene.updateMatrixWorld`
+        recomposes and re-multiplies its matrix every frame BEFORE the
+        renderer ever reads `visible`. Measured at Event_Cloud's 209k
+        (three Object3Ds per drawn node — frame, glyph, pick proxy):
+        629k objects = 93.8 ms/frame of pure CPU matrix work, and the
+        `visible = false` version floors at ~23 ms no matter how far you
+        keep halving. `matrixAutoUpdate = false` barely helps (22 ms) —
+        the recursion itself is the cost, not the compose.
+      - So the cut is applied when the graph is BUILT: nodes past it
+        contribute no Object3D at all, and every downstream per-frame
+        cost (matrix traversal, the renderer's project pass, draw calls,
+        raycasting, halo rewrites) falls with it. Measured, same scene:
+        93.8 → 50.6 → 22.2 → 12.4 → 5.8 → 2.6 → 1.4 → 0.5 → 0.2 ms over
+        eight presses, linear in the drawn count the whole way. The price
+        is a `rebuildScene` per keypress, which each press makes cheaper
+        than the last.
+      - Frames survive the cut for the nodes the overlays resolve
+        through — link endpoints, Plot/Surface parents and their children
+        — plus their ancestors, since the desktop draws those
+        irrespective of the limit (`_draw_topology_overlays` never
+        consults it). `keep` is upward-closed, so buildScene skips a
+        whole subtree on one test. Consequence: Org_Event_Network's 6,400
+        links floor it at ~2 ms / 13.7k objects instead of reaching zero,
+        and a scene whose overlays reach every node prunes nothing. That
+        is honest rather than a defect — the desktop cannot decimate
+        those either.
+      - Divergence: the desktop keeps a node selected AND pickable past
+        the cutoff ("selecting then hiding keeps the selection live").
+        A node with no frame here has nothing to hold a halo or a
+        selection membership, so the part of a selection past the cut
+        drops on the press. Changing it would mean letting
+        `Selection.set` retain frameless ids, which would also make
+        DELETED ids linger — not worth it for this.
+      - A new scene resets the limit (desktop `set_nodes`); it otherwise
+        survives every edit, which is why the scene HUD line says
+        `N drawn (\ limit)` rather than leaving it to be inferred.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
