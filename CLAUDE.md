@@ -676,19 +676,47 @@ something to decide now).
         chain four deep, a node whose own scale is under the floor,
         non-uniform scales, rotations at several levels). Verified to FAIL
         against the old formula before being kept.
-      - Known divergence this harness exposed, NOT fixed here.
-        **SCHEDULED NEXT (Jeff, 2026-07-27): "note the rod topo issue to
-        address next time around."** A node whose own `topo` is Rod (6)
-        is drawn by the desktop (`scene.py` `_bake_draw_data`) with
+      - The other divergence this harness exposed, noted then and
+        **shipped 2026-07-28**: a node whose own `topo` is Rod (6) is
+        drawn by the desktop (`scene.py` `_bake_draw_data`) with
         `_ROD_SCALE_FACTORS` (0.25, 0.25, 5.0 — `ROD_RADIUS_FACTOR` twice
         then `ROD_HEIGHT_FACTOR`, from `geometry_data.py`) and a cap
         offset `pos += M3[:, :, 2]` putting the cylinder's bottom at its
-        world origin (ANTz kNPoffsetRod). The web does neither, so a Rod
-        node draws at the wrong proportions and ~5 units out of place.
-        One node in the topology example (id 37), one in the sine wave
-        example — both built-in scenes, so it is visible immediately.
-        Add rod rows to the draw-scale fixture and re-dump; the parity
-        test then grades the port.
+        world origin (ANTz kNPoffsetRod). The web did neither, so a Rod
+        node drew at the wrong proportions and ~5 units out of place —
+        one node in the topology example (id 37), one in the sine wave
+        example, both built-in scenes, so it was visible immediately.
+        - Both live on the GLYPH, joining the floor in one
+          `applyGlyphDrawScale` (buildScene.ts) that buildScene and the
+          animation path share. The factors multiply the FLOORED scale,
+          in that order, and apply whatever geometry the row names —
+          `topo` here is the node's own, the field that otherwise only
+          places its children. The offset is `(0, 0, glyph.scale.z)` in
+          frame coordinates: the frame's third basis column is the
+          rendered Z axis before the glyph's own scale, so the shift
+          picks up every ancestor's rotation and scale exactly as
+          `M3[:, 2]` does, at any depth. A World Grid is excluded on both
+          sides (`rod & ~grids`) — its scale means extents.
+        - Nothing about a rod's CHILDREN changes: the desktop's
+          `parent_basis` carries raw rotation·scale only, and here the
+          frame children hang from is untouched. Rod child placement was
+          already right (`topology.ts`, parity-tested since 2026-07-24).
+        - Follow Selected and tag labels deliberately stay on the frame:
+          the desktop anchors both to `world_pos`, so a rod's label sits
+          at its bottom cap there too. Click picking follows the glyph on
+          both sides (its pick proxy is the glyph's child; the desktop's
+          colour-ID pass draws with the draw matrix). Region select had
+          to move to the glyph centre — the desktop sweeps by pixel and
+          catches the rod where it draws, and this app's centre
+          projection would otherwise have been testing a point 5 units
+          below the shape.
+        - The fixture gained rod rows (a rod under scaled+rotated
+          ancestors, one whose own scale is under the floor, a child off a
+          rod, a grid carrying topo 6) AND a second fixture: the real
+          Topology_Example, all 109 rows diffed glyph for glyph. The
+          hand-written fixture is what let this survive step 6p — it
+          contained no rod — so a real scene now backs it up. Both
+          verified to FAIL with the rod branch removed.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

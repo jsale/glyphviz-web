@@ -15,9 +15,8 @@
 
 import * as THREE from 'three'
 import { Topo } from '../gv/types'
-
 /** Rod topology spans 2 · ROD_HEIGHT_FACTOR · B (glyphviz_core geometry_data). */
-const ROD_HEIGHT_FACTOR = 5.0
+import { ROD_HEIGHT_FACTOR } from './glyphGeometry'
 
 const DEG = Math.PI / 180
 

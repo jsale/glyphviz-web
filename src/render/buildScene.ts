@@ -20,7 +20,12 @@ import { Geometry, NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { worldNodeOf } from '../gv/worldNode'
 import { drawLimitPlan } from './drawLimit'
-import { createGlyphObject, createPickProxy } from './glyphGeometry'
+import {
+  createGlyphObject,
+  createPickProxy,
+  ROD_HEIGHT_FACTOR,
+  ROD_RADIUS_FACTOR,
+} from './glyphGeometry'
 import { buildLinkOverlay, LinkOverlay } from './linkOverlay'
 import { localRotationMatrix } from './rotation'
 import { topoBaseRotation, topoOffset } from './topology'
@@ -304,14 +309,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
         mesh,
       })
       if (glyph) {
-        // Desktop floors the node's OWN scale at 0.2 per axis while child
-        // placement keeps the raw scale — so the correction lives on the
-        // glyph, never on the frame. An ancestor's scale plays no part.
-        glyph.scale.set(
-          drawScaleCorrection(node.scale.x),
-          drawScaleCorrection(node.scale.y),
-          drawScaleCorrection(node.scale.z),
-        )
+        applyGlyphDrawScale(glyph, node)
         glyph.name = 'glyph'
         glyph.userData.isGlyph = true
         const proxy = createPickProxy(node.geometry, mesh)
@@ -358,6 +356,45 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   })
 
   return { root, background, drawnCount, links, overlays, frames, warnings: [...warnings] }
+}
+
+/**
+ * Put a node's whole draw-matrix shape onto its glyph: the floored own scale,
+ * plus — for a Rod-topology node — the rod proportions and the cap offset.
+ *
+ * The frame already carries the raw own scale (and every ancestor's), so the
+ * glyph's local transform is exactly what `node_world_matrix` adds on top of
+ * that composition:
+ *
+ *   S_child = diag(own scale · base_scale, floored at 0.2) · rod factors
+ *   pos    += M3[:, 2]          (rod only, ANTz kNPoffsetRod)
+ *
+ * Rod is the node's OWN topo — normally the field that governs where its
+ * CHILDREN go, but the desktop reads it here too, drawing the glyph narrow
+ * (0.25×) and long (5×) whatever geometry the row names. The cap offset then
+ * slides the cylinder up its own rendered Z axis by half its drawn length, so
+ * its BOTTOM sits at the node's world origin instead of its centre. In frame
+ * coordinates that is (0, 0, glyph.scale.z): the frame's third basis column is
+ * the rendered Z axis before the glyph's own scale, so the offset picks up
+ * every ancestor's rotation and scale exactly as the desktop's M3[:, 2] does.
+ *
+ * A World Grid is excluded on both sides — its geometry is a plate or a globe
+ * and its scale means extents, so rod factors would be meaningless there.
+ * Grids take gridDrawScale instead and never reach this function.
+ */
+export function applyGlyphDrawScale(glyph: THREE.Object3D, node: GvNode): void {
+  const x = drawScaleCorrection(node.scale.x)
+  const y = drawScaleCorrection(node.scale.y)
+  const z = drawScaleCorrection(node.scale.z)
+  if (node.topo === Topo.Rod && node.type !== NodeType.WorldGrid) {
+    glyph.scale.set(x * ROD_RADIUS_FACTOR, y * ROD_RADIUS_FACTOR, z * ROD_HEIGHT_FACTOR)
+    glyph.position.set(0, 0, glyph.scale.z)
+  } else {
+    glyph.scale.set(x, y, z)
+    // Reset, not skipped: the animation path reuses one glyph across frames,
+    // and a node that stops being a rod must stop being offset.
+    glyph.position.set(0, 0, 0)
+  }
 }
 
 /**

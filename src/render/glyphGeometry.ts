@@ -14,6 +14,14 @@ export const GRID_HALF_EXTENT = 1 / Math.SQRT2 // square corners reach radius 1
 const CUBE_HALF = 1 / Math.sqrt(3) // cube verts on the unit sphere
 const CYLINDER_RADIUS = 1.0
 const CYLINDER_HEIGHT = 2.0
+/**
+ * Rod topology draws the glyph narrow and long. These are draw-matrix factors,
+ * not a geometry: the desktop multiplies a Rod-topo node's floored scale by
+ * them in `node_world_matrix` whatever geometry the node names, so a Rod sphere
+ * stretches exactly like a Rod cylinder.
+ */
+export const ROD_RADIUS_FACTOR = 0.25
+export const ROD_HEIGHT_FACTOR = 5.0
 
 export interface GlyphStyle {
   color: THREE.Color

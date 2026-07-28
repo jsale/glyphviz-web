@@ -41,7 +41,7 @@ export interface RectSelectOptions {
 }
 
 /**
- * Ids of the nodes whose world position projects inside `rect`.
+ * Ids of the nodes whose drawn centre projects inside `rect`.
  *
  * A Link (type 7) row projects the MIDPOINT of the edge it draws instead of
  * its own frame, which usually sits on top of the A-end glyph and says
@@ -99,7 +99,14 @@ export function nodeIdsInRect(
     } else {
       const frame = frames.get(node.id)
       if (!frame) continue
-      world.setFromMatrixPosition(frame.matrixWorld)
+      // The GLYPH's centre, not the frame's, for the one case where they
+      // differ: a Rod-topo node's glyph is offset half its drawn length up its
+      // own axis (buildScene.applyGlyphDrawScale), so its row position is at
+      // the bottom cap and can fall well outside a box drawn around the rod
+      // itself. The desktop sweeps by pixel and has no such gap. Every other
+      // glyph sits on its frame, so this reads the same matrix as before.
+      const glyph = frame.children.find((c) => c.userData.isGlyph)
+      world.setFromMatrixPosition((glyph ?? frame).matrixWorld)
     }
 
     view.copy(world).applyMatrix4(viewMatrix)

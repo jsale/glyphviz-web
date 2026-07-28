@@ -23,7 +23,7 @@ import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
 import { NodeType } from '../gv/types'
 import { gridDrawScale } from '../gv/worldGrid'
-import { applyFrameTransform, drawScaleCorrection } from './buildScene'
+import { applyFrameTransform, applyGlyphDrawScale } from './buildScene'
 import { setNaturalTransparency } from './renderMode'
 
 export interface DynamicSets {
@@ -154,11 +154,10 @@ export class DynamicNodes {
         glyph.scale.set(s.x, s.y, s.z)
         continue
       }
-      glyph.scale.set(
-        drawScaleCorrection(node.scale.x),
-        drawScaleCorrection(node.scale.y),
-        drawScaleCorrection(node.scale.z),
-      )
+      // Carries the Rod cap offset too, which moves with the scale it is
+      // derived from — an animated rod grows from its bottom cap, not its
+      // centre, exactly as the desktop's re-baked draw matrix does.
+      applyGlyphDrawScale(glyph, node)
     }
   }
 

@@ -162,4 +162,31 @@ describe('nodeIdsInRect', () => {
     const rect = { x1: two.x - 4, y1: two.y - 4, x2: two.x + 4, y2: two.y + 4 }
     expect([...nodeIdsInRect(nodes, frames, cam, rect, VIEWPORT)]).toEqual([2])
   })
+
+  it('sweeps a Rod-topo node in where it DRAWS, not at its bottom cap', () => {
+    // A rod's glyph is offset half its drawn length up its own axis (the ANTz
+    // cap convention), so its row position sits 5 world units below the shape
+    // on screen. The desktop's pixel pass catches the rod itself; a box drawn
+    // around the visible rod must too.
+    const nodes = [makeNode({ id: 1, topo: Topo.Rod })]
+    const { frames } = build(nodes)
+    const capScreen = screenOf(frames, cam, 1)
+    const glyph = frames.get(1)!.children.find((c) => c.userData.isGlyph)!
+    const v = new THREE.Vector3().setFromMatrixPosition(glyph.matrixWorld).project(cam)
+    const drawn = {
+      x: ((v.x + 1) / 2) * VIEWPORT.width,
+      y: ((1 - v.y) / 2) * VIEWPORT.height,
+    }
+    // Z is up the screen, so the drawn centre is well ABOVE the row position.
+    expect(drawn.y).toBeLessThan(capScreen.y - 50)
+
+    const around = (p: { x: number; y: number }) => ({
+      x1: p.x - 8,
+      y1: p.y - 8,
+      x2: p.x + 8,
+      y2: p.y + 8,
+    })
+    expect([...nodeIdsInRect(nodes, frames, cam, around(drawn), VIEWPORT)]).toEqual([1])
+    expect([...nodeIdsInRect(nodes, frames, cam, around(capScreen), VIEWPORT)]).toEqual([])
+  })
 })
