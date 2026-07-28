@@ -676,13 +676,19 @@ something to decide now).
         chain four deep, a node whose own scale is under the floor,
         non-uniform scales, rotations at several levels). Verified to FAIL
         against the old formula before being kept.
-      - Known divergence this harness exposed, NOT fixed here and worth
-        scheduling: a node whose own `topo` is Rod (6) is drawn by the
-        desktop with `_ROD_SCALE_FACTORS` (0.25, 0.25, 5.0) and a cap
-        offset putting the cylinder's bottom at its origin (ANTz
-        kNPoffsetRod). The web does neither, so a Rod node draws at the
-        wrong proportions and 5 units out of place. One node in the
-        topology example, one in the sine wave example.
+      - Known divergence this harness exposed, NOT fixed here.
+        **SCHEDULED NEXT (Jeff, 2026-07-27): "note the rod topo issue to
+        address next time around."** A node whose own `topo` is Rod (6)
+        is drawn by the desktop (`scene.py` `_bake_draw_data`) with
+        `_ROD_SCALE_FACTORS` (0.25, 0.25, 5.0 — `ROD_RADIUS_FACTOR` twice
+        then `ROD_HEIGHT_FACTOR`, from `geometry_data.py`) and a cap
+        offset `pos += M3[:, :, 2]` putting the cylinder's bottom at its
+        world origin (ANTz kNPoffsetRod). The web does neither, so a Rod
+        node draws at the wrong proportions and ~5 units out of place.
+        One node in the topology example (id 37), one in the sine wave
+        example — both built-in scenes, so it is visible immediately.
+        Add rod rows to the draw-scale fixture and re-dump; the parity
+        test then grades the port.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
