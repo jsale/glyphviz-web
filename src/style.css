@@ -181,6 +181,26 @@ canvas {
   display: none;
 }
 
+/* A file picker dressed as one of the Create panel's buttons — the mesh
+   import is an <input type=file>, but it belongs in that row visually. */
+.hud-file-button {
+  flex: 1;
+  padding: 3px 0;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  text-align: center;
+  cursor: pointer;
+  color: #cfd6e4;
+}
+
+.hud-file-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.hud-file-button input {
+  display: none;
+}
+
 #hud-save-row button {
   flex: 1;
 }

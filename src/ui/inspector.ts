@@ -23,8 +23,10 @@ import type { MediaIndex } from '../gv/media'
 import { shiftAxis } from '../gv/multiEdit'
 import type { VectorField } from '../gv/multiEdit'
 import type { GvNode, Vec3 } from '../gv/types'
-import { GEOMETRY_NAMES, NODE_TYPE_NAMES, RotationMode, TOPO_NAMES } from '../gv/types'
+import { GEOMETRY_NAMES, Geometry, NODE_TYPE_NAMES, RotationMode, TOPO_NAMES } from '../gv/types'
 import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
+import { meshChoices } from '../render/meshLibrary'
+import type { MeshLibrary } from '../render/meshLibrary'
 import { Panel } from './panel'
 
 export interface InspectorHost {
@@ -78,6 +80,8 @@ export class Inspector {
   private host: InspectorHost
   /** The loaded scene's media folder, naming the ids the texture row offers. */
   private media: MediaIndex | null = null
+  /** Imported models, which the geometry row lists below the built-in shapes. */
+  private meshes: MeshLibrary | null = null
   /** Values the translate/rotate fields are currently showing (see header). */
   private anchorTranslate: Vec3 = { x: 0, y: 0, z: 0 }
   private anchorRotate: Vec3 = { x: 0, y: 0, z: 0 }
@@ -99,6 +103,15 @@ export class Inspector {
    */
   setMedia(index: MediaIndex | null): void {
     this.media = index
+  }
+
+  /**
+   * The session's imported meshes. Held by reference, not copied: the library
+   * outlives every scene load (as the desktop's does), and an import made while
+   * a node is selected has to show up the next time the panel is built.
+   */
+  setMeshes(library: MeshLibrary): void {
+    this.meshes = library
   }
 
   /** No selection: keep the panel (and its shortcut) on screen, just empty. */
@@ -257,6 +270,44 @@ export class Inspector {
     )
   }
 
+  /**
+   * geometry: the built-in shapes, then one entry per imported mesh.
+   *
+   * Ported from the desktop's geometry combo (`_add_mesh_combo_entry`), whose
+   * mesh entries carry the `(GEO_MESH, mesh_id)` PAIR as their data — picking
+   * one has to set both fields, since geometry 23 on its own renders as the
+   * sphere fallback. Mesh (23) itself is never offered bare for that reason.
+   */
+  private geometryRow(primary: GvNode): HTMLDivElement {
+    const select = el('select')
+    select.dataset.insKey = 'geometry'
+    const ids = Object.keys(GEOMETRY_NAMES).map(Number).sort((a, b) => a - b)
+    for (const id of ids) {
+      if (id === Geometry.Mesh) continue
+      select.appendChild(el('option', { value: String(id), textContent: `${GEOMETRY_NAMES[id]} (${id})` }))
+    }
+    if (!ids.includes(primary.geometry)) {
+      select.appendChild(
+        el('option', { value: String(primary.geometry), textContent: `Unknown (${primary.geometry})` }),
+      )
+    }
+    const isMesh = primary.geometry === Geometry.Mesh
+    for (const choice of this.meshes ? meshChoices(this.meshes, isMesh ? primary.meshId : 0) : []) {
+      select.appendChild(
+        el('option', { value: `${Geometry.Mesh}:${choice.meshId}`, textContent: choice.label }),
+      )
+    }
+    select.value = isMesh ? `${Geometry.Mesh}:${primary.meshId}` : String(primary.geometry)
+    select.addEventListener('change', () => {
+      const [geometry, meshId] = select.value.split(':').map(Number)
+      this.commit((n) => {
+        n.geometry = geometry
+        if (meshId !== undefined) n.meshId = meshId
+      })
+    })
+    return row('geometry', select)
+  }
+
   private textInput(value: string, apply: (n: GvNode, v: string) => void): HTMLInputElement {
     const input = el('input', { type: 'text', value })
     input.addEventListener('change', () => this.commit((n) => apply(n, input.value)))
@@ -378,7 +429,7 @@ export class Inspector {
           width: '54px',
         }),
       ),
-      row('geometry', this.idSelect(GEOMETRY_NAMES, primary.geometry, (n, v) => (n.geometry = v))),
+      this.geometryRow(primary),
       row('topo', this.idSelect(TOPO_NAMES, primary.topo, (n, v) => (n.topo = v))),
       row(
         'ratio',

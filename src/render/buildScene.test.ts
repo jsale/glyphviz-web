@@ -268,3 +268,58 @@ describe('World Grid placement and drawing', () => {
     expect(collect([flatGrid({ geometry: Geometry.GridSolid })], 'isPickProxy')).toHaveLength(0)
   })
 })
+
+// Imported models (geometry 23). The desktop resolves mesh_id through a
+// session registry and falls back to a sphere when it names nothing loaded
+// (GeoRenderer.draw), which is the case a CSV saved with meshes always opens in.
+describe('Mesh geometry (23)', () => {
+  const meshGeometry = () => {
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3),
+    )
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3))
+    return geometry
+  }
+
+  it('draws the geometry the node’s mesh_id names', () => {
+    const geometry = meshGeometry()
+    const { root, drawnCount, warnings } = buildScene(
+      [makeNode({ geometry: Geometry.Mesh, meshId: 2 })],
+      { meshes: new Map([[2, geometry]]) },
+    )
+    expect(drawnCount).toBe(1)
+    expect(warnings).toEqual([])
+    const glyph = glyphOf(root, 1) as THREE.Mesh
+    expect(glyph.geometry).toBe(geometry)
+    // Imported files cannot be trusted to wind outward, so the desktop drops
+    // back-face culling around them — DoubleSide is that.
+    expect((glyph.material as THREE.Material).side).toBe(THREE.DoubleSide)
+  })
+
+  it('falls back to a sphere, once per id, when the mesh is not loaded', () => {
+    const { root, drawnCount, warnings } = buildScene([
+      makeNode({ id: 1, geometry: Geometry.Mesh, meshId: 3 }),
+      makeNode({ id: 2, geometry: Geometry.Mesh, meshId: 3 }),
+    ])
+    expect(drawnCount).toBe(2)
+    expect(glyphOf(root, 1)).toBeDefined()
+    // One problem with one fix, however many nodes point at it.
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('mesh_id 3')
+  })
+
+  it('picks against the mesh itself, like the desktop pick pass', () => {
+    const geometry = meshGeometry()
+    const { root } = buildScene([makeNode({ geometry: Geometry.Mesh, meshId: 1 })], {
+      meshes: new Map([[1, geometry]]),
+    })
+    const proxies: THREE.Mesh[] = []
+    root.traverse((o) => {
+      if (o.userData.isPickProxy) proxies.push(o as THREE.Mesh)
+    })
+    expect(proxies).toHaveLength(1)
+    expect(proxies[0].geometry).toBe(geometry)
+  })
+})

@@ -24,6 +24,13 @@ import {
 import type { ChannelAnimation } from './gv/channels'
 import { applyRateAnimation, rateCandidates } from './gv/rates'
 import type { MediaIndex } from './gv/media'
+import {
+  isDesktopOnlyMeshFileName,
+  isMeshFileName,
+  MESH_EXTENSIONS,
+  parseMeshFile,
+} from './gv/meshFile'
+import type { MeshData } from './gv/meshFile'
 import { parseGvNodeCsv } from './gv/nodeCsv'
 import { applyTags, deriveTagFilename, parseGvTagCsv } from './gv/tagCsv'
 import { hasAnyLabel, writeGvTagCsv } from './gv/writeTagCsv'
@@ -65,6 +72,8 @@ import {
 import { DynamicNodes } from './render/dynamicNodes'
 import { clearMaterialCache } from './render/glyphGeometry'
 import { LabelOverlay, pinnedTagNodes } from './render/labelOverlay'
+import { meshChoices, MeshLibrary } from './render/meshLibrary'
+import type { MeshAsset } from './render/meshLibrary'
 import { applyDesktopColorPipeline, SceneLighting } from './render/lighting'
 import {
   applyAudioMode,
@@ -245,6 +254,9 @@ hud.innerHTML = `
       <button id="hud-copy" title="Copy the selected node and its whole descendant subtree.&#10;Exactly one node — a partial subtree is never copied." disabled>Copy (Ctrl+C)</button>
       <button id="hud-paste" title="Paste the copied subtree with fresh ids: as a child of the selected node, or as a new root object with nothing selected." disabled>Paste (Ctrl+V)</button>
     </div>
+    <div class="hud-create-buttons">
+      <label id="hud-import-mesh" class="hud-file-button" title="Import a 3D model (.obj / .stl) as a Mesh glyph.&#10;With one node selected the model is assigned to it; with nothing selected it becomes a new object.&#10;Models can also just be dropped on the window.">Import Mesh…<input type="file" accept=".obj,.stl" multiple></label>
+    </div>
     <div class="hud-create-row"><span>Geometry</span><select id="hud-new-geo"></select></div>
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
     <div class="hud-create-row"><span>Scale</span><input id="hud-new-scale" type="number" min="0.001" step="0.1" value="1"></div>
@@ -302,6 +314,7 @@ const newGeoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-geo')!
 const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
 const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
+const importMeshInput = hud.querySelector<HTMLInputElement>('#hud-import-mesh input')!
 const copyButton = hud.querySelector<HTMLButtonElement>('#hud-copy')!
 const pasteButton = hud.querySelector<HTMLButtonElement>('#hud-paste')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
@@ -1146,6 +1159,7 @@ function rebuildScene(fitCamera: boolean) {
   const built = buildScene(currentNodes, {
     showHidden,
     textures: currentTextures.byId,
+    meshes: meshLibrary.geometries(),
     drawLimit,
   })
   if (currentRoot) {
@@ -1219,10 +1233,13 @@ function rebuildScene(fitCamera: boolean) {
     ...(labelNote ? [labelNote] : []),
     ...(mediaCount > 0 ? [`${mediaCount} media file(s)`] : []),
     ...(textureNote ? [textureNote] : []),
+    // Imported models belong to the session, not the scene, so this says how
+    // many mesh_ids there are to point a node at right now.
+    ...(meshLibrary.size > 0 ? [`${meshLibrary.size} mesh(es)`] : []),
     ...(channelNote ? [channelNote] : []),
   ]
   hudScene.textContent = `${currentDisplayName} — ${notes.join(', ')}`
-  showMessages(parseErrorLines, [...parseWarningLines, ...built.warnings])
+  showMessages(parseErrorLines, [...parseWarningLines, ...meshWarningLines, ...built.warnings])
 
   if (fitCamera) {
     setSelection(null)
@@ -1271,6 +1288,8 @@ function fitCameraTo(root: THREE.Object3D) {
 
 /** Scenes found in the last opened file set, with their files by path. */
 let openedScenes: SceneCandidate[] = []
+/** Problems reading the models a scene shipped; shown until the next load. */
+let meshWarningLines: string[] = []
 let openedFiles = new Map<string, File>()
 /** Problems with the opened file set itself; re-reported on every scene load. */
 let openWarningLines: string[] = []
@@ -1305,10 +1324,53 @@ async function readAudioCompanion(
   return { blob: file, name: file.name }
 }
 
+/**
+ * Load the models a scene folder ships with, if it ships any.
+ *
+ * The web-only half of the mesh story: `mesh_id` names a file only through
+ * import order on the desktop, so a scene saved there cannot say which model a
+ * node meant. A scene folder that carries its own .obj/.stl files gets ids by
+ * sorted name (bundle.ts findMeshFiles), which is reproducible — so such a
+ * scene reopens looking the same.
+ *
+ * A scene WITHOUT models leaves the library alone, matching the desktop, where
+ * imported meshes live on the viewport and outlive every scene load: import a
+ * model, then open a CSV that references mesh_id 1, and it draws.
+ */
+async function loadSceneMeshes(scene: SceneCandidate) {
+  meshWarningLines = []
+  if (scene.meshPathById.size === 0) return
+
+  // Parse everything BEFORE touching the library: clear() disposes geometries
+  // the scene on screen is still drawing, and each parse is an await, so doing
+  // it as we go would leave the live scene holding disposed buffers for as many
+  // frames as the reads take.
+  const parsed: Array<[number, string, MeshData]> = []
+  for (const [meshId, path] of scene.meshPathById) {
+    const file = openedFiles.get(path)
+    if (!file) continue
+    try {
+      parsed.push([meshId, path, parseMeshFile(file.name, await file.arrayBuffer())])
+    } catch (err: unknown) {
+      // The id stays reserved either way, exactly as an undecodable image keeps
+      // its texture_id — otherwise one broken file renumbers every model after
+      // it and the scene's own mesh_ids stop meaning anything.
+      meshWarningLines.push(
+        `Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  meshLibrary.clear()
+  for (const [meshId, path, data] of parsed) meshLibrary.add(path, data, meshId)
+  refreshMeshMenus()
+}
+
 async function loadSceneCandidate(scene: SceneCandidate) {
   const nodeFile = openedFiles.get(scene.nodePath)
   if (!nodeFile) return
   try {
+    await loadSceneMeshes(scene)
     const nodeText = await nodeFile.text()
     const readText = async (path: string | null) => {
       const file = path ? openedFiles.get(path) : undefined
@@ -1358,6 +1420,14 @@ async function openFileSet(dropped: PathedFile[]) {
     openWarningLines = expanded.warnings
   }
 
+  // A drop of nothing but model files is a mesh import, not a failed scene
+  // open — dragging a .stl onto the window is the shortest path to the desktop
+  // Meshes menu's job, and there is no scene here to replace.
+  if (files.length > 0 && files.every((f) => isMeshFileName(f.file.name))) {
+    importMeshFilesSafely(files.map((f) => ({ file: f.file, source: normalizePath(f.path) })))
+    return
+  }
+
   openedFiles = new Map(files.map((f) => [normalizePath(f.path), f.file]))
   openedScenes = findScenes(files.map((f) => f.path))
 
@@ -1371,11 +1441,17 @@ async function openFileSet(dropped: PathedFile[]) {
   }
 
   if (openedScenes.length === 0) {
+    // A model in a format only the desktop reads is the one "nothing here"
+    // case with a specific answer, so say which file and what to do about it.
+    const desktopOnly = files.filter((f) => isDesktopOnlyMeshFileName(f.file.name))
     showMessages(
       [
         files.length === 0
           ? 'Nothing to open.'
-          : `No gv_node.csv found in ${files.length} file(s). Drop a scene folder, a scene .zip, or the node CSV itself.`,
+          : desktopOnly.length === files.length
+            ? `${desktopOnly.map((f) => f.file.name).join(', ')}: desktop GlyphViz reads this through ` +
+              `trimesh, but the web app parses only ${MESH_EXTENSIONS.join(' / ')}. Export as .obj or .stl.`
+            : `No gv_node.csv found in ${files.length} file(s). Drop a scene folder, a scene .zip, or the node CSV itself.`,
       ],
       openWarningLines,
     )
@@ -2071,7 +2147,10 @@ for (const [names, select, defaultId] of [
   [TOPO_NAMES, newTopoSelect, NEW_OBJECT_DEFAULTS.topo],
 ] as const) {
   for (const id of Object.keys(names).map(Number).sort((a, b) => a - b)) {
-    if (id === Geometry.Mesh && names === GEOMETRY_NAMES) continue // needs an imported mesh
+    // Mesh (23) is never offered bare — it means nothing without a mesh_id, so
+    // each imported model gets its own entry instead (refreshMeshMenus below,
+    // and the desktop's own _add_mesh_combo_entry).
+    if (id === Geometry.Mesh && names === GEOMETRY_NAMES) continue
     const option = document.createElement('option')
     option.value = String(id)
     option.textContent = `${names[id]} (${id})`
@@ -2080,12 +2159,31 @@ for (const [names, select, defaultId] of [
   select.value = String(defaultId)
 }
 
+/** Re-list the imported meshes in the New Object Defaults geometry menu. */
+function refreshMeshMenus(): void {
+  for (const option of [...newGeoSelect.options]) {
+    if (option.value.includes(':')) option.remove()
+  }
+  for (const choice of meshChoices(meshLibrary)) {
+    newGeoSelect.appendChild(
+      Object.assign(document.createElement('option'), {
+        value: `${Geometry.Mesh}:${choice.meshId}`,
+        textContent: choice.label,
+      }),
+    )
+  }
+}
+
 function readNewObjectDefaults(): NewObjectDefaults {
   const s = Number(newScaleInput.value)
   const scale = Number.isFinite(s) && s > 0 ? s : 1
   const hex = newColorInput.value // "#rrggbb"
+  // Mesh entries carry the (geometry, mesh_id) pair, like the desktop combo's
+  // item data — picking one has to set both.
+  const [geometry, meshId] = newGeoSelect.value.split(':').map(Number)
   return {
-    geometry: Number(newGeoSelect.value),
+    geometry,
+    meshId: meshId ?? 0,
     topo: Number(newTopoSelect.value),
     scale: { x: scale, y: scale, z: scale },
     color: {
@@ -2199,6 +2297,115 @@ function refreshClipboardUi() {
 
 copyButton.addEventListener('click', copySelection)
 pasteButton.addEventListener('click', pasteClipboard)
+
+// --- Imported meshes (.obj / .stl) ---------------------------------------------
+// Ported from the desktop's Meshes > Import Mesh File… (_import_mesh_file),
+// including its target rule, which is Paste's: exactly one node selected →
+// the model is assigned to it (geometry 23 + mesh_id); nothing selected → the
+// model arrives as a new root object; more than one selected → nothing, and
+// the status line says why.
+//
+// Ids are handed out in import order and live only in this session, exactly as
+// there — the CSV stores the id and nothing else. Two web-only additions:
+// files can be DROPPED on the window, and a scene folder that ships its own
+// models has them loaded with it (loadSceneMeshes).
+
+const meshLibrary = new MeshLibrary()
+inspector.setMeshes(meshLibrary)
+
+/**
+ * Desktop `_import_mesh_file`'s new-object row: type 5, grey, scale 5 — and
+ * topo 0, which is the one place it does NOT take the New Object Defaults
+ * panel's topology (that path passes `topo=0` literally).
+ */
+const MESH_NODE_DEFAULTS: NewObjectDefaults = {
+  geometry: Geometry.Mesh,
+  topo: Topo.None,
+  scale: { x: 5, y: 5, z: 5 },
+  color: { r: 200, g: 200, b: 200, a: 255 },
+}
+
+async function readMeshFile(file: File, source: string): Promise<MeshAsset | string> {
+  try {
+    return meshLibrary.add(source, parseMeshFile(file.name, await file.arrayBuffer()))
+  } catch (err: unknown) {
+    // The desktop reports the exception on its status bar and imports nothing.
+    return `Mesh import failed (${file.name}): ${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+/**
+ * Import model files and put them into the scene.
+ *
+ * The desktop picks ONE file, so its target rule needs generalizing: with a
+ * node selected, the first model is assigned to it and any further ones become
+ * new objects — which is what a single file already did in both cases.
+ */
+async function importMeshFiles(files: Array<{ file: File; source: string }>) {
+  if (files.length === 0) return
+  if (selection.size > 1) {
+    return status('Select exactly one node (or none) as the mesh import target.')
+  }
+  const target = selectedNode()
+  const failures: string[] = []
+  const imported: MeshAsset[] = []
+  for (const { file, source } of files) {
+    const result = await readMeshFile(file, source)
+    if (typeof result === 'string') failures.push(result)
+    else imported.push(result)
+  }
+
+  refreshMeshMenus()
+  if (imported.length === 0) {
+    showMessages(failures, [])
+    return
+  }
+
+  const created: number[] = []
+  for (const [i, asset] of imported.entries()) {
+    if (i === 0 && target) {
+      // Assign in place, like the desktop: the node keeps its position,
+      // scale, colour and children, and only its shape changes.
+      target.geometry = Geometry.Mesh
+      target.meshId = asset.id
+      continue
+    }
+    const node = createRootNode(currentNodes, { ...MESH_NODE_DEFAULTS, meshId: asset.id })
+    currentNodes.push(node)
+    created.push(node.id)
+  }
+
+  rebuildScene(false)
+  if (created.length > 0) setSelection(new Set(created))
+  const names = imported.map((a) => `'${a.name}' (id ${a.id})`).join(', ')
+  const triangles = imported.reduce((sum, a) => sum + a.triangles, 0)
+  // Files really do carry NaN facets (a VTK-written isosurface in Jeff's
+  // examples folder has 6,929), and dropping them silently — which is what the
+  // desktop's trimesh does — reads as the model being incomplete.
+  const dropped = imported.reduce((sum, a) => sum + a.dropped, 0)
+  const droppedNote =
+    dropped > 0 ? ` ${dropped.toLocaleString()} triangle(s) with NaN coordinates were skipped.` : ''
+  status(
+    (target
+      ? `Assigned mesh ${names} to node ${target.id}. ${triangles.toLocaleString()} triangle(s).` +
+        (created.length > 0 ? ` ${created.length} further model(s) added as new objects.` : '')
+      : `Imported mesh ${names} as ${created.length} new object(s), ` +
+        `${triangles.toLocaleString()} triangle(s).`) + droppedNote,
+  )
+  if (failures.length > 0) showMessages(failures, [])
+}
+
+function importMeshFilesSafely(files: Array<{ file: File; source: string }>): void {
+  void importMeshFiles(files).catch((err: unknown) =>
+    showMessages([`Could not import the model(s): ${String(err)}`], []),
+  )
+}
+
+importMeshInput.addEventListener('change', () => {
+  const files = [...(importMeshInput.files ?? [])].map((file) => ({ file, source: file.name }))
+  importMeshInput.value = ''
+  importMeshFilesSafely(files)
+})
 
 // --- ANTz attribute cycling (J = topology, O = geometry) ------------------------
 // Desktop parity — the rules live in src/gv/attrCycle.ts. The step applies PER

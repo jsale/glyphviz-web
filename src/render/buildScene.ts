@@ -161,6 +161,13 @@ export interface BuildSceneOptions {
    */
   textures?: ReadonlyMap<number, THREE.Texture>
   /**
+   * Imported models, mesh_id → geometry (src/render/meshLibrary.ts). A
+   * geometry-23 node whose id is absent here draws the desktop's sphere
+   * fallback — the ids are import order and live only in this session, so a
+   * scene can easily name one nothing has supplied.
+   */
+  meshes?: ReadonlyMap<number, THREE.BufferGeometry>
+  /**
    * The ANTz `\` decimation cap: draw only the first N eligible nodes in file
    * order, null for all of them. Applied HERE rather than by hiding glyphs at
    * render time, because a hidden Object3D still costs a matrix recompute
@@ -223,6 +230,23 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   const textureFor = (node: GvNode): THREE.Texture | undefined =>
     node.textureId > 0 ? options.textures?.get(node.textureId) : undefined
 
+  // A Mesh node whose id names nothing loaded still draws (as a sphere, like
+  // the desktop) — but it is worth saying so, because the mapping lives only in
+  // this session and "import the file" is the fix.
+  const meshFor = (node: GvNode): THREE.BufferGeometry | undefined => {
+    if (node.geometry !== Geometry.Mesh) return undefined
+    const geometry = options.meshes?.get(node.meshId)
+    if (!geometry) {
+      // Keyed on the id, not the node: a scene can point thousands of glyphs
+      // at one missing model, and that is one problem with one fix.
+      warnings.add(
+        `mesh_id ${node.meshId} is not loaded — those nodes draw as a sphere. ` +
+          'Import the model file to see it.',
+      )
+    }
+    return geometry
+  }
+
   const attach = (
     node: GvNode,
     parent: THREE.Object3D,
@@ -271,11 +295,13 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
       frame.add(glyph)
       drawnCount++
     } else if (drawable) {
+      const mesh = meshFor(node)
       const glyph = createGlyphObject(node.geometry, {
         color: new THREE.Color(node.color.r / 255, node.color.g / 255, node.color.b / 255),
         opacity: node.color.a / 255,
         ratio: node.ratio,
         map: textureFor(node),
+        mesh,
       })
       if (glyph) {
         // Desktop floors the node's OWN scale at 0.2 per axis while child
@@ -288,7 +314,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
         )
         glyph.name = 'glyph'
         glyph.userData.isGlyph = true
-        const proxy = createPickProxy(node.geometry)
+        const proxy = createPickProxy(node.geometry, mesh)
         if (proxy) glyph.add(proxy)
         frame.add(glyph)
         drawnCount++

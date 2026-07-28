@@ -26,6 +26,12 @@ export interface NewObjectDefaults {
   topo: number
   scale: Vec3
   color: Rgba
+  /**
+   * Which imported model a `geometry` of 23 (Mesh) draws. The desktop's
+   * geometry combo carries the same `(GEO_MESH, mesh_id)` pair, and
+   * `_new_object_defaults` returns both.
+   */
+  meshId?: number
 }
 
 /** Desktop panel defaults: solid octahedron, Point topology, grey. */
@@ -61,7 +67,7 @@ function blankNode(id: number, d: NewObjectDefaults): GvNode {
     ratio: 0.1,
     subspace: 0,
     textureId: 0,
-    meshId: 0,
+    meshId: d.meshId ?? 0,
     // Fresh nodes are Euler like the desktop's Node dataclass default; only
     // files *loaded* without a rotation_mode column get HTR (asymmetric rule).
     rotationMode: RotationMode.EulerXYZ,

@@ -10,8 +10,9 @@
 // which also expands a dropped .zip into that same flat list (src/io/zip.ts) so
 // an archive resolves identically to the folder it was made from.
 
-import { buildMediaIndex } from './media'
+import { buildMediaIndex, compareMediaNames } from './media'
 import type { MediaIndex } from './media'
+import { isMeshFileName } from './meshFile'
 import { deriveTagFilename } from './tagCsv'
 
 export interface SceneCandidate {
@@ -34,6 +35,11 @@ export interface SceneCandidate {
   channelTracksPath: string | null
   /** `<anything>_gv_audio.txt` manifest, for audio-synced Channels playback. */
   audioManifestPath: string | null
+  /**
+   * Imported models the scene ships, mesh_id → path. See `findMeshFiles` for
+   * where they are looked for and why this convention is the web app's own.
+   */
+  meshPathById: Map<number, string>
 }
 
 /** Normalize a path to forward slashes with no leading './' or '/'. */
@@ -98,6 +104,44 @@ function looksLikeNodeCsv(name: string): boolean {
 
 function looksLikeTagCsv(name: string): boolean {
   return isCsv(name) && stemOf(name).toLowerCase().endsWith('tag')
+}
+
+/** Sub-folders a scene's imported models may live in, besides the folder itself. */
+const MESH_DIRS = ['mesh', 'meshes', 'models']
+
+/**
+ * Imported models shipped with a scene: any .obj/.stl next to the node CSV or
+ * in a `mesh/`, `meshes/` or `models/` sub-folder, given mesh_ids 1..N in
+ * sorted-name order.
+ *
+ * This convention is the WEB APP'S OWN. The desktop hands out mesh_ids in
+ * import order within a session and persists nothing but the id, so a scene
+ * saved there with mesh_id 2 has no way to say which file that was. Sorting by
+ * name is what makes a scene folder reopen the same way twice — the rule
+ * `media/` → texture_id already follows, down to the case-insensitive
+ * comparison (see compareMediaNames).
+ */
+export function findMeshFiles(paths: readonly string[], dir: string): Map<number, string> {
+  const prefix = dir === '' ? '' : dir + '/'
+  const found: Array<{ name: string; path: string }> = []
+  for (const path of paths) {
+    const lower = path.toLowerCase()
+    if (!lower.startsWith(prefix.toLowerCase())) continue
+    const rest = path.slice(prefix.length)
+    const slash = rest.indexOf('/')
+    if (slash !== -1) {
+      // One level down, and only into a mesh folder — a sub-SCENE's models
+      // belong to that scene, not to this one.
+      const sub = rest.slice(0, slash).toLowerCase()
+      const leaf = rest.slice(slash + 1)
+      if (!MESH_DIRS.includes(sub) || leaf.includes('/')) continue
+      if (isMeshFileName(leaf)) found.push({ name: leaf, path })
+    } else if (isMeshFileName(rest)) {
+      found.push({ name: rest, path })
+    }
+  }
+  found.sort((a, b) => compareMediaNames(a.name, b.name) || compareMediaNames(a.path, b.path))
+  return new Map(found.map((f, i) => [i + 1, f.path]))
 }
 
 /**
@@ -182,6 +226,7 @@ export function findScenes(rawPaths: readonly string[]): SceneCandidate[] {
       channelMapPath: maps.length === 1 ? prefix + maps[0] : null,
       channelTracksPath: tracks.length === 1 ? prefix + tracks[0] : null,
       audioManifestPath: audio.length === 1 ? prefix + audio[0] : null,
+      meshPathById: findMeshFiles(paths, dir),
     }
   })
 

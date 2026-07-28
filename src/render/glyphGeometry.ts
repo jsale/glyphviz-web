@@ -28,6 +28,12 @@ export interface GlyphStyle {
    * never textured (the desktop's `geo_id not in _WIRE_IDS` guard).
    */
   map?: THREE.Texture
+  /**
+   * Geometry for an imported Mesh (23) node — the node's `mesh_id` resolved
+   * through the MeshLibrary. Absent when the id names nothing loaded, which
+   * draws the desktop's sphere fallback (GeoRenderer.draw).
+   */
+  mesh?: THREE.BufferGeometry
 }
 
 function starShape(points = 5, innerRatio = 0.382): THREE.Shape {
@@ -182,6 +188,20 @@ function styleKey(style: GlyphStyle, kind: string, extra: string | number = ''):
   }|${extra}`
 }
 
+/**
+ * An imported mesh with no texture coordinates takes no map.
+ *
+ * The desktop never textures a mesh at all — `mesh_loader` keeps only
+ * vertices/faces/normals and `register_mesh` emits no glTexCoord, so a
+ * textured mesh node draws one flat texel there. Honouring the UVs a file
+ * DOES carry is strictly better and is what the texture row already promises;
+ * a file with none would otherwise smear a single texel over the whole model,
+ * which reads as the colour being wrong.
+ */
+function meshStyle(style: GlyphStyle): GlyphStyle {
+  return style.mesh?.hasAttribute('uv') ? style : { ...style, map: undefined }
+}
+
 function cachedMaterial<T extends THREE.Material>(key: string, build: () => T): T {
   const hit = materialCache.get(key)
   if (hit) return hit as T
@@ -224,10 +244,22 @@ function wireMaterial(style: GlyphStyle): THREE.Material {
 
 /**
  * Build a renderable object for a node's `geometry` id at unit scale, or
- * null when the id has no renderer yet (Mesh 23, Line 27, Prism 28, unknown
- * ids) — the caller reports those.
+ * null when the id has no renderer yet (Line 27, Prism 28, unknown ids) — the
+ * caller reports those.
+ *
+ * Mesh (23) draws `style.mesh`, or falls back to a sphere when the node's
+ * mesh_id names nothing loaded, exactly as the desktop's GeoRenderer.draw
+ * does ("no mesh loaded yet — fall back like other unknown ids").
  */
 export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.Object3D | null {
+  if (geometryId === Geometry.Mesh) {
+    if (!style.mesh) return createGlyphObject(Geometry.SphereSolid, { ...style, mesh: undefined })
+    // Double-sided because an imported file cannot be trusted to share the
+    // procedural shapes' outward-CCW winding — the desktop's own reason for
+    // its glDisable(GL_CULL_FACE) around the mesh display list.
+    return new THREE.Mesh(style.mesh, solidMaterial(meshStyle(style), true))
+  }
+
   if (geometryId === Geometry.Point) {
     // Desktop draws a GL_POINTS sprite whose pixel size is ratio × 20
     // (min 1), immune to node scale — sizeAttenuation: false matches that.
@@ -325,11 +357,21 @@ const POINT_PICK_RADIUS = 0.15
  * has no renderer yet. Attach as a child of the glyph so it inherits the
  * draw-scale correction.
  */
-export function createPickProxy(geometryId: number): THREE.Object3D | null {
+export function createPickProxy(
+  geometryId: number,
+  mesh?: THREE.BufferGeometry,
+): THREE.Object3D | null {
   const solidId = WIRE_TO_SOLID[geometryId] ?? geometryId
 
   let proxy: THREE.Object3D | null = null
-  if (solidId === Geometry.Point) {
+  if (solidId === Geometry.Mesh) {
+    // The desktop's pick pass draws the mesh itself (`mesh_id=node.mesh_id`),
+    // so an imported model is clicked where it is actually seen — and falls
+    // back to the same sphere the visible glyph does.
+    proxy = mesh
+      ? new THREE.Mesh(mesh, PICK_MATERIAL)
+      : new THREE.Mesh(cached(solidCache, String(Geometry.SphereSolid), SOLID_BUILDERS[Geometry.SphereSolid]), PICK_MATERIAL)
+  } else if (solidId === Geometry.Point) {
     const geo = cached(solidCache, 'pointPick', () => new THREE.SphereGeometry(POINT_PICK_RADIUS, 8, 6))
     proxy = new THREE.Mesh(geo, PICK_MATERIAL)
   } else if (solidId === Geometry.PinSolid) {

@@ -987,6 +987,70 @@ something to decide now).
        `File` handles). Capped at 1 GB expanded / 20k entries, which
        also defuses a zip bomb. Corpus scene folders top out near 48 MB;
        the 93 MB five-scene Global_Terrorism_Example zip opens fine.
+   - ~~Imported meshes~~ (shipped 2026-07-28, Jeff's request): geometry
+     23 (Mesh) now draws an imported .obj/.stl, and models can be
+     imported IN the web app, not merely referenced by a CSV.
+     `src/gv/meshFile.ts` parses (pure data, no THREE — testable in plain
+     node), `src/render/meshLibrary.ts` holds the session's registry.
+     - The parse reproduces what the desktop's `mesh_loader.py` gets out
+       of trimesh, which is more than the file says. `load(force='mesh')`
+       runs `process=True`, so THREE things happen before GlyphViz's own
+       normalization: duplicate vertices MERGE (an STL has none shared,
+       so this is what makes it a connected surface), faces with NaN/∞
+       coordinates are REMOVED (`remove_infinite_values`), and
+       `vertex_normals` is the ANGLE-WEIGHTED mean of adjacent face
+       normals over the merged vertices. So a desktop STL glyph is
+       smooth-shaded and its own facet normals never reach the screen —
+       both reproduced here. Then GlyphViz's own step: centre on the AABB
+       centre, divide by the farthest vertex, so a model composes with
+       scale_x/y/z exactly like every built-in glyph ("fits within radius
+       ~1").
+       - The NaN pass is not defensive programming: Jeff's own
+         `isosurface2.stl` (VTK-written) has 6,929 such facets out of
+         32,828, and ONE left in makes the bounding box NaN and the whole
+         model disappear. The count is reported on import, where the
+         desktop drops them silently.
+     - No loader dependency. Three ships STLLoader/OBJLoader, but neither
+       merges vertices, so both would flat-shade an STL where the desktop
+       is smooth — the divergence is in exactly the part an addon would
+       own. Same call the CSV tokenizer and the zip reader made.
+     - Rendering: `GlyphStyle.mesh`, resolved in buildScene from
+       `BuildSceneOptions.meshes`. DoubleSide, because the desktop drops
+       back-face culling around a mesh display list (an imported file
+       cannot be trusted to wind outward). A mesh_id nothing has supplied
+       draws the desktop's SPHERE fallback — the state every CSV saved
+       with meshes reopens in — with one warning per id, not per node.
+       Picking is against the mesh itself, like the desktop's pick pass.
+     - Import (desktop `_import_mesh_file`, Meshes ▸ Import Mesh File…):
+       the target rule is Paste's — exactly one node selected → the model
+       is assigned to it (geometry 23 + mesh_id, everything else kept);
+       nothing selected → a new root object (type 5, scale 5, grey, and
+       topo 0, the one path that does NOT take the New Object Defaults
+       topology); more than one → refused with a reason. Web-only: the
+       picker takes several files (the first lands on the selection, the
+       rest become objects), and a drop of nothing but models imports
+       instead of failing as a scene open.
+     - Ids are import order and session-scoped, as there — the CSV
+       carries the id and nothing else, so the library OUTLIVES a scene
+       load (import a model, then open a CSV that names mesh_id 1).
+       Re-importing the same file reuses its id and re-reads it.
+     - The one invented convention: a scene folder MAY ship its own
+       models (next to the node CSV, or in `mesh/`/`meshes/`/`models/`),
+       and those take ids 1..N by sorted name — the same rule `media/` →
+       texture_id already follows, and the only way a mesh_id can mean
+       the same thing twice. Such a scene REPLACES the library; a scene
+       without models leaves it alone. Worth mirroring on the desktop,
+       which today cannot reopen its own mesh scenes.
+     - Divergence: a mesh takes the node's `texture_id` when the file
+       carries UVs (boid1.obj does). The desktop never textures a mesh at
+       all — `mesh_loader` keeps no texture coordinates and `register_mesh`
+       emits no `glTexCoord` — but the texture row already promises this,
+       and a file with no UVs is still left untextured rather than
+       smearing one texel over the model.
+     - PLY/GLB/GLTF are refused BY NAME ("desktop GlyphViz reads this
+       through trimesh… export as .obj or .stl") rather than as unknown
+       formats: the desktop accepts them, so a user meeting a refusal
+       here needs to know which side is missing it.
    - Remaining: a curated set of hosted example folders (agreed
      2026-07-25, textures downscaled to ~2048px — the full examples tree
      is 315 MB and is never shipped wholesale). Lower priority per Jeff

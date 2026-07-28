@@ -152,3 +152,42 @@ describe('findScenes', () => {
     expect(scenes[0].mediaPathById.get(1)).toBe('A/Media/Earth.PNG')
   })
 })
+
+// Imported models: a web-only convention (the desktop's mesh_ids are import
+// order within one session and name no file), so ids come from the sorted file
+// name — the same rule media/ → texture_id already follows.
+describe('mesh files in a scene folder', () => {
+  it('numbers a mesh/ folder 1..N by sorted name', () => {
+    const scenes = findScenes([
+      'Ship/Ship_gv_node.csv',
+      'Ship/mesh/hull.stl',
+      'Ship/mesh/Antenna.obj',
+      'Ship/mesh/readme.txt',
+    ])
+    expect([...scenes[0].meshPathById]).toEqual([
+      [1, 'Ship/mesh/Antenna.obj'], // case-insensitive, so A before h
+      [2, 'Ship/mesh/hull.stl'],
+    ])
+  })
+
+  it('also takes models sitting next to the node CSV', () => {
+    const scenes = findScenes(['Ship/Ship_gv_node.csv', 'Ship/hull.obj'])
+    expect(scenes[0].meshPathById.get(1)).toBe('Ship/hull.obj')
+  })
+
+  it('leaves a sub-scene’s models to the sub-scene', () => {
+    const scenes = findScenes([
+      'Parent/Parent_gv_node.csv',
+      'Parent/Child/Child_gv_node.csv',
+      'Parent/Child/mesh/part.obj',
+    ])
+    const parent = scenes.find((s) => s.nodePath === 'Parent/Parent_gv_node.csv')!
+    const child = scenes.find((s) => s.nodePath === 'Parent/Child/Child_gv_node.csv')!
+    expect(parent.meshPathById.size).toBe(0)
+    expect(child.meshPathById.get(1)).toBe('Parent/Child/mesh/part.obj')
+  })
+
+  it('is empty for a scene that ships none', () => {
+    expect(findScenes(TIME_REPLAY)[0].meshPathById.size).toBe(0)
+  })
+})
