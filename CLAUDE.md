@@ -648,6 +648,41 @@ something to decide now).
         cross browser tabs. Writing the subtree to the system clipboard as
         CSV would, and is the obvious later step; it is not what the
         desktop does and was not part of this ask.
+   p. Draw-scale floor fix + draw-matrix parity (2026-07-27, Jeff's bug
+      report against 6o): a hyperglyph pasted onto a small child rendered
+      far too big, and each further paste made it worse — the desktop's
+      copies shrink with every nesting level, the web's did not.
+      - Cause: the 0.2 render floor was applied to the ACCUMULATED world
+        scale. The desktop applies it to each node's OWN scale, exactly
+        once — `node_world_matrix`'s
+        `S_child = diag(own scale · base_scale, floored at 0.2)`, with
+        `parent_basis` carrying the ancestors' raw scales under no floor
+        at all. So an ancestor chain shrinks a descendant without limit,
+        while the web's version stopped shrinking at 0.2 and inflated
+        every deeply nested glyph. Four levels of scale 0.3 should draw
+        at 0.3⁴ = 0.0081; it drew at 0.2, 24× too large.
+      - `drawScaleCorrection` now takes the node's own axis scale. Two
+        consequences fell out: buildScene no longer threads a cumulative
+        scale down the recursion, and DynamicNodes registers only the
+        animated node itself rather than walking its whole subtree —
+        a descendant's correction cannot depend on an ancestor any more.
+      - Why the existing parity harness missed it: `parity.test.ts` diffs
+        `compute_world_transforms`' world position and RAW world basis,
+        and neither base_scale nor the floor exists at that layer. They
+        appear only in the draw matrix. `tools/dump_draw_matrices.py` now
+        dumps `Scene.node_draw_data`'s 4×4 per node and
+        `src/render/drawMatrix.parity.test.ts` diffs the whole matrix at
+        1e-9 over a fixture built to the bug report's shape (a 0.3-scaled
+        chain four deep, a node whose own scale is under the floor,
+        non-uniform scales, rotations at several levels). Verified to FAIL
+        against the old formula before being kept.
+      - Known divergence this harness exposed, NOT fixed here and worth
+        scheduling: a node whose own `topo` is Rod (6) is drawn by the
+        desktop with `_ROD_SCALE_FACTORS` (0.25, 0.25, 5.0) and a cap
+        offset putting the cylinder's bottom at its origin (ANTz
+        kNPoffsetRod). The web does neither, so a Rod node draws at the
+        wrong proportions and 5 units out of place. One node in the
+        topology example, one in the sine wave example.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -824,7 +859,8 @@ something to decide now).
        entry per frame. A map swap skips `needsUpdate` unless the
        null-ness changes (only that flips USE_MAP), which is what makes
        a flip-book affordable. An animated scale re-derives the 0.2
-       draw floor on the node's glyph AND every descendant's.
+       draw floor on that node's own glyph — and on nobody else's,
+       since the floor is per node (see 6p).
      - Playback (`src/ui/channelsPanel.ts` + main.ts): frame slider,
        Play/Pause (Space), Stop (Shift+Space), FPS 1–30 default 30,
        Loop default on, Alt+C collapses the panel. A `_gv_audio.txt`

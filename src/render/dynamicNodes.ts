@@ -52,7 +52,6 @@ interface AppearanceEntry {
 
 interface ScaleEntry {
   node: GvNode
-  frame: THREE.Object3D
   glyph: THREE.Object3D
 }
 
@@ -100,13 +99,12 @@ export class DynamicNodes {
         if (entry) this.appearances.push(entry)
       }
       if (sets.scaled.has(node.id)) {
-        // The floor applies to CUMULATIVE world scale, so an animated scale
-        // changes the correction on this node's glyph and on every descendant's.
-        for (const descendant of subtree(node, childrenOf, byId)) {
-          const dFrame = frames.get(descendant.id)
-          const glyph = dFrame?.getObjectByName('glyph')
-          if (dFrame && glyph) this.scales.push({ node: descendant, frame: dFrame, glyph })
-        }
+        // The floor is on the node's OWN scale (buildScene.drawScaleCorrection),
+        // so an animated scale changes the correction on this node's glyph and
+        // on nobody else's — descendants shrink with it through the frame chain
+        // and need no rewrite. Their placement is already carried by the frame.
+        const glyph = frame.getObjectByName('glyph')
+        if (glyph) this.scales.push({ node, glyph })
       }
     }
   }
@@ -150,17 +148,16 @@ export class DynamicNodes {
       }
     }
 
-    for (const { node, frame, glyph } of this.scales) {
+    for (const { node, glyph } of this.scales) {
       if (node.type === NodeType.WorldGrid) {
         const s = gridDrawScale(node)
         glyph.scale.set(s.x, s.y, s.z)
         continue
       }
-      const cumulative = cumulativeScale(frame)
       glyph.scale.set(
-        drawScaleCorrection(cumulative.x),
-        drawScaleCorrection(cumulative.y),
-        drawScaleCorrection(cumulative.z),
+        drawScaleCorrection(node.scale.x),
+        drawScaleCorrection(node.scale.y),
+        drawScaleCorrection(node.scale.z),
       )
     }
   }
@@ -174,35 +171,6 @@ export class DynamicNodes {
     this.appearances = []
     this.scales = []
   }
-}
-
-/** A node and every descendant, in a stable order. */
-function subtree(
-  root: GvNode,
-  childrenOf: ReadonlyMap<number, GvNode[]>,
-  byId: ReadonlyMap<number, GvNode>,
-): GvNode[] {
-  const out: GvNode[] = []
-  const seen = new Set<number>()
-  const stack = [root]
-  while (stack.length > 0) {
-    const node = stack.pop()!
-    if (seen.has(node.id) || byId.get(node.id) !== node) continue
-    seen.add(node.id)
-    out.push(node)
-    const children = childrenOf.get(node.id)
-    if (children) for (let i = children.length - 1; i >= 0; i--) stack.push(children[i])
-  }
-  return out
-}
-
-/** Product of a frame's own scale and every ancestor's, up to the scene root. */
-function cumulativeScale(frame: THREE.Object3D): THREE.Vector3 {
-  const scale = new THREE.Vector3(1, 1, 1)
-  for (let o: THREE.Object3D | null = frame; o !== null; o = o.parent) {
-    scale.multiply(o.scale)
-  }
-  return scale
 }
 
 /**

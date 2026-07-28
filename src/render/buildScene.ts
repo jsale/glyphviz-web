@@ -227,7 +227,6 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     node: GvNode,
     parent: THREE.Object3D,
     parentGv: GvNode | null,
-    parentCumScale: THREE.Vector3,
     visited: Set<number>,
   ): void => {
     if (visited.has(node.id)) {
@@ -249,8 +248,6 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     // identity base rotation), matching the engine's is_root handling.
     applyFrameTransform(frame, node, parentGv)
     parent.add(frame)
-
-    const cumScale = parentCumScale.clone().multiply(frame.scale)
 
     // Links draw as overlay edges (below), never as a glyph at their frame.
     const drawable =
@@ -281,13 +278,13 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
         map: textureFor(node),
       })
       if (glyph) {
-        // Desktop floors the *drawn* world scale at 0.2 per axis while child
+        // Desktop floors the node's OWN scale at 0.2 per axis while child
         // placement keeps the raw scale — so the correction lives on the
-        // glyph, never on the frame.
+        // glyph, never on the frame. An ancestor's scale plays no part.
         glyph.scale.set(
-          drawScaleCorrection(cumScale.x),
-          drawScaleCorrection(cumScale.y),
-          drawScaleCorrection(cumScale.z),
+          drawScaleCorrection(node.scale.x),
+          drawScaleCorrection(node.scale.y),
+          drawScaleCorrection(node.scale.z),
         )
         glyph.name = 'glyph'
         glyph.userData.isGlyph = true
@@ -301,14 +298,13 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     }
 
     for (const child of childrenOf.get(node.id) ?? []) {
-      attach(child, frame, node, cumScale, visited)
+      attach(child, frame, node, visited)
     }
   }
 
   const visited = new Set<number>()
-  const unit = new THREE.Vector3(1, 1, 1)
   for (const node of roots) {
-    attach(node, root, null, unit, visited)
+    attach(node, root, null, visited)
   }
 
   const links = buildLinkOverlay(nodes, frames, root, (m) => warnings.add(m))
@@ -339,13 +335,25 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
 }
 
 /**
- * Ratio to apply on the glyph so its drawn world scale respects the floor.
- * Shared with the animation path, which re-derives it when a channel or a
- * scale_rate changes an ancestor's scale (src/render/dynamicNodes.ts).
+ * Ratio to apply on the glyph so its drawn scale respects the floor.
+ *
+ * The floor is on the node's OWN scale × base_scale, applied exactly once —
+ * `node_world_matrix`'s `S_child = diag(this node's own scale * base_scale,
+ * floored at 0.2)`. It is NOT a floor on the accumulated world scale: an
+ * ancestor chain keeps shrinking a descendant without limit, which is what
+ * makes a hyperglyph pasted onto a small child render small. Flooring the
+ * cumulative product instead (what this did until 2026-07-27) halts the shrink
+ * at 0.2 and inflates every deeply nested glyph — visible as pasted children
+ * overwhelming the parent they were pasted onto.
+ *
+ * Because the frame already carries the raw own scale, the glyph's job is only
+ * to turn that into the floored one. Nothing about an ancestor enters here,
+ * which is why the animation path re-derives it for a node whose OWN scale
+ * changed and no longer walks descendants (src/render/dynamicNodes.ts).
  */
-export function drawScaleCorrection(cumAxisScale: number): number {
-  const world = cumAxisScale * BASE_SCALE
-  if (Math.abs(world) < 1e-12) return 1 // degenerate frame; nothing recoverable
-  const floored = Math.max(world, RENDER_SCALE_FLOOR)
-  return floored / world
+export function drawScaleCorrection(ownAxisScale: number): number {
+  // A zero-scale axis leaves nothing to multiply back up: the desktop draws
+  // such a node at the 0.2 floor, this draws it flat. Degenerate either way.
+  if (Math.abs(ownAxisScale) < 1e-12) return 1
+  return Math.max(ownAxisScale * BASE_SCALE, RENDER_SCALE_FLOOR) / ownAxisScale
 }

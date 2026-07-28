@@ -190,7 +190,7 @@ describe('DynamicNodes', () => {
     dynamic.dispose()
   })
 
-  it('re-derives the draw-scale floor on a scaled node and its descendants', () => {
+  it('re-derives the draw-scale floor from the animated node\'s OWN scale', () => {
     const nodes = scene({ scale_x: 1, scale_y: 1, scale_z: 1 }, { parent_id: 1, branch_level: 1 })
     const built = buildScene(nodes)
     const dynamic = new DynamicNodes(
@@ -199,14 +199,20 @@ describe('DynamicNodes', () => {
       { ...NO_SETS, transform: new Set([1]), scaled: new Set([1]) },
       new Map(),
     )
+    const parentGlyph = built.frames.get(1)!.getObjectByName('glyph')!
     const childGlyph = built.frames.get(2)!.getObjectByName('glyph')!
+    expect(parentGlyph.scale.x).toBeCloseTo(1, 12)
     expect(childGlyph.scale.x).toBeCloseTo(1, 12)
 
-    // Shrinking the PARENT drops the child's cumulative world scale under the
-    // 0.2 floor, so the child's glyph correction has to grow to compensate.
+    // Its own scale under the floor raises its own correction...
     nodes[0].scale = { x: 0.05, y: 0.05, z: 0.05 }
     dynamic.update()
-    expect(childGlyph.scale.x).toBeCloseTo(RENDER_SCALE_FLOOR / 0.05, 10)
+    expect(parentGlyph.scale.x).toBeCloseTo(RENDER_SCALE_FLOOR / 0.05, 10)
+    // ...and leaves the CHILD's alone. The floor is per node (desktop
+    // node_world_matrix's S_child), never on the accumulated world scale, so
+    // the child simply shrinks with its parent through the frame chain.
+    // Compensating here is what made deeply nested glyphs balloon.
+    expect(childGlyph.scale.x).toBeCloseTo(1, 12)
     dynamic.dispose()
   })
 
