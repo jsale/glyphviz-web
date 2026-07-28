@@ -830,3 +830,110 @@ canvas {
   pointer-events: none;
   user-select: none;
 }
+
+/* --- Hyperglyph Generator (floating window) -------------------------------
+   The only non-docked chrome in the app. It is draggable and resizable
+   because it is a tool you work WITH a scene through — generate, look at the
+   result behind it, insert, generate again — which is what the desktop's
+   QDialog gives and a fixed panel in the left column would not. */
+
+.float-window {
+  position: fixed;
+  top: 72px;
+  left: 340px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  height: 620px;
+  min-width: 260px;
+  min-height: 260px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
+  /* resize needs a non-visible overflow; the body scrolls inside it. */
+  overflow: hidden;
+  resize: both;
+  border: 1px solid #2a3040;
+  border-radius: 8px;
+  background: rgba(10, 12, 20, 0.92);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  color: #d8dce6;
+  font: 12px/1.5 system-ui, sans-serif;
+  user-select: none;
+}
+
+.float-window-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  padding: 7px 4px 7px 12px;
+  border-bottom: 1px solid #2a3040;
+  border-radius: 8px 8px 0 0;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: move;
+  touch-action: none;
+}
+
+.float-window-title {
+  flex: 1;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.float-window-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 12px 10px;
+  overflow-y: auto;
+}
+
+.float-window-action {
+  width: 100%;
+  margin-top: 8px;
+  padding: 4px 0;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+.float-window-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.float-window-action:disabled {
+  color: #6c7488;
+  cursor: default;
+}
+
+.float-window-footer {
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+/* The preview takes whatever height is left, with a floor matching the
+   desktop's 280px minimum — below that a 5-level design is unreadable. */
+.hyperglyph-preview {
+  flex: 1 1 auto;
+  min-height: 200px;
+  margin-top: 8px;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+  overflow: hidden;
+  /* The preview has its own orbit controls; the drag must not select text. */
+  touch-action: none;
+}
+
+.hyperglyph-preview canvas {
+  width: 100%;
+  height: 100%;
+}
+
+#hyperglyph-window .hud-create-row span {
+  flex: 0 0 86px;
+}

@@ -51,7 +51,13 @@ export function nextNodeId(nodes: readonly GvNode[]): number {
   return max + 1
 }
 
-function blankNode(id: number, d: NewObjectDefaults): GvNode {
+/**
+ * A fresh row carrying the desktop `Node` dataclass's own field defaults, with
+ * only the four the New Object Defaults panel controls taken from `d`. Shared
+ * (rather than re-stated) by everything that mints nodes — creation, the World
+ * row, the Hyperglyph Generator — so "what a new node starts as" has one home.
+ */
+export function blankNode(id: number, d: NewObjectDefaults): GvNode {
   return {
     id,
     type: NodeType.Glyph,

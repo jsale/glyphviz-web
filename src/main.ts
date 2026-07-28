@@ -6,8 +6,9 @@ import { cycleGeometry, cycleTargets, cycleTopology } from './gv/attrCycle'
 import { cycleColorIndex, cyclePalette, PALETTE_NAMES } from './gv/colorPalette'
 import { copySubtree, pasteSubtree } from './gv/clipboard'
 import type { Clipboard } from './gv/clipboard'
-import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/createNode'
+import { createChildNode, createRootNode, nextNodeId, NEW_OBJECT_DEFAULTS } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
+import { buildHyperglyphNodes } from './gv/hyperglyph'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
 import type { DragMode, DragSnapshot } from './gv/multiEdit'
 import { findScenes, normalizePath, resolveRelative } from './gv/bundle'
@@ -98,6 +99,7 @@ import type { StereoEye } from './render/stereo'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { FpsMeter } from './ui/fpsMeter'
+import { HyperglyphWindow } from './ui/hyperglyphWindow'
 import { Inspector } from './ui/inspector'
 import { NodeTable } from './ui/nodeTable'
 import { PANEL_MODE_EVENT, Panel } from './ui/panel'
@@ -257,6 +259,9 @@ hud.innerHTML = `
     <div class="hud-create-buttons">
       <label id="hud-import-mesh" class="hud-file-button" title="Import a 3D model (.obj / .stl) as a Mesh glyph.&#10;With one node selected the model is assigned to it; with nothing selected it becomes a new object.&#10;Models can also just be dropped on the window.">Import Mesh…<input type="file" accept=".obj,.stl" multiple></label>
     </div>
+    <div class="hud-create-buttons">
+      <button id="hud-hyperglyph" title="Procedurally generate a randomized multi-level hyperglyph from a branch-level count and a node budget, preview it, and drop it into the scene.&#10;The same seed produces the same design in desktop GlyphViz.">Hyperglyph… (Ctrl+H)</button>
+    </div>
     <div class="hud-create-row"><span>Geometry</span><select id="hud-new-geo"></select></div>
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
     <div class="hud-create-row"><span>Scale</span><input id="hud-new-scale" type="number" min="0.001" step="0.1" value="1"></div>
@@ -315,6 +320,7 @@ const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
 const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
 const importMeshInput = hud.querySelector<HTMLInputElement>('#hud-import-mesh input')!
+const hyperglyphButton = hud.querySelector<HTMLButtonElement>('#hud-hyperglyph')!
 const copyButton = hud.querySelector<HTMLButtonElement>('#hud-copy')!
 const pasteButton = hud.querySelector<HTMLButtonElement>('#hud-paste')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
@@ -1687,6 +1693,10 @@ window.addEventListener('keydown', (e) => {
     } else if (key === 'p') inspector.panel.cycle()
     else if (key === 'e') selectionPanel.panel.cycle()
     else if (key === 'b') scenePanel.cycle()
+    // The desktop's own chord for Tools ▸ Hyperglyph Generator…. Unlike Ctrl+N
+    // it IS interceptable, so it needs no Alt substitute; the Create panel's
+    // button is the way in if a browser ever disagrees.
+    else if (key === 'h') hyperglyphWindow.toggle()
     else if (typing) return
     else if (key === 'a') selectAllToggle()
     else if (key === 'i') selectionCommands.invertSelection()
@@ -2298,6 +2308,45 @@ function refreshClipboardUi() {
 copyButton.addEventListener('click', copySelection)
 pasteButton.addEventListener('click', pasteClipboard)
 
+// --- Hyperglyph Generator (Ctrl+H) ---------------------------------------------
+// Ported from the desktop's Tools ▸ Hyperglyph Generator… dialog. The design
+// engine is src/gv/hyperglyph.ts (seed-for-seed identical to the desktop's —
+// see hyperglyph.parity.test.ts); the window and its live preview are
+// src/ui/hyperglyphWindow.ts. What is here is only the insertion, which is
+// `_insert_into_scene`'s own rule.
+
+const hyperglyphWindow = new HyperglyphWindow({
+  insert(design) {
+    // Desktop `_insert_into_scene`: the PRIMARY selected node is the parent —
+    // `_selected_nodes[0]`, which is row order here as everywhere else — and
+    // with nothing selected the design arrives as a new root object. Note the
+    // trunk keeps the recipe's own translate (0, 0, 0) rather than being
+    // offset like a pasted subtree, so inserting onto a parent lands it at
+    // that parent's origin. That is the desktop's behaviour, and it is what
+    // makes an inserted hyperglyph read as belonging to the node it was
+    // dropped on.
+    const parent = selectedNodes()[0] ?? null
+    const nodes = buildHyperglyphNodes(design, {
+      startId: nextNodeId(currentNodes),
+      parentId: parent ? parent.id : 0,
+      baseBranchLevel: parent ? parent.branchLevel + 1 : 0,
+    })
+    if (nodes.length === 0) return
+    currentNodes.push(...nodes)
+    rebuildScene(false)
+    // The desktop selects the TRUNK, not the whole subtree — which is what
+    // makes a second insertion nest under the first, and what leaves the gizmo
+    // on the one node that moves the design as a unit.
+    setSelection(nodes[0].id)
+    status(
+      `Hyperglyph Generator: inserted ${nodes.length} nodes ` +
+        `(parent=${parent ? parent.id : 0}, ids ${nodes[0].id}-${nodes[nodes.length - 1].id})`,
+    )
+  },
+})
+app.appendChild(hyperglyphWindow.element)
+hyperglyphButton.addEventListener('click', () => hyperglyphWindow.toggle())
+
 // --- Imported meshes (.obj / .stl) ---------------------------------------------
 // Ported from the desktop's Meshes > Import Mesh File… (_import_mesh_file),
 // including its target rule, which is Paste's: exactly one node selected →
@@ -2829,4 +2878,12 @@ renderer.setAnimationLoop(() => {
   // Bracket the whole loop, and read the counters after the render call so
   // they describe the frame just drawn.
   fpsMeter.frame(now, performance.now(), renderer.info.render)
+
+  // The Hyperglyph Generator's preview is a second renderer on its own canvas,
+  // driven from this same clock rather than a second animation loop — a closed
+  // window costs one boolean test, and its idle-motion spin runs off the same
+  // dt the scene's rates do. Deliberately outside the fps bracket above: that
+  // readout is about the scene, and the desktop's counter measures its main
+  // viewport only.
+  hyperglyphWindow.renderFrame(dtMs)
 })

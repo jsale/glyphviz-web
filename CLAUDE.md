@@ -1079,6 +1079,67 @@ something to decide now).
        through trimesh… export as .obj or .stl") rather than as unknown
        formats: the desktop accepts them, so a user meeting a refusal
        here needs to know which side is missing it.
+   - ~~Hyperglyph Generator~~ (shipped 2026-07-28, Jeff's request): a port
+     of desktop Tools ▸ Hyperglyph Generator… (`hyperglyph_dialog.py` +
+     the slice of `hyperglyph_lab/hyperglyph_generator.py` it uses).
+     Ctrl+H — the desktop's own chord, and unlike Ctrl+N it IS
+     interceptable — or a Create-panel button opens a FLOATING window:
+     parameters, Regenerate, a live 3D preview, Insert into Scene.
+     - It is the app's only non-docked chrome, and deliberately so.
+       Jeff asked for the desktop's interaction specifically: a window
+       you drag aside, generate a few designs in, and drop the one you
+       like into the scene behind it. A docked panel would have to be
+       dismissed to see the result of using it. Modeless where the
+       desktop is `exec()`-modal — its Insert already edits the live
+       scene, so modality buys nothing there and costs the ability to
+       move the camera between insertions here.
+     - The preview is a SECOND WebGLRenderer on its own canvas, reusing
+       buildScene + the app's lighting rig, driven from the main
+       animation loop rather than a second rAF. It integrates rates, so
+       Idle Motion actually spins. Its materials are CLONED out of the
+       shared cache — `clearMaterialCache()` on scene load would
+       otherwise dispose materials the preview is still drawing with.
+     - `src/gv/pythonRandom.ts` is the load-bearing part: CPython's
+       Mersenne Twister plus the exact `random.Random` wrappers
+       (genrand_res53, top-k-bits `getrandbits`, `_randbelow`'s REJECTION
+       loop). The desktop's whole model is "Seed + Max Nodes + Branch
+       Levels determine the design, always", so a seed that named a
+       different hyperglyph here would be meaningless to write down.
+       `Math.floor(random() * n)` is not a shortcut — it consumes a
+       different number of draws and desynchronises the rest of the
+       design. Vectors dumped from CPython pin it.
+     - `src/gv/glyphRecipe.ts` (the LevelSpec/GlyphRecipe model, shared
+       with the desktop's Glyph Composer) and `src/gv/hyperglyph.ts` (the
+       design vocabulary: 6 geometry families, 6 hue schemes, the node
+       budget). The ORDER of the rng calls in `randomRecipe` is the
+       specification, not an implementation detail — hoisting a draw out
+       of the conditional that guards it repoints every existing seed.
+     - Parity: `tools/dump_hyperglyphs.py` runs the REAL desktop
+       generator; `hyperglyph.parity.test.ts` diffs 12 designs / 5,236
+       nodes field for field (verified to FAIL when two adjacent rng
+       draws are swapped). Also checked end to end against
+       `dump_world_transforms.py` for a generated design: the desktop
+       renders the same sprawling shape, to float32.
+     - Desktop BUG found and reported: `pick_level_counts` calls
+       `randint(max(2, guess - 2), min(12, guess + 2))` where
+       `guess = round(max_nodes ** (1/depth))`, so a shallow tree with a
+       real budget is an EMPTY RANGE and the dialog raises ValueError —
+       every 2-level design over ~14 nodes, every 3-level one over ~196.
+       Branch Levels 2 or 3 at the default 500 simply does not work
+       there. The web clamps the low end to the high one, which only
+       fires where the desktop cannot generate at all, so no seed's
+       design changes.
+     - Divergence, inherited rather than chosen: idle motion depends on
+       ABSOLUTE branch level (it skips level 0 and alternates by depth),
+       so a design inserted UNDER a selected node gets a spinning trunk
+       and different rates than the same seed inserted at the root.
+       Shape, colour and geometry are identical either way. Arguably
+       right — the counter-rotation is against the ring the node
+       actually hangs from.
+     - Not ported: `generate_batch`, the ratings CSV and
+       `mutate_recipe`'s explore/exploit loop. Those belong to the
+       standalone `hyperglyph_lab/` CLI/notebook, which writes files and
+       learns from Jeff's hand-entered scores — a different tool.
    - Remaining: a curated set of hosted example folders (agreed
      2026-07-25, textures downscaled to ~2048px — the full examples tree
      is 315 MB and is never shipped wholesale). Lower priority per Jeff
