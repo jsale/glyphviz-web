@@ -1144,6 +1144,84 @@ something to decide now).
        `mutate_recipe`'s explore/exploit loop. Those belong to the
        standalone `hyperglyph_lab/` CLI/notebook, which writes files and
        learns from Jeff's hand-entered scores — a different tool.
+   - ~~Glyph Composer~~ (shipped 2026-07-28, Jeff's request): a port of
+     desktop Tools ▸ Glyph Composer… (`glyph_composer_dialog.py`), the
+     hand-built counterpart to the Hyperglyph Generator's rolled one.
+     Ctrl+G — the desktop's own chord, and interceptable — or a
+     Create-panel button opens a second FLOATING window: a branch-level
+     list with Add/Remove, a parameter form for the selected level, a
+     live preview, template Save/Load, and Insert into Scene.
+     - The recipe MODEL was already here: `generateNodes` /`LevelSpec` /
+       `GlyphRecipe` shipped with the Generator, which randomizes exactly
+       what this dialog edits. What this added to `glyphRecipe.ts` is the
+       dialog's own pieces — `ROOT_DIST_MODES` / `NONROOT_DIST_MODES` /
+       `DIST_LABELS`, `defaultRecipe()`, `addedLevelSpec()` (the "+ Add
+       Level" defaults, which are NOT the dataclass defaults), and the
+       template JSON.
+     - Templates are the desktop's `recipe_to_dict` file exactly —
+       snake_case keys, colours as arrays, `color_end: null` for a solid
+       level — because a .json written by either app has to open in the
+       other. That is the only route a design takes between the two.
+       Unknown keys are ignored and missing ones take the dataclass
+       default, matching `recipe_from_dict`'s `.get(...)` reads, so a
+       template from an older or newer build still loads. A file that is
+       not a recipe at all is REFUSED and reported rather than replacing
+       the design in progress with an empty one.
+     - Two pieces were factored OUT of `hyperglyphWindow.ts` rather than
+       copied: `ui/floatWindow.ts` (the draggable/resizable/closable
+       frame) and `ui/glyphPreview.ts` (the second WebGLRenderer, its
+       material privatisation, and its rate integration). The Generator
+       now sits on both, so the app has one floating-window behaviour and
+       one preview renderer, not two of each. The desktop drops a whole
+       second `Viewport` widget into each dialog for the same reason.
+     - Divergences, all platform rather than behaviour except the last:
+       - LAYOUT. The desktop is a 900×700 dialog with a splitter (levels
+         left, form right). A floating window in a browser viewport is
+         narrow, so the same pieces STACK in the desktop's own
+         top-to-bottom reading order. Nothing added, nothing removed.
+       - ALPHA. `<input type="color">` has no alpha channel where
+         QColorDialog is opened with ShowAlphaChannel, so each colour
+         gets its own 0–255 field beside the swatch. Recipes carry RGBA
+         either way, so a template still round-trips.
+       - LIVE BINDING. Every control writes its own field the moment it
+         changes, where the desktop reads its widgets back in one
+         `_save_params` pass — a design whose own module docstring is a
+         note about the stale-QWidget crash it caused. There is no save
+         pass to forget here and no widget that can outlive its spec.
+       - PREVIEW CAMERA (a real behaviour choice, and the simplest
+         default rather than a ported one). It HOLDS position across
+         re-previews. The desktop's `_do_preview` calls
+         `Viewport.set_nodes`, which resets `_cam_target`/`_cam_distance`
+         and rebuilds `_cameras` — right for loading a scene, the job it
+         was written for, but here it fires 350 ms after every keystroke,
+         so an orbited preview snaps back the moment a value is nudged
+         and a scale or spacing change cannot be judged against the view
+         it was made in. A Fit View button puts the desktop's behaviour
+         one click away, and the first preview of a design always frames
+         it.
+     - Insert is `_insert_into_scene`, which the two dialogs share almost
+       line for line: the PRIMARY selected node is the parent (row order,
+       as everywhere), nothing selected means a new root object, the
+       trunk keeps the recipe's own (0,0,0) rather than being offset like
+       a pasted subtree, and the TRUNK alone is selected afterwards — so
+       a second insertion nests under the first.
+     - Parity: `tools/dump_glyph_recipes.py` runs the REAL desktop
+       `generate_nodes` and `recipe_to_dict`;
+       `src/gv/glyphRecipe.parity.test.ts` diffs 13 recipes / 169 nodes
+       field for field and round-trips every template. The Generator's
+       harness already covered `generate_nodes`, but only over recipes it
+       can PRODUCE (Angular and Linear, a narrow slice of the ranges) —
+       these are deliberately the cases it cannot reach: Circular / Grid
+       / Random placement, a ragged grid, solid vs gradient colour (one
+       truncates, the other rounds half-to-EVEN), a count of 1 where the
+       gradient's denominator would divide by zero, and four levels of
+       nesting. Verified to FAIL against a `ceil`→`floor` grid slip and
+       against half-up gradient rounding.
+     - Small fix that came with it: viewport single-key commands now
+       stand down while focus is inside a tool window. Browsers focus a
+       button on click, so a Space meant to re-press Preview Now would
+       otherwise also reach the viewport and toggle Channels playback.
+       The Generator had the same latent problem.
    - Remaining: a curated set of hosted example folders (agreed
      2026-07-25, textures downscaled to ~2048px — the full examples tree
      is 315 MB and is never shipped wholesale). Lower priority per Jeff

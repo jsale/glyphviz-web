@@ -8,6 +8,7 @@ import { copySubtree, pasteSubtree } from './gv/clipboard'
 import type { Clipboard } from './gv/clipboard'
 import { createChildNode, createRootNode, nextNodeId, NEW_OBJECT_DEFAULTS } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
+import { generateNodes } from './gv/glyphRecipe'
 import { buildHyperglyphNodes } from './gv/hyperglyph'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
 import type { DragMode, DragSnapshot } from './gv/multiEdit'
@@ -99,6 +100,7 @@ import type { StereoEye } from './render/stereo'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { FpsMeter } from './ui/fpsMeter'
+import { GlyphComposerWindow } from './ui/glyphComposerWindow'
 import { HyperglyphWindow } from './ui/hyperglyphWindow'
 import { Inspector } from './ui/inspector'
 import { NodeTable } from './ui/nodeTable'
@@ -261,6 +263,7 @@ hud.innerHTML = `
     </div>
     <div class="hud-create-buttons">
       <button id="hud-hyperglyph" title="Procedurally generate a randomized multi-level hyperglyph from a branch-level count and a node budget, preview it, and drop it into the scene.&#10;The same seed produces the same design in desktop GlyphViz.">Hyperglyph… (Ctrl+H)</button>
+      <button id="hud-composer" title="Build a hierarchical glyph by hand, one branch level at a time — count, geometry, topology, placement, transform and colour — with a live preview.&#10;Templates are the same .json desktop GlyphViz reads and writes.">Composer… (Ctrl+G)</button>
     </div>
     <div class="hud-create-row"><span>Geometry</span><select id="hud-new-geo"></select></div>
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
@@ -321,6 +324,7 @@ const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
 const importMeshInput = hud.querySelector<HTMLInputElement>('#hud-import-mesh input')!
 const hyperglyphButton = hud.querySelector<HTMLButtonElement>('#hud-hyperglyph')!
+const composerButton = hud.querySelector<HTMLButtonElement>('#hud-composer')!
 const copyButton = hud.querySelector<HTMLButtonElement>('#hud-copy')!
 const pasteButton = hud.querySelector<HTMLButtonElement>('#hud-paste')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
@@ -1674,8 +1678,17 @@ renderer.domElement.addEventListener('dblclick', (e) => {
   controls.update()
 })
 window.addEventListener('keydown', (e) => {
-  const tag = document.activeElement?.tagName
-  const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA'
+  const focused = document.activeElement
+  const tag = focused?.tagName
+  // A focused BUTTON inside a tool window counts too: browsers focus a button
+  // on click, so a Space or Enter meant to re-press it would otherwise also
+  // reach the viewport and toggle Channels playback. Panels do not need this —
+  // their buttons act on the scene, which is where those keys belong.
+  const typing =
+    tag === 'INPUT' ||
+    tag === 'SELECT' ||
+    tag === 'TEXTAREA' ||
+    (focused instanceof HTMLElement && focused.closest('.float-window') !== null)
 
   // Panel cycling is a window command and fires even mid-edit; the selection
   // chords stand down while a field has focus, so Ctrl+A there still means
@@ -1693,10 +1706,12 @@ window.addEventListener('keydown', (e) => {
     } else if (key === 'p') inspector.panel.cycle()
     else if (key === 'e') selectionPanel.panel.cycle()
     else if (key === 'b') scenePanel.cycle()
-    // The desktop's own chord for Tools ▸ Hyperglyph Generator…. Unlike Ctrl+N
-    // it IS interceptable, so it needs no Alt substitute; the Create panel's
-    // button is the way in if a browser ever disagrees.
+    // The desktop's own chords for Tools ▸ Hyperglyph Generator… and
+    // Tools ▸ Glyph Composer…. Unlike Ctrl+N both ARE interceptable, so neither
+    // needs an Alt substitute; the Create panel's buttons are the way in if a
+    // browser ever disagrees.
     else if (key === 'h') hyperglyphWindow.toggle()
+    else if (key === 'g') composerWindow.toggle()
     else if (typing) return
     else if (key === 'a') selectAllToggle()
     else if (key === 'i') selectionCommands.invertSelection()
@@ -2347,6 +2362,39 @@ const hyperglyphWindow = new HyperglyphWindow({
 app.appendChild(hyperglyphWindow.element)
 hyperglyphButton.addEventListener('click', () => hyperglyphWindow.toggle())
 
+// --- Glyph Composer (Ctrl+G) ---------------------------------------------------
+// Ported from the desktop's Tools ▸ Glyph Composer… dialog, down to its own
+// chord. The recipe model and node generator are src/gv/glyphRecipe.ts (shared
+// with the Hyperglyph Generator, and diffed against the desktop's own
+// `generate_nodes` in glyphRecipe.parity.test.ts); the window is
+// src/ui/glyphComposerWindow.ts. What is here is only the insertion, which is
+// `_insert_into_scene`'s rule — the SAME rule the Generator's is, since both
+// dialogs share that method almost line for line.
+
+const composerWindow = new GlyphComposerWindow({
+  insert(recipe) {
+    const parent = selectedNodes()[0] ?? null
+    const nodes = generateNodes(recipe, {
+      startId: nextNodeId(currentNodes),
+      parentId: parent ? parent.id : 0,
+      baseBranchLevel: parent ? parent.branchLevel + 1 : 0,
+    })
+    if (nodes.length === 0) return
+    currentNodes.push(...nodes)
+    rebuildScene(false)
+    // The TRUNK, not the whole subtree — so a second insertion nests under the
+    // first and the gizmo lands on the one node that moves the glyph as a unit.
+    setSelection(nodes[0].id)
+    status(
+      `Glyph Composer: inserted ${nodes.length} nodes ` +
+        `(parent=${parent ? parent.id : 0}, ids ${nodes[0].id}-${nodes[nodes.length - 1].id})`,
+    )
+  },
+  status,
+})
+app.appendChild(composerWindow.element)
+composerButton.addEventListener('click', () => composerWindow.toggle())
+
 // --- Imported meshes (.obj / .stl) ---------------------------------------------
 // Ported from the desktop's Meshes > Import Mesh File… (_import_mesh_file),
 // including its target rule, which is Paste's: exactly one node selected →
@@ -2879,11 +2927,12 @@ renderer.setAnimationLoop(() => {
   // they describe the frame just drawn.
   fpsMeter.frame(now, performance.now(), renderer.info.render)
 
-  // The Hyperglyph Generator's preview is a second renderer on its own canvas,
-  // driven from this same clock rather than a second animation loop — a closed
-  // window costs one boolean test, and its idle-motion spin runs off the same
-  // dt the scene's rates do. Deliberately outside the fps bracket above: that
+  // Each tool window's preview is a second renderer on its own canvas, driven
+  // from this same clock rather than a second animation loop — a closed window
+  // costs one boolean test, and a preview's rate motion runs off the same dt
+  // the scene's rates do. Deliberately outside the fps bracket above: that
   // readout is about the scene, and the desktop's counter measures its main
   // viewport only.
   hyperglyphWindow.renderFrame(dtMs)
+  composerWindow.renderFrame(dtMs)
 })
