@@ -84,17 +84,26 @@ function blankNode(id: number, d: NewObjectDefaults): GvNode {
   }
 }
 
+/**
+ * translate_x for the next root-level node: +10 past the last root glyph, or 0
+ * for a scene with none. Desktop `_next_root_x`, shared there — and here — by
+ * node creation and the no-target case of paste.
+ */
+export function nextRootX(nodes: readonly GvNode[]): number {
+  let maxX = Number.NEGATIVE_INFINITY
+  for (const n of nodes) {
+    if (!NON_VISUAL.has(n.type) && n.branchLevel === 0) maxX = Math.max(maxX, n.translate.x)
+  }
+  return Number.isFinite(maxX) ? maxX + 10 : 0
+}
+
 /** New root-level node, stepping +10 along X from the last root glyph. */
 export function createRootNode(
   nodes: readonly GvNode[],
   defaults: NewObjectDefaults = NEW_OBJECT_DEFAULTS,
 ): GvNode {
   const node = blankNode(nextNodeId(nodes), defaults)
-  let maxX = Number.NEGATIVE_INFINITY
-  for (const n of nodes) {
-    if (!NON_VISUAL.has(n.type) && n.branchLevel === 0) maxX = Math.max(maxX, n.translate.x)
-  }
-  node.translate.x = Number.isFinite(maxX) ? maxX + 10 : 0
+  node.translate.x = nextRootX(nodes)
   return node
 }
 

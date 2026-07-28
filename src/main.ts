@@ -4,6 +4,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { cycleGeometry, cycleTargets, cycleTopology } from './gv/attrCycle'
 import { cycleColorIndex, cyclePalette, PALETTE_NAMES } from './gv/colorPalette'
+import { copySubtree, pasteSubtree } from './gv/clipboard'
+import type { Clipboard } from './gv/clipboard'
 import { createChildNode, createRootNode, NEW_OBJECT_DEFAULTS } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
@@ -235,9 +237,13 @@ hud.innerHTML = `
     <button data-mode="scale">Scale (R)</button>
   </div>
   <div id="hud-create">
-    <div id="hud-create-buttons">
+    <div class="hud-create-buttons">
       <button id="hud-new-node" title="New object at the world origin, stepping +10 in X per press. If a child-level node is selected, adds a child instead.">New Node (N)</button>
       <button id="hud-new-child" title="New child under the selected node; repeated presses spread children along X." disabled>New Child (Shift+N)</button>
+    </div>
+    <div class="hud-create-buttons">
+      <button id="hud-copy" title="Copy the selected node and its whole descendant subtree.&#10;Exactly one node — a partial subtree is never copied." disabled>Copy (Ctrl+C)</button>
+      <button id="hud-paste" title="Paste the copied subtree with fresh ids: as a child of the selected node, or as a new root object with nothing selected." disabled>Paste (Ctrl+V)</button>
     </div>
     <div class="hud-create-row"><span>Geometry</span><select id="hud-new-geo"></select></div>
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
@@ -296,6 +302,8 @@ const newGeoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-geo')!
 const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
 const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
+const copyButton = hud.querySelector<HTMLButtonElement>('#hud-copy')!
+const pasteButton = hud.querySelector<HTMLButtonElement>('#hud-paste')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
 const bgColorInput = hud.querySelector<HTMLInputElement>('#hud-bg-color')!
 const bgBwButton = hud.querySelector<HTMLButtonElement>('#hud-bg-bw')!
@@ -563,6 +571,7 @@ function refreshSelectionUi() {
   const primary = nodes[0]
   newChildButton.disabled = !primary
   deleteButton.disabled = !primary
+  refreshClipboardUi()
   selectionPanel.update(currentNodes, selection.size)
   nodeTable.setSelection(selection.asSet(), selection.id)
   // "Solo to Selection" mixes by what is selected right now.
@@ -1605,6 +1614,10 @@ window.addEventListener('keydown', (e) => {
     else if (typing) return
     else if (key === 'a') selectAllToggle()
     else if (key === 'i') selectionCommands.invertSelection()
+    // Copy/Paste are the desktop's own chords. They only preventDefault away
+    // from a text field, where the native copy is what the user meant.
+    else if (key === 'c') copySelection()
+    else if (key === 'v') pasteClipboard()
     else return
     e.preventDefault()
     return
@@ -2136,6 +2149,56 @@ function navTo(node: GvNode | null) {
 }
 
 deleteButton.addEventListener('click', deleteSelection)
+
+// --- Copy / Paste (Ctrl+C / Ctrl+V) --------------------------------------------
+// Desktop parity, including its defining restriction: ONE object at a time,
+// always with its whole descendant subtree. The rules live in
+// src/gv/clipboard.ts; what is here is the selection plumbing and the status
+// wording, which is the desktop's own.
+//
+// The clipboard is in-memory (as it is there), so it does not reach another
+// browser tab — but it does survive loading a different scene, since paste
+// renumbers from the destination's own id range.
+
+let clipboard: Clipboard | null = null
+
+function copySelection() {
+  if (selection.size !== 1) return status('Select exactly one node to copy.')
+  const copied = copySubtree(currentNodes, selection.id!)
+  if (!copied) return
+  clipboard = copied
+  refreshClipboardUi()
+  status(`Copied node ${copied.rootId} and ${copied.nodes.length - 1} descendant(s).`)
+}
+
+function pasteClipboard() {
+  if (!clipboard) return status('Nothing to paste — copy a node first.')
+  if (selection.size > 1) {
+    return status('Select exactly one node (or none) as the paste target.')
+  }
+  const { pasted, droppedLinks } = pasteSubtree(currentNodes, clipboard, selectedNode())
+  if (pasted.length === 0) return status('Nothing to paste.')
+  currentNodes.push(...pasted)
+  rebuildScene(false)
+  // Selecting the result is what makes a paste immediately draggable, and it is
+  // what the desktop does (select_by_ids over the pasted rows). Under a draw
+  // limit the tail of a big paste has no frame yet and is silently left out —
+  // the same rule every other selection path already follows.
+  setSelection(new Set(pasted.map((n) => n.id)))
+  // The desktop drops an outward-reaching link in silence; saying so is the
+  // difference between "paste lost a row" and a deliberate rule.
+  const dropped = droppedLinks > 0 ? ` ${droppedLinks} link(s) reaching outside were dropped.` : ''
+  status(`Pasted ${pasted.length} node(s).${dropped}`)
+}
+
+/** Copy needs exactly one node; paste needs something copied and ≤1 target. */
+function refreshClipboardUi() {
+  copyButton.disabled = selection.size !== 1
+  pasteButton.disabled = clipboard === null || selection.size > 1
+}
+
+copyButton.addEventListener('click', copySelection)
+pasteButton.addEventListener('click', pasteClipboard)
 
 // --- ANTz attribute cycling (J = topology, O = geometry) ------------------------
 // Desktop parity — the rules live in src/gv/attrCycle.ts. The step applies PER

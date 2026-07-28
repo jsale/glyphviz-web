@@ -609,6 +609,45 @@ something to decide now).
         shortcut, and the free single keys are worth more to later parity
         work. The HUD chrome (panels, FPS, status line) still spans the
         whole canvas, exactly as the desktop's panels and status bar do.
+   o. Copy / Paste (shipped 2026-07-27, Jeff's request), a port of desktop
+      `_copy_selected` / `_paste_clipboard`, which document themselves as
+      "V1: single node + full descendant closure only" — Ctrl+C, Ctrl+V,
+      and a pair of buttons in the Create panel.
+      `src/gv/clipboard.ts` is the whole rule set; main.ts holds only the
+      selection plumbing and the desktop's own status wording.
+      - The one-object restriction is the feature's defining constraint on
+        both sides, and Jeff named it as this port's constraint too. It is
+        the same rule `deleteSubtree` already works under: a node always
+        brings every descendant, because a partial subtree has no
+        well-defined shape once re-parented. Copy therefore wants EXACTLY
+        one selected node (the set-selection era makes that a real check,
+        not an assumption) and paste wants one target or none.
+      - Paste target: one selected node → the subtree becomes its CHILD at
+        `(siblingCount·5, 0, 5)`, positioned exactly like New Child, which
+        is why re-selecting the original's parent is how you get a plain
+        sibling. Nothing selected → a new root object at `nextRootX`
+        (extracted out of `createRootNode`, shared the way the desktop
+        shares `_next_root_x`). Branch levels shift by the root's delta
+        throughout, so a level-3 subtree pasted at level 0 renumbers.
+      - Ids come from `max(existing) + 1` in clipboard order — the same
+        allocator new nodes use — so a paste renumbers against whatever
+        scene it lands in. The clipboard survives loading a DIFFERENT
+        scene for that reason (it does on the desktop too), which makes it
+        a way to move a hyperglyph between files.
+      - Links ARE handled, because the desktop handles them: an edge with
+        both ends inside the copied subtree is remapped to the new ids,
+        one reaching outside is dropped rather than left dangling. The
+        dropped link still consumes its id, exactly as on the desktop, so
+        pasted ids can have gaps. Divergence: the drop is reported in the
+        status line, where the desktop is silent — the difference between
+        "paste lost a row" and a deliberate rule.
+      - Web-only consequence: under a draw limit the tail of a big paste
+        has no frame yet, so it is left out of the post-paste selection —
+        the same rule every other selection path follows (item m).
+      - The clipboard is IN-MEMORY, like the desktop's, so it does not
+        cross browser tabs. Writing the subtree to the system clipboard as
+        CSV would, and is the obvious later step; it is not what the
+        desktop does and was not part of this ask.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

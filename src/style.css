@@ -221,13 +221,13 @@ canvas {
   border-top: 1px solid #2a3040;
 }
 
-#hud-create-buttons {
+.hud-create-buttons {
   display: flex;
   gap: 4px;
   margin-bottom: 6px;
 }
 
-#hud-create-buttons button {
+.hud-create-buttons button {
   flex: 1;
   padding: 3px 0;
   border: 1px solid #3a4256;
@@ -238,11 +238,11 @@ canvas {
   cursor: pointer;
 }
 
-#hud-create-buttons button:hover:not(:disabled) {
+.hud-create-buttons button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
 }
 
-#hud-create-buttons button:disabled {
+.hud-create-buttons button:disabled {
   color: #6c7488;
   cursor: default;
 }
