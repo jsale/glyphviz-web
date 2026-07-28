@@ -948,7 +948,37 @@ canvas {
 
 #glyph-composer-window {
   width: 430px;
-  height: 720px;
+  height: 760px;
+}
+
+/* The body itself stops scrolling for this window: the level list and form
+   scroll in `.composer-scroll`, so the preview and footer stay pinned at the
+   bottom where they can be seen while the form above them is worked through. */
+#glyph-composer-window .float-window-body {
+  overflow: hidden;
+}
+
+/* The form and the preview SHARE what height the window has, 3:2 in the form's
+   favour, from a zero basis so the split is of the space itself rather than of
+   whatever the form happens to be long enough to ask for. Dragging the window
+   taller grows both. */
+.composer-scroll {
+  display: flex;
+  flex: 3 1 0;
+  flex-direction: column;
+  /* Without this the scroller's content floor keeps it from ever shrinking,
+     and it pushes the preview out of the window instead of scrolling. */
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#glyph-composer-window .glyph-preview {
+  flex: 2 1 0;
+  min-height: 190px;
+}
+
+.composer-info {
+  flex: 0 0 auto;
 }
 
 .composer-heading {
@@ -965,9 +995,16 @@ canvas {
 }
 
 /* The branch-level list. Scrolls past a handful of levels rather than pushing
-   the preview off the bottom of the window. */
+   the preview off the bottom of the window.
+
+   `flex: 0 0 auto` is load-bearing, not tidiness: an `overflow` other than
+   `visible` sets a flex item's AUTOMATIC minimum size to zero, so as a child of
+   the flex-column body this box shrank to a bare line and hid the levels it
+   lists. Its own scrollbar is what makes it shrinkable, so it has to opt out of
+   shrinking; the body scrolls instead, which is what it is there for. */
 .composer-levels {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 2px;
   max-height: 116px;

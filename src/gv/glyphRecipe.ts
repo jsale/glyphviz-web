@@ -189,6 +189,27 @@ export function addedLevelSpec(levelIndex: number): LevelSpec {
   })
 }
 
+/**
+ * How many nodes `generateNodes` would emit, without emitting them — the sum of
+ * the running product of the levels' counts.
+ *
+ * A recipe grows MULTIPLICATIVELY with depth, so one more level on a modest
+ * design is the difference between thousands of nodes and millions. Counting
+ * first is a few multiplications; finding out by generating is a hung tab.
+ * `limit` stops the arithmetic early, so an absurd recipe costs no more than a
+ * plausible one — the answer is then only known to be at least `limit`.
+ */
+export function projectedNodeCount(recipe: GlyphRecipe, limit = Number.MAX_SAFE_INTEGER): number {
+  let total = 0
+  let perParent = 1
+  for (const spec of recipe.levels) {
+    perParent *= Math.max(spec.count, 1)
+    total += perParent
+    if (total >= limit) return limit
+  }
+  return total
+}
+
 export interface GenerateOptions {
   /** First id handed out; ids then run consecutively in emission order. */
   startId?: number

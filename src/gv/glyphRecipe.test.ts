@@ -16,6 +16,7 @@ import {
   generateNodes,
   levelSpec,
   NONROOT_DIST_MODES,
+  projectedNodeCount,
   recipeFromJson,
   recipeToJson,
   ROOT_DIST_MODES,
@@ -93,6 +94,33 @@ describe('placement mode tables', () => {
     for (const mode of Object.values(Dist)) {
       expect(DIST_LABELS[mode]).toBeTruthy()
     }
+  })
+})
+
+describe('projectedNodeCount', () => {
+  it('agrees with what generateNodes actually emits', () => {
+    const recipe = defaultRecipe()
+    expect(projectedNodeCount(recipe)).toBe(generateNodes(recipe).length)
+
+    recipe.levels.push(levelSpec({ count: 4 }), levelSpec({ count: 3 }))
+    expect(projectedNodeCount(recipe)).toBe(generateNodes(recipe).length)
+  })
+
+  it('counts the running product, not the sum of the counts', () => {
+    // 2 + 2*3 + 2*3*4 = 32. A recipe grows multiplicatively with depth, which
+    // is the whole reason this exists.
+    const recipe = { name: 'x', levels: [2, 3, 4].map((count) => levelSpec({ count })) }
+    expect(projectedNodeCount(recipe)).toBe(32)
+  })
+
+  it('treats a count below 1 as 1, as distribute() does', () => {
+    expect(projectedNodeCount({ name: 'x', levels: [levelSpec({ count: 0 })] })).toBe(1)
+  })
+
+  it('stops early at the limit instead of computing an absurd total', () => {
+    // Ten levels of 200 is 200^10 — the point is that asking costs nothing.
+    const recipe = { name: 'x', levels: Array.from({ length: 10 }, () => levelSpec({ count: 200 })) }
+    expect(projectedNodeCount(recipe, 200_000)).toBe(200_000)
   })
 })
 

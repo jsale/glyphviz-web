@@ -53,6 +53,7 @@ import {
   DIST_LABELS,
   generateNodes,
   NONROOT_DIST_MODES,
+  projectedNodeCount,
   recipeFromJson,
   recipeToJson,
   ROOT_DIST_MODES,
@@ -64,6 +65,15 @@ import { GlyphPreview } from './glyphPreview'
 
 /** Auto-preview debounce — `_preview_timer.start(350)`. */
 const PREVIEW_DELAY_MS = 350
+
+/**
+ * Above this many nodes the DEBOUNCED preview stands down and says so; Preview
+ * Now and Insert still run. Web-only, and not a limit the desktop needs: a
+ * frozen native dialog is a frozen dialog, where a frozen tab takes the scene
+ * being worked on with it. Set at the size of the largest scene in the example
+ * corpus (Event_Cloud, 209k), so nothing a real scene does trips it.
+ */
+const AUTO_PREVIEW_LIMIT = 200_000
 
 /**
  * Geometry choices: `_GEO_ITEMS` — every geometry EXCEPT Mesh (23), which has
@@ -147,7 +157,15 @@ export class GlyphComposerWindow {
 
     const body = this.window.body
 
-    body.appendChild(
+    // The level list and the parameter form scroll INSIDE the window; the
+    // preview and the footer are pinned below them. A composer whose preview
+    // has to be scrolled to is not showing you what you are editing — and the
+    // form is long enough (placement + transform + colour) to push it off the
+    // bottom of any window that would still fit on screen.
+    const scroll = el('div', { className: 'composer-scroll' })
+    body.appendChild(scroll)
+
+    scroll.appendChild(
       el('div', {
         className: 'sel-hint',
         textContent:
@@ -157,9 +175,9 @@ export class GlyphComposerWindow {
     )
 
     // --- Branch levels ---
-    body.appendChild(el('div', { className: 'composer-heading', textContent: 'Branch Levels' }))
+    scroll.appendChild(el('div', { className: 'composer-heading', textContent: 'Branch Levels' }))
     this.levelList = el('div', { className: 'composer-levels' })
-    body.appendChild(this.levelList)
+    scroll.appendChild(this.levelList)
 
     const levelButtons = el('div', { className: 'hud-create-buttons' })
     const addButton = el('button', {
@@ -175,15 +193,15 @@ export class GlyphComposerWindow {
     })
     this.removeButton.addEventListener('click', () => this.removeLevel())
     levelButtons.append(addButton, this.removeButton)
-    body.appendChild(levelButtons)
+    scroll.appendChild(levelButtons)
 
     // --- Parameter form for the selected level ---
     this.form = el('div', { className: 'composer-form' })
-    body.appendChild(this.form)
+    scroll.appendChild(this.form)
 
-    // --- Preview ---
+    // --- Preview (pinned, not scrolled past) ---
     body.appendChild(this.preview.element)
-    this.info = el('div', { className: 'sel-hint' })
+    this.info = el('div', { className: 'sel-hint composer-info' })
     body.appendChild(this.info)
 
     // --- Footer ---
@@ -734,17 +752,36 @@ export class GlyphComposerWindow {
     if (this.previewTimer !== null) window.clearTimeout(this.previewTimer)
     this.previewTimer = window.setTimeout(() => {
       this.previewTimer = null
-      this.doPreview()
+      this.doPreview(true)
     }, PREVIEW_DELAY_MS)
   }
 
-  private doPreview(): void {
+  /**
+   * Draw the recipe. `auto` marks the debounced call, which is the one that
+   * fires without being asked for — see AUTO_PREVIEW_LIMIT.
+   */
+  private doPreview(auto = false): void {
     if (!this.window.isOpen) return
+
+    // A recipe grows multiplicatively with depth, so one more level turns
+    // thousands of nodes into millions. An explicit Preview Now or Insert is
+    // the user's decision and always runs; the DEBOUNCED preview is not, and
+    // hanging the tab on a keystroke would take the scene down with it.
+    const projected = projectedNodeCount(this.recipe, AUTO_PREVIEW_LIMIT)
+    if (auto && projected >= AUTO_PREVIEW_LIMIT) {
+      this.info.textContent =
+        `Over ${AUTO_PREVIEW_LIMIT.toLocaleString()} nodes across ` +
+        `${this.recipe.levels.length} level(s) — auto-preview held. Use Preview Now.`
+      return
+    }
+
     const nodes = generateNodes(this.recipe, { startId: 1 })
     // keepCamera: the Composer re-previews on every nudge, and a camera that
     // reset each time would make a scale or spacing change impossible to judge.
     this.preview.setNodes(nodes, true)
-    this.info.textContent = `${nodes.length} node(s) across ${this.recipe.levels.length} level(s)`
+    this.info.textContent = `${nodes.length.toLocaleString()} node(s) across ${
+      this.recipe.levels.length
+    } level(s)`
   }
 
   renderFrame(dtMs: number): void {
