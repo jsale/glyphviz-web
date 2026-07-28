@@ -120,7 +120,6 @@ export class ChannelsPanel {
   setScene(options: { frames: number; rateNodes: number; audioName?: string }): void {
     this.frameCount = options.frames
     const hasChannels = options.frames > 0
-    this.panel.element.hidden = !hasChannels && options.rateNodes === 0
 
     this.slider.max = String(Math.max(0, options.frames - 1))
     this.slider.value = '0'
@@ -135,17 +134,35 @@ export class ChannelsPanel {
     this.loopRow.hidden = !hasChannels
     this.setFrame(0)
     this.setPlaying(false)
-    this.motionRow.hidden = options.rateNodes === 0
 
     // Audio-synced playback drives the frame index from the audio's real
     // position, so the FPS setting has nothing left to control.
     const synced = options.audioName !== undefined
     this.fpsRow.hidden = !hasChannels || synced
-    this.note.textContent = !hasChannels
-      ? `${options.rateNodes} node(s) with a nonzero rate.`
-      : synced
+    if (hasChannels) {
+      this.note.textContent = synced
         ? `Synced to ${options.audioName}. Playback follows the audio's real position, not the FPS setting.`
         : `${options.frames} frames. Values are absolute per frame — no interpolation between them.`
+    }
+    this.setRateNodes(options.rateNodes)
+  }
+
+  /**
+   * How many nodes currently carry a nonzero rate, without disturbing playback.
+   *
+   * Rates became authorable from the Properties panel, so a scene that loaded
+   * with none can acquire one — and lose its last one — at any time. The Rate
+   * Motion checkbox is the only way to stop that motion once it starts, so it
+   * (and, for a channel-less scene, the whole panel) has to follow the count
+   * rather than the load. Everything else `setScene` does resets the transport
+   * to frame 0, which a scene playing at the time must not lose; hence the
+   * narrow entry point, with setScene delegating to it.
+   */
+  setRateNodes(count: number): void {
+    const hasChannels = this.frameCount > 0
+    this.panel.element.hidden = !hasChannels && count === 0
+    this.motionRow.hidden = count === 0
+    if (!hasChannels) this.note.textContent = `${count} node(s) with a nonzero rate.`
   }
 
   setFrame(frame: number): void {

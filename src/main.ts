@@ -1211,8 +1211,12 @@ function rebuildScene(fitCamera: boolean) {
   backdrop.showReferenceGrid = !currentNodes.some((n) => n.type === NodeType.WorldGrid)
 
   // Rate candidates follow the CSV, so an inspector edit to a rate field (which
-  // always ends here) has to be able to add or drop a node from the tick list.
+  // always ends here) has to be able to add or drop a node from the tick list —
+  // and to bring the Rate Motion checkbox with it, since a scene that loaded
+  // with no rates would otherwise have no way to stop the motion it just
+  // acquired. Narrower than setScene, which would reset the transport.
   rateNodes = rateCandidates(currentNodes, channels.rateBoundNodeIds)
+  channelsPanel.setRateNodes(rateNodes.length)
   dynamic = new DynamicNodes(
     currentNodes,
     built.frames,

@@ -65,6 +65,32 @@ describe('writeGvNodeCsv', () => {
     expect(withText.split('\r\n')[0].endsWith(',text')).toBe(true)
   })
 
+  // The rate columns became authorable from the Properties panel, so a value
+  // typed in this app now has to reach a file the desktop opens — the whole
+  // point of the field is that it keeps moving after a save and reload.
+  it('writes the rate columns a Properties-panel edit sets, and only those', () => {
+    const base =
+      'id,type,parent_id,branch_level,translate_x,translate_y,translate_z,rotate_x,rotate_y,rotate_z,scale_x,scale_y,scale_z,color_r,color_g,color_b,color_a,geometry,hide,topo'
+    const nodes = parseGvNodeCsv(`${base}\n1,5,0,0,0,0,0,0,0,0,1,1,1,0,0,0,255,1,0,0`).nodes
+    expect(writeGvNodeCsv(nodes).split('\r\n')[0]).not.toContain('rate')
+
+    // What the inspector's rateRow does: one axis, on every selected node.
+    nodes[0].rotateRate.z = 2.5
+    const written = writeGvNodeCsv(nodes)
+    const header = written.split('\r\n')[0].split(',')
+    const row = written.split('\r\n')[1].split(',')
+    // The group travels together (all three axes) but the untouched groups
+    // stay out of the file, so a plain scene does not grow nine columns.
+    expect(header).toContain('rotate_rate_x')
+    expect(row[header.indexOf('rotate_rate_z')]).toBe('2.500000')
+    expect(header).not.toContain('translate_rate_x')
+    expect(header).not.toContain('scale_rate_x')
+
+    const reparsed = parseGvNodeCsv(written)
+    expect(reparsed.errors).toEqual([])
+    expect(reparsed.nodes[0].rotateRate).toEqual({ x: 0, y: 0, z: 2.5 })
+  })
+
   it('writes rotation_mode whenever any node would misread as HTR', () => {
     const csv =
       'id,type,parent_id,branch_level,translate_x,translate_y,translate_z,rotate_x,rotate_y,rotate_z,scale_x,scale_y,scale_z,color_r,color_g,color_b,color_a,geometry,hide,topo,rotation_mode\n' +

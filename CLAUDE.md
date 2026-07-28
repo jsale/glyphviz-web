@@ -717,6 +717,47 @@ something to decide now).
           hand-written fixture is what let this survive step 6p — it
           contained no rod — so a real scene now backs it up. Both
           verified to FAIL with the rod branch removed.
+   q. Rate fields in the inspector (shipped 2026-07-28, Jeff's request —
+      he noticed the GUI could not set them). `translate_rate_*`,
+      `rotate_rate_*` and `scale_rate_*` were parsed, integrated
+      (`gv/rates.ts`), written and Channels-bindable, but reachable only
+      by hand-editing a CSV. Three rows in the Properties panel now edit
+      them, ported from the desktop's three rate spinbox groups: the
+      desktop's ranges (±1e6 / ±3600 / ±1e4), its tooltip wording, and
+      its form order — each rate sits directly under the vector it
+      accumulates into (translate, translate rate, rotate, rotate rate,
+      rot. mode, scale, scale rate), which is the only order in which a
+      velocity reads.
+      - Values apply ABSOLUTELY to every selected node, per axis.
+        Divergence: the desktop's one handler serves all three spinboxes
+        and writes all three axes from whatever they show, so editing X
+        on a mixed selection also flattens Y and Z onto the primary's.
+        This app's absolute vector rows have always been per axis —
+        `absoluteVec3Row`, the same path scale uses — and these follow it.
+      - The rows are deliberately NOT `data-ins-key` keyed. A keyed
+        control comes back focused after the rebuild an edit triggers,
+        which is right for the texture steppers (buttons, clicked in a
+        run) and wrong for a text field: single-key commands and the
+        Ctrl chords stand down while a field has focus, so parking focus
+        there would silently swallow the next J/T/Space/Ctrl+A. Found by
+        driving it, not by reading it.
+      - The feature this exposed: `ChannelsPanel.setScene` decided the
+        Rate Motion checkbox's visibility (and, for a channel-less
+        scene, the whole panel's) at LOAD. A scene that loaded with no
+        rates could now acquire one with no way to stop it. Split out as
+        `setRateNodes(count)` — the narrow update, called from
+        rebuildScene right where `rateCandidates` is recomputed, since
+        everything else setScene does resets the transport to frame 0,
+        which a playing scene must not lose.
+      - Rate columns are written only when some node's group is nonzero
+        (`writeNodeCsv`'s `when:`), which was untested until now: a value
+        typed here has to reach a file the desktop opens, or the field
+        does nothing after a save.
+      - Note for later: the desktop's rotate_rate_z tooltip also
+        promises texture scroll on a Prism (Textured) Link. This build
+        stores and saves the value but does not flow link textures yet
+        (deferred at the link step, still open) — the tooltip says so
+        rather than promising it.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

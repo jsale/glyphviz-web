@@ -191,6 +191,52 @@ export class Inspector {
     return row(label, axisInput('x'), axisInput('y'), axisInput('z'))
   }
 
+  /**
+   * translate_rate / rotate_rate / scale_rate: ANTz per-cycle VELOCITIES the
+   * viewport integrates (nominally 60 cycles/second — see gv/rates.ts), not
+   * values. A nonzero axis keeps the node moving for as long as the scene is
+   * open, with or without Channels.
+   *
+   * Ported from the desktop's three rate spinbox groups (_on_insp_translate_
+   * rate_changed and friends), including their ranges — a value that cannot be
+   * authored there cannot be typed here either — and their tooltip wording.
+   * The value applies ABSOLUTELY to every selected node, like scale and unlike
+   * translate/rotate, which shift by the delta.
+   *
+   * Divergence: the desktop writes all THREE axes onto every selected node
+   * from whatever its spinboxes show (one handler serves the group), so
+   * editing X on a mixed selection also flattens Y and Z onto the primary's
+   * values. This app's absolute vector rows have always been per axis
+   * (`absoluteVec3Row` is the same code path scale uses), and that is what
+   * these do.
+   *
+   * Deliberately NOT keyed with `data-ins-key`: a keyed control comes back
+   * focused after the rebuild an edit triggers, which suits the texture
+   * steppers (buttons, clicked in a run) but not a text field — the viewport's
+   * single-key commands and Ctrl chords stand down while a field has focus, so
+   * parking focus here would silently swallow the next J/T/Space/Ctrl+A. The
+   * neighbouring translate/rotate/scale rows drop focus on commit; so do these.
+   */
+  private rateRow(
+    label: string,
+    field: VectorField,
+    limit: number,
+    tip: string,
+    zTip?: string,
+  ): HTMLDivElement {
+    const axisInput = (axis: 'x' | 'y' | 'z') => {
+      const input = this.numberInput(
+        field(this.nodes[0])[axis],
+        (v) => this.commit((n) => (field(n)[axis] = v)),
+        { min: -limit, max: limit },
+      )
+      input.title = axis === 'z' && zTip ? `${tip}\n${zTip}` : tip
+      input.className = `ins-rate ins-rate-${axis}`
+      return input
+    }
+    return row(label, axisInput('x'), axisInput('y'), axisInput('z'))
+  }
+
   private idSelect(
     names: Record<number, string>,
     value: number,
@@ -346,9 +392,31 @@ export class Inspector {
       )
     }
 
+    // Each rate row sits directly under the vector it drives, which is the
+    // desktop form's own order (Pos, Translate Rate, Rotate, Rotate Rate,
+    // Rotation Mode, Scale, Scale Rate) — a rate is only readable next to the
+    // field it accumulates into.
     parts.push(
       this.deltaVec3Row('translate', (n) => n.translate, this.anchorTranslate),
+      this.rateRow(
+        'translate rate',
+        (n) => n.translateRate,
+        1_000_000,
+        'Position delta applied every cycle (ANTz convention: nominally 60 ' +
+          'cycles/second).\nNonzero values keep this node moving continuously ' +
+          'in the viewport.',
+      ),
       this.deltaVec3Row('rotate', (n) => n.rotate, this.anchorRotate),
+      this.rateRow(
+        'rotate rate',
+        (n) => n.rotateRate,
+        3600,
+        'Degrees added every cycle (nominally 60 cycles/second).\nSpins this ' +
+          'node continuously about the corresponding axis.',
+        'On a Link set to Prism (Textured) geometry this field doubles up as ' +
+          'texture\nscroll rate on the desktop. The value is stored and saved ' +
+          'here, but this\nbuild does not flow link textures yet.',
+      ),
       row(
         'rot. mode',
         this.idSelect(
@@ -361,6 +429,14 @@ export class Inspector {
         ),
       ),
       this.absoluteVec3Row('scale', (n) => n.scale),
+      this.rateRow(
+        'scale rate',
+        (n) => n.scaleRate,
+        10_000,
+        'Scale added every cycle (nominally 60 cycles/second).\nRarely useful ' +
+          'at nonzero values — the glyph will continuously grow or shrink ' +
+          'without bound.',
+      ),
     )
 
     // Palette / Color Index sit directly above the colour picker, the desktop's
