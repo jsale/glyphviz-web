@@ -1122,13 +1122,17 @@ something to decide now).
        renders the same sprawling shape, to float32.
      - Desktop BUG found and reported: `pick_level_counts` calls
        `randint(max(2, guess - 2), min(12, guess + 2))` where
-       `guess = round(max_nodes ** (1/depth))`, so a shallow tree with a
-       real budget is an EMPTY RANGE and the dialog raises ValueError —
-       every 2-level design over ~14 nodes, every 3-level one over ~196.
-       Branch Levels 2 or 3 at the default 500 simply does not work
-       there. The web clamps the low end to the high one, which only
-       fires where the desktop cannot generate at all, so no seed's
-       design changes.
+       `guess = round(max_nodes ** (1/depth))`. Only the HIGH end is
+       capped at MAX_BRANCH, so once `guess` passes 14 the low end
+       overshoots it and the range runs backwards — ValueError out of
+       the dialog. Shallow trees are where `guess` runs away (at depth 1
+       it IS the budget). Scanned against the real function over the
+       spinbox ranges: Branch Levels 2 fails at Max Nodes ≥ 15, 3 at
+       ≥ 211, 4 at ≥ 3049, and 5–10 never fail up to 20000 — so the
+       default 500 breaks Branch Levels 2 and 3, while the default depth
+       of 5 is fine, which is presumably why it went unnoticed. The web
+       clamps the low end DOWN to the high one, which only fires where
+       the desktop cannot generate at all, so no seed's design changes.
      - Divergence, inherited rather than chosen: idle motion depends on
        ABSOLUTE branch level (it skips level 0 and alternates by depth),
        so a design inserted UNDER a selected node gets a spinning trunk
