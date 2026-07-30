@@ -13,7 +13,7 @@
 // `color_a` is never touched by palette resolution — ANTz palettes carry no
 // alpha.
 
-import { roundHalfToEven } from './channels'
+import { roundHalfToEven } from './pythonRound'
 import type { GvNode, Rgb } from './types'
 
 export const Palette = {

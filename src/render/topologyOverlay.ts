@@ -94,6 +94,9 @@ class PlotGroup {
       linewidth: widthPx,
       transparent: alpha < 1,
       opacity: alpha,
+      // Scene content fogs; ShaderMaterial-derived LineMaterial needs the
+      // flag the built-in materials default to (render/fog.ts).
+      fog: true,
     })
     this.object = new LineSegments2(this.geometry, this.material)
     this.object.name = 'plot-lines'
@@ -422,8 +425,17 @@ export class TopologyOverlay {
   }
 
   dispose(): void {
-    for (const g of this.plotGroups) g.dispose()
-    for (const s of this.surfaces) s.dispose()
+    // Detach as well as free: the animated-topo path rebuilds the overlay
+    // while the scene root LIVES ON (main.ts rebuildAnimatedOverlays), and a
+    // disposed-but-attached LineSegments2 would go on drawing stale membership.
+    for (const g of this.plotGroups) {
+      g.object.removeFromParent()
+      g.dispose()
+    }
+    for (const s of this.surfaces) {
+      s.object.removeFromParent()
+      s.dispose()
+    }
   }
 }
 

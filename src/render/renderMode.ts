@@ -23,6 +23,12 @@
 //    chrome is the app, not the scene.
 
 import * as THREE from 'three'
+import { RENDER_MODE_COUNT } from '../gv/types'
+
+// Re-exported from the data model (types.ts), where the channel engine's
+// clamp table also reads it — the desktop keeps the count on its Node
+// dataclass for the same reason.
+export { RENDER_MODE_COUNT }
 
 export const RenderMode = {
   Normal: 0,
@@ -35,8 +41,6 @@ export const RenderMode = {
   Screen: 5,
   PremultipliedAlpha: 6,
 } as const
-
-export const RENDER_MODE_COUNT = 7
 
 export const RENDER_MODE_NAMES: Record<number, string> = {
   [RenderMode.Normal]: 'Normal',

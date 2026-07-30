@@ -15,28 +15,14 @@
 // the mutated rows onto the live scene graph without a rebuild is
 // src/render/dynamicNodes.ts.
 
+import { PALETTE_COUNT, resolvePaletteColor } from './colorPalette'
 import { tokenizeCsv } from './csv'
-import type { GvNode, GvParseIssue, Rgba, Vec3 } from './types'
-
-/** Attribute names the engine binds; anything else is silently skipped. */
-const VEC_ATTRIBUTES: Record<string, keyof Pick<
-  GvNode,
-  'translate' | 'rotate' | 'scale' | 'translateRate' | 'rotateRate' | 'scaleRate'
->> = {
-  translate: 'translate',
-  rotate: 'rotate',
-  scale: 'scale',
-  translate_rate: 'translateRate',
-  rotate_rate: 'rotateRate',
-  scale_rate: 'scaleRate',
-}
-
-const COLOR_ATTRIBUTES: Record<string, keyof Rgba> = {
-  color_r: 'r',
-  color_g: 'g',
-  color_b: 'b',
-  color_a: 'a',
-}
+import { roundHalfToEven } from './pythonRound'
+// Re-exported from its own module (see pythonRound.ts for why); most callers
+// still reach it through here.
+export { roundHalfToEven }
+import type { GvNode, GvParseIssue, Rgba } from './types'
+import { GEOMETRY_MAX, RENDER_MODE_COUNT, TOPO_MAX } from './types'
 
 /**
  * Column names carrying a node's channel number.
@@ -217,9 +203,210 @@ export function deriveChannelFilenames(
 type Axis = 'x' | 'y' | 'z'
 
 /**
- * One (node, attribute) ← track binding. The Vec3/Rgba object reference is the
- * node's own, so applying a frame is a direct store with no property lookup —
- * this loop runs over every binding at up to 60 Hz.
+ * How one bindable attribute is read and written on a node — the web spelling
+ * of the desktop's `_ATTR_TO_FIELD` + `_INT_FIELDS` + `_FIELD_RANGE` tables
+ * (channel_engine.py). `int` fields are rounded half-to-EVEN (Python's round,
+ * which the desktop applies to every integer field) and then clamped to their
+ * own valid range, so an out-of-range track value can never index off the end
+ * of a palette or geometry table at draw time. Float fields are applied
+ * exactly as written, negatives included — a track feeding translate_x or
+ * fog_end means exactly what it says.
+ */
+interface AttributeSpec {
+  read: (node: GvNode) => number
+  write: (node: GvNode, value: number) => void
+  int?: { min: number; max: number }
+}
+
+const vecSpec = (
+  group: keyof Pick<
+    GvNode,
+    'translate' | 'rotate' | 'scale' | 'translateRate' | 'rotateRate' | 'scaleRate'
+  >,
+  axis: Axis,
+): AttributeSpec => ({
+  read: (n) => n[group][axis],
+  write: (n, v) => {
+    n[group][axis] = v
+  },
+})
+
+const colorSpec = (channel: keyof Rgba): AttributeSpec => ({
+  read: (n) => n.color[channel],
+  write: (n, v) => {
+    n.color[channel] = v
+  },
+  int: { min: 0, max: 255 },
+})
+
+/** An id that only has a floor — the desktop's `_NONNEGATIVE`. */
+const NONNEGATIVE = { min: 0, max: Infinity }
+/** Flags: any positive track value reads as "on". */
+const FLAG = { min: 0, max: 1 }
+
+/**
+ * The complete bindable set — 34 attributes, matching desktop `77d6361`.
+ * Anything else in a ch-map is silently skipped (and counted, below).
+ *
+ * render_mode / fog_* are scene-wide settings read only off the World row
+ * (type 0) — binding them means giving that row a ch_input_id like any other
+ * node; on any other node they are inert stores. The World row's own
+ * color_r/g/b is the scene background, so it animates through the ordinary
+ * color binding.
+ */
+const ATTRIBUTES: Record<string, AttributeSpec> = {
+  translate_x: vecSpec('translate', 'x'),
+  translate_y: vecSpec('translate', 'y'),
+  translate_z: vecSpec('translate', 'z'),
+  rotate_x: vecSpec('rotate', 'x'),
+  rotate_y: vecSpec('rotate', 'y'),
+  rotate_z: vecSpec('rotate', 'z'),
+  scale_x: vecSpec('scale', 'x'),
+  scale_y: vecSpec('scale', 'y'),
+  scale_z: vecSpec('scale', 'z'),
+  translate_rate_x: vecSpec('translateRate', 'x'),
+  translate_rate_y: vecSpec('translateRate', 'y'),
+  translate_rate_z: vecSpec('translateRate', 'z'),
+  rotate_rate_x: vecSpec('rotateRate', 'x'),
+  rotate_rate_y: vecSpec('rotateRate', 'y'),
+  rotate_rate_z: vecSpec('rotateRate', 'z'),
+  scale_rate_x: vecSpec('scaleRate', 'x'),
+  scale_rate_y: vecSpec('scaleRate', 'y'),
+  scale_rate_z: vecSpec('scaleRate', 'z'),
+  color_r: colorSpec('r'),
+  color_g: colorSpec('g'),
+  color_b: colorSpec('b'),
+  color_a: colorSpec('a'),
+  texture_id: {
+    read: (n) => n.textureId,
+    write: (n, v) => {
+      n.textureId = v
+    },
+    int: NONNEGATIVE,
+  },
+  // --- shape ---
+  ratio: {
+    read: (n) => n.ratio,
+    write: (n, v) => {
+      n.ratio = v
+    },
+  },
+  topo: {
+    read: (n) => n.topo,
+    write: (n, v) => {
+      n.topo = v
+    },
+    int: { min: 0, max: TOPO_MAX },
+  },
+  geometry: {
+    read: (n) => n.geometry,
+    write: (n, v) => {
+      n.geometry = v
+    },
+    int: { min: 0, max: GEOMETRY_MAX },
+  },
+  mesh_id: {
+    read: (n) => n.meshId,
+    write: (n, v) => {
+      n.meshId = v
+    },
+    int: NONNEGATIVE,
+  },
+  // --- palette color (resolved to color_r/g/b each frame, see applyChannelFrame) ---
+  palette_id: {
+    read: (n) => n.paletteId,
+    write: (n, v) => {
+      n.paletteId = v
+    },
+    int: { min: 0, max: PALETTE_COUNT - 1 },
+  },
+  color_index: {
+    read: (n) => n.colorIndex,
+    write: (n, v) => {
+      n.colorIndex = v
+    },
+    int: NONNEGATIVE,
+  },
+  // --- visibility ---
+  hide: {
+    read: (n) => n.hide,
+    write: (n, v) => {
+      n.hide = v
+    },
+    int: FLAG,
+  },
+  show_text: {
+    read: (n) => n.showText,
+    write: (n, v) => {
+      n.showText = v
+    },
+    int: FLAG,
+  },
+  // --- World row (type 0) scene settings ---
+  render_mode: {
+    read: (n) => n.renderMode,
+    write: (n, v) => {
+      n.renderMode = v
+    },
+    int: { min: 0, max: RENDER_MODE_COUNT - 1 },
+  },
+  fog_enabled: {
+    read: (n) => n.fogEnabled,
+    write: (n, v) => {
+      n.fogEnabled = v
+    },
+    int: FLAG,
+  },
+  fog_start: {
+    read: (n) => n.fogStart,
+    write: (n, v) => {
+      n.fogStart = v
+    },
+  },
+  fog_end: {
+    read: (n) => n.fogEnd,
+    write: (n, v) => {
+      n.fogEnd = v
+    },
+  },
+}
+
+/**
+ * Attributes that can move or reshape geometry — the desktop's
+ * `_TRANSFORM_FIELDS`. The three shape fields are here because they re-place a
+ * node's CHILDREN: `ratio` is the child placement radius on Torus/Ztorus,
+ * `topo` IS the child-placement rule, and on a World Grid `geometry` is what
+ * switches children between globe and flat-window placement. Everything else
+ * changes what is drawn but never where anything sits.
+ */
+const TRANSFORM_ATTRIBUTES = new Set([
+  'translate_x', 'translate_y', 'translate_z',
+  'rotate_x', 'rotate_y', 'rotate_z',
+  'scale_x', 'scale_y', 'scale_z',
+  'translate_rate_x', 'translate_rate_y', 'translate_rate_z',
+  'rotate_rate_x', 'rotate_rate_y', 'rotate_rate_z',
+  'scale_rate_x', 'scale_rate_y', 'scale_rate_z',
+  'ratio', 'topo', 'geometry',
+])
+
+/** Attributes whose change means the node's GLYPH must be rebuilt (its shape,
+ *  not just its material): the geometry id itself, the mesh it names, the
+ *  torus/point aspect, and the node's own topo (Rod draw factors). */
+const SHAPE_ATTRIBUTES = new Set(['ratio', 'topo', 'geometry', 'mesh_id'])
+/** The subset of shape attributes that re-place the node's children. */
+const PLACEMENT_ATTRIBUTES = new Set(['ratio', 'topo', 'geometry'])
+/** Attributes the material fast path serves (colour, texture, palette). */
+const APPEARANCE_ATTRIBUTES = new Set([
+  'color_r', 'color_g', 'color_b', 'color_a',
+  'texture_id', 'palette_id', 'color_index',
+])
+/** Binding either of these resolves the palette into color_r/g/b each frame. */
+const PALETTE_ATTRIBUTES = new Set(['palette_id', 'color_index'])
+
+/**
+ * One (node, attribute) ← track binding. The spec is one shared object per
+ * attribute name, so applying a frame is one call and a property store — this
+ * loop runs over every binding at up to 60 Hz.
  *
  * The invariant that buys: node.translate/rotate/scale/color are MUTATED in
  * place, never reassigned. Everything that edits a node (the inspector, multi-
@@ -227,17 +414,12 @@ type Axis = 'x' | 'y' | 'z'
  * replaces one, and a brand-new node has no ch_input_id to bind. Reassigning
  * one on a bound node would leave its channel writing to a detached object.
  */
-type Binding =
-  | { kind: 'vec'; node: GvNode; attribute: string; column: Float64Array; vec: Vec3; axis: Axis }
-  | {
-      kind: 'color'
-      node: GvNode
-      attribute: string
-      column: Float64Array
-      rgba: Rgba
-      channel: keyof Rgba
-    }
-  | { kind: 'texture'; node: GvNode; attribute: string; column: Float64Array }
+interface Binding {
+  node: GvNode
+  attribute: string
+  column: Float64Array
+  spec: AttributeSpec
+}
 
 export interface ChannelAnimation {
   frameCount: number
@@ -245,7 +427,9 @@ export interface ChannelAnimation {
   /** Every node with at least one binding. */
   boundNodeIds: Set<number>
   /** Bindings that can move or reshape geometry — translate/rotate/scale and
-   *  their rates (a rate binding makes the integrator move the node each tick). */
+   *  their rates (a rate binding makes the integrator move the node each
+   *  tick), plus the shape fields ratio/topo/geometry, which re-place the
+   *  node's children (desktop `_TRANSFORM_FIELDS`). */
   transformBoundNodeIds: Set<number>
   /** Bindings that change draw content but never the transform. */
   appearanceBoundNodeIds: Set<number>
@@ -254,6 +438,21 @@ export interface ChannelAnimation {
   scaleBoundNodeIds: Set<number>
   /** Nodes whose rates a channel drives — rate integration candidates. */
   rateBoundNodeIds: Set<number>
+  /** Nodes whose glyph SHAPE can change (geometry / mesh_id / ratio / topo) —
+   *  the render fast path rebuilds their glyph object when the value does. */
+  shapeBoundNodeIds: Set<number>
+  /** Nodes whose ratio/topo/geometry can change — their CHILDREN's placement
+   *  reads those fields, so the fast path re-places each child every tick. */
+  placementBoundNodeIds: Set<number>
+  /** Nodes whose `hide` flag a channel drives. Their glyph is built even when
+   *  the CSV hides them, and visibility is toggled per frame. */
+  hideBoundNodeIds: Set<number>
+  /** Nodes whose `show_text` pin a channel drives — the label overlay's
+   *  pinned list must follow the live value, not the load-time scan. */
+  showTextBoundNodeIds: Set<number>
+  /** Nodes whose colour resolves through (palette_id, color_index) each frame
+   *  — the desktop's `_palette_nodes`. Deduplicated, in binding order. */
+  paletteNodes: GvNode[]
   /** Every texture_id a `texture_id` track can produce, for media preloading:
    *  a flip-book scene's CSV texture_id is often 0, so nothing else names them. */
   textureIds: Set<number>
@@ -271,6 +470,11 @@ export function emptyChannelAnimation(): ChannelAnimation {
     appearanceBoundNodeIds: new Set(),
     scaleBoundNodeIds: new Set(),
     rateBoundNodeIds: new Set(),
+    shapeBoundNodeIds: new Set(),
+    placementBoundNodeIds: new Set(),
+    hideBoundNodeIds: new Set(),
+    showTextBoundNodeIds: new Set(),
+    paletteNodes: [],
     textureIds: new Set(),
     originals: new Map(),
     warnings: [],
@@ -316,6 +520,7 @@ export function bindChannels(
 
   const unknownAttributes = new Set<string>()
   const missingTracks = new Set<number>()
+  const paletteIds = new Set<number>()
   let channelsWithoutNodes = 0
 
   for (const [channelId, rows] of map.byChannel) {
@@ -331,24 +536,34 @@ export function bindChannels(
           missingTracks.add(trackId)
           continue
         }
-        const binding = makeBinding(node, attribute, column)
-        if (!binding) {
+        const spec = ATTRIBUTES[attribute]
+        if (!spec) {
           unknownAttributes.add(attribute)
           continue
         }
         // First binding of a field wins the original, matching the desktop's
-        // `if field not in self._originals[node.id]`.
+        // `originals.setdefault(field, getattr(node, field))`.
         let fields = anim.originals.get(node.id)
         if (!fields) {
           fields = new Map()
           anim.originals.set(node.id, fields)
         }
-        if (!fields.has(attribute)) fields.set(attribute, readField(binding))
+        if (!fields.has(attribute)) fields.set(attribute, spec.read(node))
 
-        anim.bindings.push(binding)
+        anim.bindings.push({ node, attribute, column, spec })
         anim.boundNodeIds.add(node.id)
         classify(anim, node.id, attribute)
-        if (binding.kind === 'texture') collectTextureIds(anim.textureIds, column)
+        if (attribute === 'texture_id') collectTextureIds(anim.textureIds, column)
+        if (PALETTE_ATTRIBUTES.has(attribute) && !paletteIds.has(node.id)) {
+          paletteIds.add(node.id)
+          anim.paletteNodes.push(node)
+          // Palette resolution overwrites color_r/g/b even though nothing
+          // bound them directly — snapshot them too so Stop can put the node
+          // back (the desktop's own load-time rule).
+          for (const out of ['color_r', 'color_g', 'color_b']) {
+            if (!fields.has(out)) fields.set(out, ATTRIBUTES[out].read(node))
+          }
+        }
       }
     }
   }
@@ -377,40 +592,13 @@ export function bindChannels(
   return anim
 }
 
-function makeBinding(node: GvNode, attribute: string, column: Float64Array): Binding | null {
-  if (attribute === 'texture_id') {
-    return { kind: 'texture', node, attribute, column }
-  }
-  const channel = COLOR_ATTRIBUTES[attribute]
-  if (channel) {
-    return { kind: 'color', node, attribute, column, rgba: node.color, channel }
-  }
-  const split = attribute.lastIndexOf('_')
-  if (split === -1) return null
-  const axis = attribute.slice(split + 1)
-  if (axis !== 'x' && axis !== 'y' && axis !== 'z') return null
-  const group = VEC_ATTRIBUTES[attribute.slice(0, split)]
-  if (!group) return null
-  return { kind: 'vec', node, attribute, column, vec: node[group], axis }
-}
-
-function readField(binding: Binding): number {
-  switch (binding.kind) {
-    case 'vec':
-      return binding.vec[binding.axis]
-    case 'color':
-      return binding.rgba[binding.channel]
-    case 'texture':
-      return binding.node.textureId
-  }
-}
-
 function classify(anim: ChannelAnimation, nodeId: number, attribute: string): void {
-  if (attribute === 'texture_id' || attribute in COLOR_ATTRIBUTES) {
-    anim.appearanceBoundNodeIds.add(nodeId)
-    return
-  }
-  anim.transformBoundNodeIds.add(nodeId)
+  if (TRANSFORM_ATTRIBUTES.has(attribute)) anim.transformBoundNodeIds.add(nodeId)
+  if (APPEARANCE_ATTRIBUTES.has(attribute)) anim.appearanceBoundNodeIds.add(nodeId)
+  if (SHAPE_ATTRIBUTES.has(attribute)) anim.shapeBoundNodeIds.add(nodeId)
+  if (PLACEMENT_ATTRIBUTES.has(attribute)) anim.placementBoundNodeIds.add(nodeId)
+  if (attribute === 'hide') anim.hideBoundNodeIds.add(nodeId)
+  if (attribute === 'show_text') anim.showTextBoundNodeIds.add(nodeId)
   if (attribute.startsWith('scale')) anim.scaleBoundNodeIds.add(nodeId)
   if (attribute.includes('_rate_')) anim.rateBoundNodeIds.add(nodeId)
 }
@@ -422,47 +610,47 @@ function collectTextureIds(into: Set<number>, column: Float64Array): void {
   }
 }
 
-/**
- * Python's `round()` — half-to-even, not JavaScript's half-up. The desktop
- * rounds every color and texture_id through it, so 0.5 steps in a track would
- * otherwise land on different values in the two apps.
- */
-export function roundHalfToEven(value: number): number {
-  const floor = Math.floor(value)
-  const frac = value - floor
-  if (frac > 0.5) return floor + 1
-  if (frac < 0.5) return floor
-  return floor % 2 === 0 ? floor : floor + 1
-}
 
 /**
  * Write frame `frame`'s value into every bound attribute.
  *
  * Absolute, not additive; no interpolation between frames (the spec is explicit
- * — author enough frames for smooth motion). Colors round and clamp to 0–255,
- * texture_id rounds with a floor of 0.
+ * — author enough frames for smooth motion). Integer attributes round
+ * half-to-even and clamp to their own valid range; floats apply exactly as
+ * written.
+ *
+ * Palette resolution runs LAST, after every binding for the frame — so a
+ * channel driving both palette fields sees a consistent pair, and a node that
+ * binds BOTH color_index and color_r/g/b resolves from the palette (the direct
+ * RGB binding is overwritten). color_a is never touched, matching ANTz palette
+ * semantics. This is the one place palette resolution happens automatically
+ * rather than on a =/−/Alt+= keypress.
  */
 export function applyChannelFrame(anim: ChannelAnimation, frame: number): void {
   if (anim.frameCount === 0 || anim.bindings.length === 0) return
   const f = Math.max(0, Math.min(frame, anim.frameCount - 1))
   for (const binding of anim.bindings) {
-    const value = binding.column[f]
-    switch (binding.kind) {
-      case 'vec':
-        binding.vec[binding.axis] = value
-        break
-      case 'color':
-        binding.rgba[binding.channel] = Math.max(0, Math.min(255, roundHalfToEven(value)))
-        break
-      case 'texture':
-        binding.node.textureId = Math.max(0, roundHalfToEven(value))
-        break
+    let value = binding.column[f]
+    const int = binding.spec.int
+    if (int) {
+      value = roundHalfToEven(value)
+      if (value < int.min) value = int.min
+      else if (value > int.max) value = int.max
     }
+    binding.spec.write(binding.node, value)
+  }
+  for (const node of anim.paletteNodes) {
+    const rgb = resolvePaletteColor(node.paletteId, node.colorIndex)
+    node.color.r = rgb.r
+    node.color.g = rgb.g
+    node.color.b = rgb.b
   }
 }
 
 /**
- * Stop: restore every bound attribute to what it held when the scene loaded.
+ * Stop: restore every bound attribute to what it held when the scene loaded —
+ * including the color_r/g/b a palette binding resolved into, which nothing
+ * bound directly (they were snapshotted at bind time for exactly this).
  *
  * Rates are restored (normally to 0, stopping the motion) but the position,
  * rotation and scale their integration accumulated deliberately are NOT — they
@@ -470,19 +658,15 @@ export function applyChannelFrame(anim: ChannelAnimation, frame: number): void {
  * authored ANTz rate fields behave on load.
  */
 export function resetChannels(anim: ChannelAnimation): void {
+  const seen = new Set<number>()
   for (const binding of anim.bindings) {
-    const original = anim.originals.get(binding.node.id)?.get(binding.attribute)
-    if (original === undefined) continue
-    switch (binding.kind) {
-      case 'vec':
-        binding.vec[binding.axis] = original
-        break
-      case 'color':
-        binding.rgba[binding.channel] = original
-        break
-      case 'texture':
-        binding.node.textureId = original
-        break
+    const node = binding.node
+    if (seen.has(node.id)) continue
+    seen.add(node.id)
+    const fields = anim.originals.get(node.id)
+    if (!fields) continue
+    for (const [attribute, value] of fields) {
+      ATTRIBUTES[attribute]?.write(node, value)
     }
   }
 }

@@ -71,11 +71,21 @@ def main() -> int:
     # can be bound twice (two map rows), and only the last write is observable.
     bound: list[tuple[int, str]] = []
     seen: set[tuple[int, str]] = set()
-    for node, field, _col, _is_int in engine._bindings:   # noqa: SLF001
+    for node, field, *_rest in engine._bindings:   # noqa: SLF001
         key = (node.id, field)
         if key not in seen:
             seen.add(key)
             bound.append(key)
+    # A palette binding (palette_id / color_index) resolves into color_r/g/b
+    # every frame without those fields being bound themselves — record them
+    # too, so the web side's resolution is pinned value for value, not just
+    # its clamped inputs. Their originals were snapshotted at load for Stop.
+    for node in engine._palette_nodes:   # noqa: SLF001
+        for attr in ("color_r", "color_g", "color_b"):
+            key = (node.id, attr)
+            if key not in seen:
+                seen.add(key)
+                bound.append(key)
 
     by_id = {n.id: n for n in nodes}
     originals = [

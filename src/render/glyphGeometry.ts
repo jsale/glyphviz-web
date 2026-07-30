@@ -184,6 +184,25 @@ function torusGeometry(ratio: number): THREE.BufferGeometry {
   return new THREE.TorusGeometry(major, minor, 16, 24)
 }
 
+/**
+ * Torus ratios are quantized to 1% steps before they reach the geometry cache
+ * — the desktop's own fix (`ensure_torus_list`, desktop 77d6361): nothing ever
+ * evicts a torus geometry, so a Channels animation sweeping `ratio`
+ * continuously would otherwise mint one per distinct float and leak without
+ * bound. Quantized, the cache tops out near 100 entries per solid/wire pair,
+ * and the geometry is BUILT from the quantized value, so every node landing in
+ * a bucket renders identically to the geometry it shares. 1% of a glyph's
+ * radius is well under a pixel of tube thickness at normal zoom; the 0.14
+ * default is unaffected. Rounding is Python's (half-to-even), like the
+ * desktop's `round(ratio, 2)`.
+ */
+export function quantizedTorusRatio(ratio: number): number {
+  const floor = Math.floor(ratio * 100)
+  const frac = ratio * 100 - floor
+  const steps = frac > 0.5 ? floor + 1 : frac < 0.5 ? floor : floor % 2 === 0 ? floor : floor + 1
+  return steps / 100
+}
+
 // Materials are shared across every node that looks the same. A material per
 // node is affordable at a hundred glyphs and pathological at a hundred
 // thousand (Raw_Auction_Field is 100k, Event_Cloud 209k) — and textures make
@@ -308,12 +327,14 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
   }
 
   if (geometryId === Geometry.TorusSolid) {
-    const geo = cached(solidCache, `torus:${style.ratio.toFixed(6)}`, () => torusGeometry(style.ratio))
+    const ratio = quantizedTorusRatio(style.ratio)
+    const geo = cached(solidCache, `torus:${ratio}`, () => torusGeometry(ratio))
     return new THREE.Mesh(geo, solidMaterial(style, false))
   }
   if (geometryId === Geometry.TorusWire) {
-    const geo = cached(wireCache, `torus:${style.ratio.toFixed(6)}`, () =>
-      new THREE.WireframeGeometry(torusGeometry(style.ratio)),
+    const ratio = quantizedTorusRatio(style.ratio)
+    const geo = cached(wireCache, `torus:${ratio}`, () =>
+      new THREE.WireframeGeometry(torusGeometry(ratio)),
     )
     return new THREE.LineSegments(geo, wireMaterial(style))
   }

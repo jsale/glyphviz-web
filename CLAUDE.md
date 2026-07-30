@@ -340,7 +340,8 @@ something to decide now).
         `color_r/g/b`, and `palette_id`/`color_index` are dormant
         metadata that resolve INTO it only when the user asks. Loading
         never resolves; rendering never reads them; the colour picker
-        leaves them alone to go stale.
+        leaves them alone to go stale. (Since 6s there is ONE automatic
+        path: a channel binding either field resolves it every frame.)
         - `=` / `−` step `color_index` within each node's OWN palette
           range, `Alt+=` / `Alt+−` step `palette_id` and re-wrap the
           index — per node, on the same `cycleTargets` subset as J/O,
@@ -840,6 +841,81 @@ something to decide now).
         Global Scale is the only edit that moves a node without touching
         a CSV field, so the readout sat at the old position while the
         glyph moved under it. `applyBaseScale` refreshes it.
+   s. Channels round 2: the expanded bindable set (shipped 2026-07-30,
+      roadmap 8a — desktop `77d6361`, 22 → 34 attributes): shape
+      (`ratio`/`topo`/`geometry`/`mesh_id`), palette (`palette_id` +
+      `color_index`, resolved to literal color_r/g/b EVERY frame — the first
+      automatic palette resolution), visibility (`hide`/`show_text`), and the
+      World row's `render_mode` + fog fields. Engine in `src/gv/channels.ts`:
+      one accessor table for all 34 (the desktop's `_ATTR_TO_FIELD` +
+      `_INT_FIELDS` + `_FIELD_RANGE` in one), integer fields rounding
+      half-to-EVEN then clamping to their own valid range, floats sign-exact;
+      palette resolution runs LAST, so a node binding both color_index and
+      color_r resolves from the palette and color_a is never touched; Stop
+      restores the resolved color_r/g/b nothing bound (snapshotted at bind
+      time, the desktop's own load rule).
+      - FOG shipped first, as the prerequisite scene feature it was:
+        `src/render/fog.ts` renders the World row's fog_enabled/fog_start/
+        fog_end as GL_LINEAR fog in the BACKGROUND colour (the desktop passes
+        the row's own color_r/g/b to GL_FOG_COLOR). Three's linear fog is
+        smoothstep, so `installLinearFog()` patches the shared fog_fragment
+        chunk to GL's straight ramp before anything compiles; LineMaterial
+        needs `fog: true` said explicitly (ShaderMaterial defaults it off),
+        so link/plot edges fade with the glyphs they connect. Chrome — halos,
+        gizmo — is exempt via `material.fog = false`, the 6j render-mode line
+        again. Scene panel: Enable Fog + Fog Start/End directly under Render
+        Mode, the desktop's own rows and ranges. Divergence, deliberate: the
+        toggle WRITES the displayed 20/200 onto the row, where the desktop's
+        checkbox leaves the data at 0/0 (sync blocks signals, toggle writes
+        only the flag) and the scene dissolves entirely into background.
+      - Fast path (`dynamicNodes.ts`, whose update() now returns a report):
+        shape fields swap the GLYPH OBJECT when the value changes (flip-book
+        cadence by the authoring rule), re-privatising appearance clones and
+        re-arming the pick proxy — a World Grid's geometry swap is its
+        globe↔flat flip; `hide` toggles glyph.visible on a glyph buildScene
+        keeps alive for hide-bound nodes (`channelHideBound`), with the pick
+        pass skipping an invisible glyph so an animated-hidden node is as
+        unpickable as a CSV-hidden one; a placement-bound parent's DIRECT
+        children re-place per tick — `applyFrameTransform` already re-reads
+        parent topo/ratio/grid-form fresh, this app's analogue of the
+        desktop's `update_world_transform_rows` contract fix — and
+        grandchildren ride the frame chain. The World row reaches the screen
+        through renderer state, not an Object3D, so main.ts syncs
+        background + fog per animated frame and re-walks materials only on a
+        frame that actually changes render_mode.
+      - The desktop commit's three fast-path bugs, in this platform's
+        dialect, all handled: Plot/Surface membership re-baked on a topo/hide
+        flip (`overlayDirty` → rebuildAnimatedOverlays;
+        TopologyOverlay.dispose now DETACHES its objects, since here the
+        root survives the rebake); the pinned-label list re-derived per frame
+        for the bound few (`refreshAnimatedPinnedTags` — three checks a
+        frame, not 209k); and the torus geometry cache quantized to 1% ratio
+        steps (`quantizedTorusRatio`, Python rounding — the desktop's own
+        `ensure_torus_list` fix), bounding a swept ratio at ~50 entries where
+        it leaked one geometry per distinct float.
+      - `roundHalfToEven` moved to `src/gv/pythonRound.ts`: channels ↔
+        colorPalette became an ESM cycle, which the browser rejects with a
+        TDZ ReferenceError while vitest's bundling tolerates it — the app
+        failed to BOOT with 1112 tests green, which is the drive-the-UI
+        rule's whole argument.
+      - Parity: the desktop's two new examples are vendored as fixtures AND
+        as built-in scenes (Channel parameters / Mood background — each is a
+        teaching scene, one station per new attribute).
+        `dump_channel_frames.py` handles the engine's widened binding tuples
+        and now also records the color_r/g/b a palette binding RESOLVES
+        into, so resolution is pinned value for value;
+        `channelParity.test.ts` diffs six fixtures. Unit tests pin the clamp
+        table, resolve-last, reset-restores-palette-outputs, the glyph
+        swap/hide/placement paths and the torus cache bound.
+      - Driven in Chrome: the mood scene's background animates, the blend
+        mode reaches Additive in the ember phase, and Stop restores the row
+        (that pass caught the Node Table not repainting on Stop/seek —
+        fixed); the parameters scene's topo/geometry step and hide strobes
+        in the live table; show_text's pop measured as label-canvas ink.
+      - Known non-animating edges, both matching a build-time bake no example
+        exercises: a hide-bound LINK's edge (link batches are per build) and
+        World-Grid colour writes (excluded from appearance sync since 6,
+        for the per-part colour rule).
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -1350,35 +1426,11 @@ something to decide now).
      is 315 MB and is never shipped wholesale). Lower priority per Jeff
      (2026-07-25): folder drop and zip already let users draw from their
      own copy of the GlyphViz examples.
-8. Agreed next, in order (2026-07-30, Jeff's four-feature ask — the first
-   two shipped as 6r; these two are each their OWN session, because each
-   ends in a parity or behaviour harness plus a drive-the-UI pass and the
-   real risk is running out of context halfway through one):
-   a. CHANNELS, the desktop's expanded bindable set (22 → 34 attributes,
-      desktop `77d6361`): shape (`ratio`/`topo`/`geometry`/`mesh_id`),
-      palette (`palette_id` + `color_index`, resolved to literal RGB every
-      frame — the first automatic palette resolution, where this app so
-      far resolves only on a keypress), visibility (`hide`/`show_text`),
-      and the World row's `render_mode` + `fog_*`.
-      - FOG DOES NOT RENDER HERE YET and is the prerequisite: exactly the
-        `render_mode` situation of 6j, a parsed and written column
-        (`fogEnabled`/`fogStart`/`fogEnd` are already on the World row in
-        `gv/types.ts`) that does nothing. Ship it as a scene feature
-        first — World-row fields, a Scene-panel group, GL_LINEAR fog under
-        this app's raw-sRGB output pipeline — then binding it is one table
-        entry.
-      - The desktop's commit message lists three fast-path bugs it had to
-        fix for this, and TWO have exact counterparts already documented
-        in this file: plot/surface membership is baked per scene build
-        here (so a node animating INTO topo 16/17 gets no polyline), and
-        `pinnedTagNodes` is refreshed per build (so `show_text` animated
-        on a scene that loaded with none draws nothing). Its torus-cache
-        leak maps onto this app's geometry cache. Read that message as a
-        bug list for this port, not as background.
-      - Fixtures: the desktop's two new examples, `Channel_Parameters_Example`
-        and `Mood_Background_Example`, plus an extended
-        `tools/dump_channel_frames.py`.
-   b. CAMERA MODE (desktop `7a73392` then `d66304a`): **C** toggles free
+8. Agreed next (2026-07-30, Jeff's four-feature ask — the first two shipped
+   as 6r, the Channels expansion as 6s; this one is its OWN session, because
+   it ends in a behaviour harness plus a drive-the-UI pass and the real risk
+   is running out of context halfway through):
+   a. CAMERA MODE (desktop `7a73392` then `d66304a`): **C** toggles free
       flight, **Shift+C** cycles camera views. It is two features — this
       app has no fixed-axis camera set at all, and on the desktop plain C
       DISPLACED that cycling onto Shift+C, so the displaced thing has to

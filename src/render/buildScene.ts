@@ -181,6 +181,15 @@ export interface BuildSceneOptions {
    * overlay nodes that keep a bare frame past the cut.
    */
   drawLimit?: number | null
+  /**
+   * Nodes whose `hide` flag a channel animates (channels.hideBoundNodeIds).
+   * Their glyph is built even when the CSV hides them, so playback can blank
+   * and restore it by visibility alone — a strobe cannot afford a rebuild per
+   * flip, and a node with no glyph would have nothing to un-hide. DynamicNodes
+   * applies the row's current value the moment it registers the node, so a
+   * CSV-hidden one never flashes visible.
+   */
+  channelHideBound?: ReadonlySet<number>
 }
 
 /** id → row, FIRST row wins on a duplicate id (the engine's own rule). */
@@ -304,7 +313,9 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     const drawable =
       !NON_VISUAL_TYPES.has(node.type) &&
       node.type !== NodeType.Link &&
-      (node.hide === 0 || options.showHidden === true) &&
+      (node.hide === 0 ||
+        options.showHidden === true ||
+        options.channelHideBound?.has(node.id) === true) &&
       // Kept-but-not-drawn nodes exist only to place an overlay endpoint or a
       // descendant; they carry a frame and no glyph.
       (!limit || limit.draw.has(node.id))

@@ -1,0 +1,8 @@
+channel_id,track_id,attribute
+1,1,color_r
+1,2,color_g
+1,3,color_b
+1,4,fog_enabled
+1,5,fog_start
+1,6,fog_end
+1,7,render_mode

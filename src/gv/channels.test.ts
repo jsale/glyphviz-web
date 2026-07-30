@@ -251,3 +251,112 @@ describe('roundHalfToEven', () => {
     expect(roundHalfToEven(-2.6)).toBe(-3)
   })
 })
+
+// The expanded bindable set (desktop 77d6361): shape, palette, visibility and
+// the World row's scene settings. These pin the desktop's clamp table and its
+// resolve-last palette rule; the value-for-value cross-check against the real
+// engine is channelParity.test.ts's channel_parameters / mood_background
+// fixtures.
+describe('the expanded bindable set', () => {
+  function boundScene(mapRows: string[], tracksCsv: string, nodeRows?: string[]) {
+    const rows = nodes(...(nodeRows ?? [row(1, 1)]))
+    const anim = bindChannels(
+      parseGvChMap([MAP_HEADER, ...mapRows].join('\n')),
+      parseGvChTracks(tracksCsv),
+      rows,
+    )
+    return { rows, anim }
+  }
+
+  it('rounds and clamps every integer field to its own valid range', () => {
+    const { rows, anim } = boundScene(
+      [
+        mapRow(1, 1, 'topo'),
+        mapRow(1, 2, 'geometry'),
+        mapRow(1, 3, 'palette_id'),
+        mapRow(1, 4, 'render_mode'),
+        mapRow(1, 5, 'hide'),
+        mapRow(1, 6, 'show_text'),
+        mapRow(1, 7, 'color_index'),
+        mapRow(1, 8, 'mesh_id'),
+      ],
+      'ch1,ch2,ch3,ch4,ch5,ch6,ch7,ch8\n25.4,99,40,9,3,-2,-5,2.5\n',
+    )
+    applyChannelFrame(anim, 0)
+    const n = rows[0]
+    expect(n.topo).toBe(17) // TOPO_MAX
+    expect(n.geometry).toBe(28) // GEOMETRY_MAX
+    expect(n.paletteId).toBe(25) // PALETTE_COUNT − 1
+    expect(n.renderMode).toBe(6) // RENDER_MODE_COUNT − 1
+    expect(n.hide).toBe(1) // flag
+    expect(n.showText).toBe(0) // flag floor
+    expect(n.colorIndex).toBe(0) // nonnegative floor
+    expect(n.meshId).toBe(2) // 2.5 rounds half-to-even
+  })
+
+  it('passes float fields through sign-exact — ratio and the fog distances', () => {
+    const { rows, anim } = boundScene(
+      [mapRow(1, 1, 'ratio'), mapRow(1, 2, 'fog_start'), mapRow(1, 3, 'fog_end')],
+      'ch1,ch2,ch3\n-0.5,-10,1000000\n',
+    )
+    applyChannelFrame(anim, 0)
+    expect(rows[0].ratio).toBe(-0.5)
+    expect(rows[0].fogStart).toBe(-10)
+    expect(rows[0].fogEnd).toBe(1_000_000)
+  })
+
+  it('resolves (palette_id, color_index) into literal color_r/g/b, last', () => {
+    // color_r is ALSO bound directly — the palette resolution runs after every
+    // binding, so it wins, exactly as on the desktop. color_a is untouched.
+    const { rows, anim } = boundScene(
+      [mapRow(1, 1, 'color_index'), mapRow(1, 2, 'color_r')],
+      'ch1,ch2\n0,123\n',
+    )
+    applyChannelFrame(anim, 0)
+    const n = rows[0]
+    // Palette 0 (Distinct 20) index 0 is Caribbean current (50, 101, 101),
+    // not track ch2's 123.
+    expect([n.color.r, n.color.g, n.color.b]).toEqual([50, 101, 101])
+    expect(n.color.a).toBe(255)
+  })
+
+  it('restores palette-resolved colors on reset, though nothing bound them', () => {
+    const { rows, anim } = boundScene([mapRow(1, 1, 'color_index')], 'ch1\n3\n')
+    applyChannelFrame(anim, 0)
+    expect(rows[0].color.r).not.toBe(10)
+    resetChannels(anim)
+    expect([rows[0].color.r, rows[0].color.g, rows[0].color.b]).toEqual([10, 20, 30])
+  })
+
+  it('classifies the shape fields as transform-affecting (they re-place children)', () => {
+    const { anim } = boundScene(
+      [mapRow(1, 1, 'ratio'), mapRow(1, 2, 'topo'), mapRow(1, 3, 'geometry')],
+      'ch1,ch2,ch3\n0.1,0,1\n',
+    )
+    expect([...anim.transformBoundNodeIds]).toEqual([1])
+    expect([...anim.placementBoundNodeIds]).toEqual([1])
+    expect([...anim.shapeBoundNodeIds]).toEqual([1])
+  })
+
+  it('classifies mesh_id as shape-only and the flags as neither transform nor appearance', () => {
+    const { anim } = boundScene(
+      [mapRow(1, 1, 'mesh_id'), mapRow(1, 2, 'hide'), mapRow(1, 3, 'show_text')],
+      'ch1,ch2,ch3\n1,0,0\n',
+    )
+    expect([...anim.shapeBoundNodeIds]).toEqual([1])
+    expect(anim.placementBoundNodeIds.size).toBe(0)
+    expect(anim.transformBoundNodeIds.size).toBe(0)
+    expect(anim.appearanceBoundNodeIds.size).toBe(0)
+    expect([...anim.hideBoundNodeIds]).toEqual([1])
+    expect([...anim.showTextBoundNodeIds]).toEqual([1])
+  })
+
+  it('classifies palette bindings as appearance and lists the palette nodes once', () => {
+    const { anim } = boundScene(
+      [mapRow(1, 1, 'palette_id'), mapRow(1, 2, 'color_index')],
+      'ch1,ch2\n0,0\n',
+    )
+    expect([...anim.appearanceBoundNodeIds]).toEqual([1])
+    expect(anim.paletteNodes.map((n) => n.id)).toEqual([1])
+  })
+})

@@ -37,6 +37,16 @@ import sineMapCsv from '../examples/sine_wave_example_gv_ch-map.csv?raw'
 import sineTracksCsv from '../examples/sine_wave_example_gv_ch-tracks.csv?raw'
 import sineReferenceRaw from './fixtures/channels/sine_wave_channel_frames.json?raw'
 
+import paramsNodeCsv from './fixtures/channels/channel_parameters/channel_parameters_gv_node.csv?raw'
+import paramsMapCsv from './fixtures/channels/channel_parameters/channel_parameters_gv_ch-map.csv?raw'
+import paramsTracksCsv from './fixtures/channels/channel_parameters/channel_parameters_gv_ch-tracks.csv?raw'
+import paramsReferenceRaw from './fixtures/channels/channel_parameters/channel_frames.json?raw'
+
+import moodNodeCsv from './fixtures/channels/mood_background/mood_background_gv_node.csv?raw'
+import moodMapCsv from './fixtures/channels/mood_background/mood_background_gv_ch-map.csv?raw'
+import moodTracksCsv from './fixtures/channels/mood_background/mood_background_gv_ch-tracks.csv?raw'
+import moodReferenceRaw from './fixtures/channels/mood_background/channel_frames.json?raw'
+
 interface Reference {
   source_csv: string
   frame_count: number
@@ -76,6 +86,27 @@ const FIXTURES = [
     tracks: sineTracksCsv,
     reference: JSON.parse(sineReferenceRaw) as Reference,
   },
+  // The desktop's own examples for the expanded attribute set (77d6361). The
+  // parameters scene covers the shape fields (ratio/topo/geometry), palette
+  // resolution — its reference records the color_r/g/b the desktop resolves
+  // from (palette_id, color_index) each frame, not just the clamped inputs —
+  // and the hide/show_text flags. The mood scene is the World row: background
+  // colour through the ordinary color binding, render_mode, and the three fog
+  // fields (fog_start/fog_end being the floats a track feeds sign-exactly).
+  {
+    name: 'channel parameters (shape + palette + visibility)',
+    node: paramsNodeCsv,
+    map: paramsMapCsv,
+    tracks: paramsTracksCsv,
+    reference: JSON.parse(paramsReferenceRaw) as Reference,
+  },
+  {
+    name: 'mood background (World row: background, fog, render_mode)',
+    node: moodNodeCsv,
+    map: moodMapCsv,
+    tracks: moodTracksCsv,
+    reference: JSON.parse(moodReferenceRaw) as Reference,
+  },
 ]
 
 /** Read one desktop field name off a parsed web node. */
@@ -91,6 +122,30 @@ function readAttribute(node: GvNode, attribute: string): number {
       return node.color.b
     case 'color_a':
       return node.color.a
+    case 'ratio':
+      return node.ratio
+    case 'topo':
+      return node.topo
+    case 'geometry':
+      return node.geometry
+    case 'mesh_id':
+      return node.meshId
+    case 'palette_id':
+      return node.paletteId
+    case 'color_index':
+      return node.colorIndex
+    case 'hide':
+      return node.hide
+    case 'show_text':
+      return node.showText
+    case 'render_mode':
+      return node.renderMode
+    case 'fog_enabled':
+      return node.fogEnabled
+    case 'fog_start':
+      return node.fogStart
+    case 'fog_end':
+      return node.fogEnd
     default: {
       const axis = attribute.slice(-1) as 'x' | 'y' | 'z'
       const group = attribute.slice(0, -2)
@@ -125,6 +180,13 @@ for (const fixture of FIXTURES) {
       // The desktop list is deduplicated by (node, field); ours keeps one entry
       // per map row, so compare the observable set rather than the raw counts.
       const ours = new Set(animation.bindings.map((b) => `${b.node.id}:${b.attribute}`))
+      // The dump also records the color_r/g/b a palette binding RESOLVES into
+      // (they are observable writes without being bindings) — mirror that.
+      for (const node of animation.paletteNodes) {
+        for (const attribute of ['color_r', 'color_g', 'color_b']) {
+          ours.add(`${node.id}:${attribute}`)
+        }
+      }
       const theirs = new Set(reference.bindings.map((b) => `${b.id}:${b.attribute}`))
       expect([...ours].sort()).toEqual([...theirs].sort())
     })

@@ -197,6 +197,15 @@ export const GEOMETRY_NAMES: Record<number, string> = {
   [Geometry.TexturedPrism]: 'Textured Prism',
 }
 
+/**
+ * Number of scene blend modes the World row's `render_mode` can name (ids
+ * 0–6; the state table lives in src/render/renderMode.ts). A data-model fact
+ * — the desktop keeps its RENDER_MODE_COUNT on the Node dataclass — so the
+ * channel engine can clamp an animated render_mode without importing the
+ * renderer.
+ */
+export const RENDER_MODE_COUNT = 7
+
 /** Rotation interpretation for `rotate_x/y/z` (`rotation_mode` column). */
 export const RotationMode = {
   /** Euler XYZ — each field rotates about its own axis. */

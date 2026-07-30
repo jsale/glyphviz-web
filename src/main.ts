@@ -71,6 +71,7 @@ import {
   rescaleSceneFrames,
 } from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
+import { buildTopologyOverlay } from './render/topologyOverlay'
 import {
   DRAW_LIMIT_DOUBLE,
   DRAW_LIMIT_HALVE,
@@ -101,6 +102,7 @@ import {
   RENDER_MODE_NAMES,
   RenderMode,
 } from './render/renderMode'
+import { applySceneFog, installLinearFog } from './render/fog'
 import { invertLocalRotation } from './render/rotationInverse'
 import { eyeForX, StereoRig } from './render/stereo'
 import type { StereoEye } from './render/stereo'
@@ -124,6 +126,12 @@ import sineWaveChTracksCsv from './examples/sine_wave_example_gv_ch-tracks.csv?r
 import topologyCsv from './gv/fixtures/topology_example_gv_node.csv?raw'
 import topologyTagCsv from './gv/fixtures/topology_example_gv_tag.csv?raw'
 import worldGridCsv from './gv/fixtures/world_grid_example_gv_node.csv?raw'
+import channelParamsCsv from './gv/fixtures/channels/channel_parameters/channel_parameters_gv_node.csv?raw'
+import channelParamsChMapCsv from './gv/fixtures/channels/channel_parameters/channel_parameters_gv_ch-map.csv?raw'
+import channelParamsChTracksCsv from './gv/fixtures/channels/channel_parameters/channel_parameters_gv_ch-tracks.csv?raw'
+import moodBackgroundCsv from './gv/fixtures/channels/mood_background/mood_background_gv_node.csv?raw'
+import moodBackgroundChMapCsv from './gv/fixtures/channels/mood_background/mood_background_gv_ch-map.csv?raw'
+import moodBackgroundChTracksCsv from './gv/fixtures/channels/mood_background/mood_background_gv_ch-tracks.csv?raw'
 
 // Parse a gv_node.csv, render it with the full topology placement math and
 // World Grid geographic placement (verified against the desktop engine by
@@ -181,6 +189,22 @@ const BUILT_IN_SCENES: Record<string, BuiltInScene> = {
     chTracks: sineWaveChTracksCsv,
     filename: 'sine_wave_example_gv_node.csv',
   },
+  // The desktop's two examples for the expanded Channels attribute set —
+  // vendored as parity fixtures, and worth surfacing here because each is a
+  // teaching scene: one station per newly bindable attribute, and a World row
+  // driving background/fog/blend for the whole scene at once.
+  'Channel parameters example (shape/palette/visibility tracks)': {
+    csv: channelParamsCsv,
+    chMap: channelParamsChMapCsv,
+    chTracks: channelParamsChTracksCsv,
+    filename: 'channel_parameters_gv_node.csv',
+  },
+  'Mood background example (animated background, fog, blend)': {
+    csv: moodBackgroundCsv,
+    chMap: moodBackgroundChMapCsv,
+    chTracks: moodBackgroundChTracksCsv,
+    filename: 'mood_background_gv_node.csv',
+  },
 }
 
 // GlyphViz worlds are Z-up (ANTz convention).
@@ -193,6 +217,9 @@ const app = document.querySelector<HTMLDivElement>('#app')!
 // at the far end of large scenes.
 const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
 applyDesktopColorPipeline(renderer)
+// GL_LINEAR fog, not three's smoothstep — patched before any shader compiles
+// (render/fog.ts). The World row's fog fields then drive scene.fog below.
+installLinearFog()
 renderer.setPixelRatio(window.devicePixelRatio)
 renderer.setSize(window.innerWidth, window.innerHeight)
 app.appendChild(renderer.domElement)
@@ -298,6 +325,14 @@ hud.innerHTML = `
       <span>Render Mode</span>
       <select id="hud-render-mode"></select>
     </div>
+    <label id="hud-fog" class="sel-check" title="Linear fog fading the scene toward the background colour with eye distance — the World row's fog_enabled, so it saves with the scene.&#10;Channels can animate it (bind fog_enabled / fog_start / fog_end on the World row).">
+      <input type="checkbox">Enable Fog
+    </label>
+    <div class="hud-create-row" id="hud-fog-row" title="Fog Start: distance where fog begins.&#10;Fog End: distance where fog is fully opaque.&#10;World units of eye-space depth — retune when the camera sits much nearer or farther.">
+      <span>Fog Start/End</span>
+      <input id="hud-fog-start" type="number" min="0" max="1000000" step="10" value="20" disabled>
+      <input id="hud-fog-end" type="number" min="0" max="1000000" step="10" value="200" disabled>
+    </div>
     <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
       <input type="checkbox">Follow Selected (F)
     </label>
@@ -347,6 +382,9 @@ const showGridCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-grid inp
 const showAxesCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-axes input')!
 const gridColorInput = hud.querySelector<HTMLInputElement>('#hud-grid-color')!
 const renderModeSelect = hud.querySelector<HTMLSelectElement>('#hud-render-mode')!
+const fogCheckbox = hud.querySelector<HTMLInputElement>('#hud-fog input')!
+const fogStartInput = hud.querySelector<HTMLInputElement>('#hud-fog-start')!
+const fogEndInput = hud.querySelector<HTMLInputElement>('#hud-fog-end')!
 const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
 const showFpsCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-fps input')!
 const baseScaleSlider = hud.querySelector<HTMLInputElement>('#hud-base-scale')!
@@ -874,6 +912,16 @@ let channels: ChannelAnimation = emptyChannelAnimation()
 /** Nodes the rate integrator has to visit — see rates.ts on why it isn't all. */
 let rateNodes: GvNode[] = []
 let dynamic: DynamicNodes | null = null
+/** The nodes whose show_text a channel drives, resolved once per rebuild. */
+let showTextBoundNodes: GvNode[] = []
+/** Live pinned-label list while a channel drives show_text; null = use the
+ *  load-time scan. The desktop's counterpart re-derives has_pinned_tags for
+ *  its dynamic set each frame, because its cached scan is keyed on a revision
+ *  playback never bumps. */
+let animatedPinnedTags: GvNode[] | null = null
+/** World render_mode as last pushed onto the materials, so the animated path
+ *  only pays the material walk on frames that actually change the mode. */
+let appliedWorldRenderMode: number | null = null
 const channelAudio = new ChannelAudio()
 
 let playing = false
@@ -902,7 +950,15 @@ const channelCommands = {
     resetChannels(channels)
     channelAudio.stop()
     channelsPanel.setFrame(0)
-    dynamic?.update()
+    pushAnimationFrame()
+    // An animated World row is back on its CSV values — mirror them into the
+    // panel rows the animation deliberately never writes to mid-play.
+    syncBackgroundInput()
+    syncFogInputs()
+    syncRenderMode()
+    // The animation loop repaints the table only while frames are ticking;
+    // the restore just happened outside one.
+    nodeTable.refreshVisible()
   },
   seek(frame: number) {
     channelFrame = frame
@@ -912,7 +968,8 @@ const channelCommands = {
     if (channelAudio.loaded && channels.frameCount > 1) {
       channelAudio.seekFraction(frame / (channels.frameCount - 1))
     }
-    dynamic?.update()
+    pushAnimationFrame()
+    nodeTable.refreshVisible() // scrubbing while paused ticks no frames
   },
   setFps(value: number) {
     channelFps = value
@@ -940,6 +997,77 @@ function setPlaying(value: boolean) {
   channelAudio.play(channelLoop).catch(() => {
     status('The browser blocked audio playback; the animation is running unsynced.')
   })
+}
+
+/**
+ * Push mutated node rows onto the live graph, then absorb the consequences the
+ * per-node fast path cannot see: World-row scene settings, Plot/Surface
+ * membership, swapped glyph objects, and the pinned-label list. Every path
+ * that applies channel values (tick, seek, Stop) ends here.
+ */
+function pushAnimationFrame() {
+  const report = dynamic?.update()
+  syncAnimatedWorld()
+  if (report?.overlayDirty) rebuildAnimatedOverlays()
+  if (report?.glyphsRebuilt) {
+    // Freshly minted materials know nothing of a non-Normal blend state; the
+    // walk is a few hundred writes and runs only on the frames a flip-book
+    // value actually steps.
+    syncRenderMode()
+    // Halos hold the glyph objects they outline — re-resolve a selection that
+    // may now be pointing at a removed one.
+    if (selection.size > 0) setSelection(selection.asSet())
+  }
+  refreshAnimatedPinnedTags()
+}
+
+/**
+ * An animated World row reaches the screen through renderer state, not through
+ * any Object3D — background clear colour, fog, and the scene-wide blend mode.
+ * The desktop reads all three off the row in paintGL every frame; this applies
+ * them when a frame lands. (The desktop documents the World row's color_r/g/b
+ * as the way to animate the background, and its fog colour follows it.)
+ */
+function syncAnimatedWorld() {
+  const world = worldNodeOf(currentNodes)
+  if (!world || !channels.boundNodeIds.has(world.id)) return
+  const r = world.color.r / 255
+  const g = world.color.g / 255
+  const b = world.color.b / 255
+  if (scene.background instanceof THREE.Color) scene.background.setRGB(r, g, b)
+  else scene.background = new THREE.Color(r, g, b)
+  applySceneFog(scene, world)
+  if (world.renderMode !== appliedWorldRenderMode) syncRenderMode()
+}
+
+/**
+ * Re-bake Plot/Surface membership mid-playback. It is baked per scene build
+ * for good reasons (topologyOverlay.ts); a channel animating `topo` into or
+ * out of 16/17 — or striking `hide` on an overlay family — is the one case
+ * that invalidates it between rebuilds, so just the overlay is rebuilt. The
+ * desktop's fix is the same move: its scan is keyed on a revision playback
+ * never bumps, so it re-derives membership for the dynamic set each frame.
+ */
+function rebuildAnimatedOverlays() {
+  if (!currentRoot || !currentFrames) return
+  currentOverlays?.dispose()
+  currentOverlays = buildTopologyOverlay(currentNodes, currentFrames, currentRoot, { showHidden })
+  applyLineResolution()
+}
+
+/**
+ * Keep the label overlay's pinned list current while a channel drives
+ * show_text. The load-time scan (`pinnedTags`) is correct for every node a
+ * channel cannot touch; the bound few are re-read live — with labels off, a
+ * scene that pins three of 209k nodes still costs three checks a frame.
+ */
+function refreshAnimatedPinnedTags() {
+  if (showTextBoundNodes.length === 0) return
+  const bound = channels.showTextBoundNodeIds
+  animatedPinnedTags = [
+    ...pinnedTags.filter((n) => !bound.has(n.id)),
+    ...showTextBoundNodes.filter((n) => n.showText !== 0),
+  ]
 }
 
 /** One display frame of animation. Returns true when something moved. */
@@ -991,7 +1119,7 @@ function tickAnimation(dtMs: number): boolean {
     if (applyRateAnimation(rateNodes, dtMs).size > 0) changed = true
   }
 
-  if (changed) dynamic?.update()
+  if (changed) pushAnimationFrame()
   return changed
 }
 
@@ -1260,6 +1388,8 @@ function rebuildScene(fitCamera: boolean) {
     textures: currentTextures.byId,
     meshes: meshLibrary.geometries(),
     drawLimit,
+    // A channel striking `hide` needs the glyph alive to blank and restore.
+    channelHideBound: channels.hideBoundNodeIds,
   })
   if (currentRoot) {
     gizmo.detach()
@@ -1288,9 +1418,14 @@ function rebuildScene(fitCamera: boolean) {
   // Materials are per build (and the cache is cleared with the scene), so the
   // blend state has to be written onto the new ones.
   syncRenderMode()
+  syncFogInputs() // ditto the World row's fog fields (and scene.fog with them)
   // Pinned labels draw whatever the Labels settings say, so the overlay needs
   // this list even with labels off. An inspector edit to show_text lands here.
   pinnedTags = pinnedTagNodes(currentNodes)
+  // The channel-driven slice of that list starts from the fresh rows; the
+  // per-frame refresh (refreshAnimatedPinnedTags) takes over from here.
+  showTextBoundNodes = currentNodes.filter((n) => channels.showTextBoundNodeIds.has(n.id))
+  animatedPinnedTags = null
   nodesById = new Map(currentNodes.map((n) => [n.id, n]))
   // Before any setSelection below: orderedIds resolves the primary through the
   // table's display order, which has to be describing THIS node list.
@@ -1317,8 +1452,13 @@ function rebuildScene(fitCamera: boolean) {
         ...channels.scaleBoundNodeIds,
         ...rateNodes.filter((n) => n.scaleRate.x || n.scaleRate.y || n.scaleRate.z).map((n) => n.id),
       ]),
+      shape: channels.shapeBoundNodeIds,
+      placement: channels.placementBoundNodeIds,
+      hidden: channels.hideBoundNodeIds,
     },
     currentTextures.byId,
+    meshLibrary.geometries(),
+    { showHidden },
   )
 
   const mediaCount = currentMedia?.index.entries.length ?? 0
@@ -1994,6 +2134,14 @@ gizmo.setMode('translate')
 gizmo.setSpace('local')
 gizmo.setSize(0.8)
 scene.add(gizmo.getHelper())
+// The handles are chrome: exempt from scene fog like the selection halos
+// (render/fog.ts) — a gizmo out at fog_end must stay grabbable.
+gizmo.getHelper().traverse((o) => {
+  const material = (o as THREE.Mesh).material
+  for (const m of Array.isArray(material) ? material : material ? [material] : []) {
+    ;(m as THREE.Material & { fog?: boolean }).fog = false
+  }
+})
 
 // In stereo the handles are drawn twice, once per eye, and a pointer measured
 // against the whole canvas would grab at neither. So before TransformControls
@@ -2716,6 +2864,7 @@ function setBackground(r: number, g: number, b: number) {
   // Otherwise this is one uniform: repaint without rebuilding the graph, so
   // dragging the colour picker stays smooth on a 200k-node scene.
   scene.background = new THREE.Color(r / 255, g / 255, b / 255)
+  applySceneFog(scene, world) // fog fades to the background, so it follows
   nodeTable.refreshVisible() // the World row's colour cell
 }
 
@@ -2812,6 +2961,7 @@ for (const mode of Object.keys(RENDER_MODE_NAMES).map(Number).sort((a, b) => a -
 /** Point the combo at the scene's mode and push it onto the live materials. */
 function syncRenderMode() {
   const mode = worldNodeOf(currentNodes)?.renderMode ?? RenderMode.Normal
+  appliedWorldRenderMode = mode // the animated path skips frames that keep it
   renderModeSelect.value = String(mode)
   if (currentRoot) applyRenderMode(currentRoot, mode)
   applyRenderMode(backdrop.group, mode)
@@ -2833,6 +2983,58 @@ function cycleRenderMode() {
 }
 
 renderModeSelect.addEventListener('change', () => setRenderMode(Number(renderModeSelect.value)))
+
+// --- Fog (Enable Fog / Fog Start/End) -------------------------------------------
+// The World row's fog_enabled / fog_start / fog_end — scene data like the
+// background, which is also the fog's colour (the desktop passes the World
+// row's own color_r/g/b to GL_FOG_COLOR, so the far distance dissolves into
+// the backdrop). Rendering lives in src/render/fog.ts; a scene with no World
+// row gets one synthesized on first change, the ensureWorldNode rule.
+
+/** Mirror the scene's fog state into the panel row and onto scene.fog. */
+function syncFogInputs() {
+  const world = worldNodeOf(currentNodes)
+  const on = (world?.fogEnabled ?? 0) !== 0
+  fogCheckbox.checked = on
+  // A zero distance displays as the UI default (desktop _refresh_scene_settings:
+  // `world.fog_start if world.fog_start else 20.0`) — 0-to-0 fog is a scene
+  // dissolved entirely into its background, never what a fresh toggle wants.
+  fogStartInput.value = String(world?.fogStart || 20)
+  fogEndInput.value = String(world?.fogEnd || 200)
+  fogStartInput.disabled = !on
+  fogEndInput.disabled = !on
+  applySceneFog(scene, world)
+}
+
+fogCheckbox.addEventListener('change', () => {
+  const hadWorldRow = worldNodeOf(currentNodes) !== null
+  const world = ensureWorldNode(currentNodes)
+  world.fogEnabled = fogCheckbox.checked ? 1 : 0
+  // Divergence, deliberate: the desktop's toggle leaves fog_start/fog_end
+  // alone, so enabling fog on a fresh scene runs it at the row's 0/0 while the
+  // spinboxes display 20/200 — the whole scene dissolves into the background.
+  // Here the displayed values are written with the flag, so what the row says
+  // is what the toggle showed. A loaded scene's own distances round-trip
+  // unchanged, because the inputs were synced from them.
+  world.fogStart = Number(fogStartInput.value) || 0
+  world.fogEnd = Number(fogEndInput.value) || 0
+  syncFogInputs()
+  if (!hadWorldRow) rebuildScene(false)
+  status(fogCheckbox.checked ? 'Fog on.' : 'Fog off.')
+})
+
+for (const input of [fogStartInput, fogEndInput]) {
+  input.addEventListener('change', () => {
+    const hadWorldRow = worldNodeOf(currentNodes) !== null
+    const world = ensureWorldNode(currentNodes)
+    world.fogStart = Number(fogStartInput.value) || 0
+    world.fogEnd = Number(fogEndInput.value) || 0
+    // Fog is three uniforms, never a rebuild — only a synthesized row needs
+    // one, to reach nodesById and the Node Table.
+    applySceneFog(scene, world)
+    if (!hadWorldRow) rebuildScene(false)
+  })
+}
 
 // --- Follow Selected (F) --------------------------------------------------------
 // Desktop View ▸ Follow Selected Node: the orbit pivot re-centres on the
@@ -2985,7 +3187,7 @@ renderer.setAnimationLoop(() => {
     selectedOnly: tagsSelectedOnly,
     showHidden,
     isSelected: (id: number) => selection.has(id),
-    pinned: pinnedTags,
+    pinned: animatedPinnedTags ?? pinnedTags,
     tagColorMode: tagStyle.mode,
     tagColor: tagStyle.rgb,
   }

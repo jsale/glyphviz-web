@@ -229,3 +229,136 @@ describe('DynamicNodes', () => {
     expect(missing.isEmpty).toBe(true)
   })
 })
+
+// The shape / visibility / placement half of the fast path (desktop 77d6361's
+// expanded Channels set): glyphs swap when — and only when — a bound shape
+// value changes, hide toggles visibility on a glyph the build kept alive, and
+// a placement-bound parent's children re-place through the fresh field reads.
+describe('DynamicNodes shape, hide and placement animation', () => {
+  const SETS = (over: Partial<Record<'transform' | 'appearance' | 'scaled' | 'shape' | 'placement' | 'hidden', Set<number>>>) => ({
+    ...NO_SETS,
+    ...over,
+  })
+
+  it('swaps the glyph when a bound geometry changes, and only then', () => {
+    const nodes = scene({ geometry: 1 }) // Cube solid — a Mesh
+    const built = buildScene(nodes)
+    const dynamic = new DynamicNodes(nodes, built.frames, SETS({ shape: new Set([1]) }), new Map())
+    const frame = built.frames.get(1)!
+    const before = frame.getObjectByName('glyph')!
+
+    // No change: same object, nothing reported.
+    expect(dynamic.update()).toMatchObject({ glyphsRebuilt: false })
+    expect(frame.getObjectByName('glyph')).toBe(before)
+
+    nodes[0].geometry = 0 // Cube wire — a LineSegments
+    const report = dynamic.update()
+    expect(report.glyphsRebuilt).toBe(true)
+    const after = frame.getObjectByName('glyph')!
+    expect(after).not.toBe(before)
+    expect((after as THREE.LineSegments).isLineSegments).toBe(true)
+    // The new glyph is pickable again.
+    expect(after.children.some((c) => c.userData.isPickProxy)).toBe(true)
+    dynamic.dispose()
+  })
+
+  it('re-applies the Rod draw factors when the node’s own topo animates', () => {
+    const nodes = scene({})
+    const built = buildScene(nodes)
+    const dynamic = new DynamicNodes(nodes, built.frames, SETS({ shape: new Set([1]) }), new Map())
+    const frame = built.frames.get(1)!
+    nodes[0].topo = 6 // Rod
+    dynamic.update()
+    const glyph = frame.getObjectByName('glyph')!
+    expect(glyph.scale.z).toBeCloseTo(5, 12) // ROD_HEIGHT_FACTOR
+    expect(glyph.position.z).toBeCloseTo(glyph.scale.z, 12) // bottom-cap offset
+    dynamic.dispose()
+  })
+
+  it('toggles glyph visibility for a bound hide, without a rebuild', () => {
+    const nodes = scene({})
+    const built = buildScene(nodes, { channelHideBound: new Set([1]) })
+    const dynamic = new DynamicNodes(nodes, built.frames, SETS({ hidden: new Set([1]) }), new Map())
+    const glyph = built.frames.get(1)!.getObjectByName('glyph')!
+    expect(glyph.visible).toBe(true)
+
+    nodes[0].hide = 1
+    expect(dynamic.update()).toMatchObject({ glyphsRebuilt: false })
+    expect(built.frames.get(1)!.getObjectByName('glyph')).toBe(glyph) // same object
+    expect(glyph.visible).toBe(false)
+
+    nodes[0].hide = 0
+    dynamic.update()
+    expect(glyph.visible).toBe(true)
+    dynamic.dispose()
+  })
+
+  it('builds the glyph for a CSV-hidden node whose hide is bound, starting hidden', () => {
+    const nodes = scene({ hide: 1 })
+    // Without the option a hidden node gets no glyph at all…
+    expect(buildScene(nodes).frames.get(1)!.getObjectByName('glyph')).toBeUndefined()
+    // …with it the glyph exists, and registration applies the row's value.
+    const built = buildScene(nodes, { channelHideBound: new Set([1]) })
+    const glyph = built.frames.get(1)!.getObjectByName('glyph')!
+    const dynamic = new DynamicNodes(nodes, built.frames, SETS({ hidden: new Set([1]) }), new Map())
+    expect(glyph.visible).toBe(false)
+    dynamic.dispose()
+  })
+
+  it('reports overlay membership dirty when topo crosses Plot/Surface or an overlay parent hides', () => {
+    const nodes = scene({}, { parent_id: 1, branch_level: 1, translate_x: 3 })
+    const built = buildScene(nodes)
+    const dynamic = new DynamicNodes(
+      nodes,
+      built.frames,
+      SETS({ shape: new Set([1]), hidden: new Set([1]) }),
+      new Map(),
+    )
+    nodes[0].topo = 16 // None → Plot
+    expect(dynamic.update().overlayDirty).toBe(true)
+    nodes[0].topo = 17 // Plot → Surface: still an overlay topo either side
+    expect(dynamic.update().overlayDirty).toBe(false)
+    nodes[0].hide = 1 // a hidden Surface parent draws no lattice
+    expect(dynamic.update().overlayDirty).toBe(true)
+    nodes[0].topo = 4 // Surface → Cylinder
+    expect(dynamic.update().overlayDirty).toBe(true)
+    dynamic.dispose()
+  })
+
+  it('re-places a placement-bound parent’s children from the fresh topo', () => {
+    const nodes = scene({ topo: 0 }, { parent_id: 1, branch_level: 1, translate_x: 45, translate_y: 45, translate_z: 1 })
+    const built = buildScene(nodes)
+    const childFrame = built.frames.get(2)!
+    const cartesian = childFrame.position.clone()
+    const dynamic = new DynamicNodes(
+      nodes,
+      built.frames,
+      SETS({ placement: new Set([1]) }),
+      new Map(),
+    )
+    nodes[0].topo = 2 // Sphere (KML): the same translate means lon/lat now
+    dynamic.update()
+    expect(childFrame.position.distanceTo(cartesian)).toBeGreaterThan(0.01)
+    dynamic.dispose()
+  })
+
+  it('re-privatises appearance clones onto a swapped glyph', () => {
+    const nodes = scene({}, {}) // two look-alikes sharing one cached material
+    const built = buildScene(nodes)
+    const dynamic = new DynamicNodes(
+      nodes,
+      built.frames,
+      SETS({ shape: new Set([1]), appearance: new Set([1]) }),
+      new Map(),
+    )
+    nodes[0].geometry = 3 // swap to Sphere solid
+    nodes[0].color.r = 200
+    dynamic.update()
+    const swapped = glyphMaterial(built.frames.get(1)!)
+    const untouched = glyphMaterial(built.frames.get(2)!)
+    expect(swapped).not.toBe(untouched)
+    expect(swapped.color.r).toBeCloseTo(200 / 255, 6)
+    expect(untouched.color.r).toBeCloseTo(10 / 255, 6)
+    dynamic.dispose()
+  })
+})

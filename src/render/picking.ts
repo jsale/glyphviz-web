@@ -43,7 +43,17 @@ export function pickNodeId(raycaster: THREE.Raycaster, root: THREE.Object3D): nu
     }
     if (!hit.object.userData.isPickProxy) continue
     let o: THREE.Object3D | null = hit.object
-    while (o && o.userData.nodeId === undefined) o = o.parent
+    let hiddenGlyph = false
+    while (o && o.userData.nodeId === undefined) {
+      // A channel-animated `hide` blanks the glyph by visibility rather than
+      // by rebuilding (dynamicNodes.ts), and the raycaster ignores `visible`
+      // — so an animated-hidden node must be skipped here, exactly as a
+      // CSV-hidden one is unpickable by never getting a proxy. It does not
+      // occlude: the desktop's pick pass simply doesn't draw it.
+      if (o.userData.isGlyph && !o.visible) hiddenGlyph = true
+      o = o.parent
+    }
+    if (hiddenGlyph) continue
     if (o) return o.userData.nodeId as number
   }
   return null
@@ -129,7 +139,9 @@ export class Selection {
     geometry.setAttribute('position', this.positions)
     this.object = new THREE.LineSegments(
       geometry,
-      new THREE.LineBasicMaterial({ color: SELECTION_COLOR }),
+      // fog: false — halos are chrome, and a halo out at fog_end would vanish
+      // into the murk with the glyph it exists to outline (render/fog.ts).
+      new THREE.LineBasicMaterial({ color: SELECTION_COLOR, fog: false }),
     )
     this.object.name = 'selection-boxes'
     this.object.userData.isSelectionBox = true

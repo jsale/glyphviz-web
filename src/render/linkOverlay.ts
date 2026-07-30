@@ -81,6 +81,10 @@ class LineGroup {
       linewidth: widthPx,
       transparent: alpha < 1,
       opacity: alpha,
+      // ShaderMaterial defaults fog OFF where the built-in materials default
+      // it on; edges are scene content, so they fade with the glyphs they
+      // connect (render/fog.ts).
+      fog: true,
     })
     this.object = new LineSegments2(geometry, this.material)
     this.object.name = 'link-lines'
