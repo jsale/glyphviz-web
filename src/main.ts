@@ -106,6 +106,7 @@ import { applySceneFog, installLinearFog } from './render/fog'
 import { invertLocalRotation } from './render/rotationInverse'
 import { eyeForX, StereoRig } from './render/stereo'
 import type { StereoEye } from './render/stereo'
+import { CameraRig } from './render/cameraMode'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { FpsMeter } from './ui/fpsMeter'
@@ -336,6 +337,13 @@ hud.innerHTML = `
     <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
       <input type="checkbox">Follow Selected (F)
     </label>
+    <div class="hud-create-row" id="hud-camera-row" title="Saved camera views — Main is the free orbit camera; +X/+Y/+Z are fixed reference views onto the world origin (zoom only, no orbit or pan).&#10;[Shift+C] cycles through them.">
+      <span>Camera</span>
+      <select id="hud-camera"></select>
+    </div>
+    <label id="hud-fly" class="sel-check" title="Camera Mode — free flight  [C]&#10;Left drag: the press point becomes a bearings origin — hold the cursor above/below it to fly forward/back, left/right of it to turn. The offset sets a continuous speed; return to the origin to stop.&#10;Right drag: look around from where the camera stands.&#10;Both buttons: slide sideways / up / down.  Wheel: fly forward/back.&#10;Clicking still selects, and Shift+drag still region-selects, but Move/Rotate/Size gizmos are suspended until Camera Mode is off.&#10;Not available on the fixed +X/+Y/+Z reference views.">
+      <input type="checkbox">Camera Mode (C)
+    </label>
     <div class="hud-create-row" id="hud-base-scale-row" title="Global Scale — the size of an unscaled glyph, for the whole scene at once.&#10;Children placed on a parent's surface (Sphere, Cube, Torus…) ride outward with it, and small nodes lift off the 0.2 draw floor.&#10;A viewer setting: it never reaches the CSV.">
       <span>Global Scale</span>
       <input id="hud-base-scale" type="range" min="1" max="100" step="1" value="10">
@@ -386,6 +394,8 @@ const fogCheckbox = hud.querySelector<HTMLInputElement>('#hud-fog input')!
 const fogStartInput = hud.querySelector<HTMLInputElement>('#hud-fog-start')!
 const fogEndInput = hud.querySelector<HTMLInputElement>('#hud-fog-end')!
 const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
+const cameraSelect = hud.querySelector<HTMLSelectElement>('#hud-camera')!
+const flyCheckbox = hud.querySelector<HTMLInputElement>('#hud-fly input')!
 const showFpsCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-fps input')!
 const baseScaleSlider = hud.querySelector<HTMLInputElement>('#hud-base-scale')!
 const baseScaleValue = hud.querySelector<HTMLSpanElement>('#hud-base-scale-value')!
@@ -635,6 +645,169 @@ stereoSepSlider.addEventListener('input', () => {
   stereoSepValue.textContent = `${stereo.separationPct.toFixed(1)}%`
 })
 stereoSepRow.classList.add('disabled')
+
+// --- Camera Mode (free flight, C key) + camera views (Shift+C) ---------------
+//
+// The desktop's d66304a ANTz-style rate flight, whole cloth: all of the rig
+// math and the pointer state machine live in render/cameraMode.ts (pure, no
+// DOM — the behavior spec runs headless); this block owns the OrbitControls
+// handoff. Outside Camera Mode the controls are the source of truth and the
+// rig is synced from them on demand; inside it the rig is authoritative,
+// OrbitControls stands aside entirely, and the animation loop integrates the
+// held-offset flight each tick and pushes the rig into the camera.
+const flyRig = new CameraRig()
+/** Sticky per-press travel flag: a rate flight routinely returns the cursor
+ *  to its press point (that is how you stop), so the release-near-press
+ *  displacement test alone would misread a whole flight as a click. */
+let flyPressMoved = false
+
+for (const [i, cam] of flyRig.cameras.entries()) {
+  const opt = document.createElement('option')
+  opt.value = String(i)
+  opt.textContent = cam.name
+  cameraSelect.append(opt)
+}
+
+/** Push the rig's eye/target into the camera OrbitControls is standing
+ *  aside from. camera.up is world-Z app-wide, so lookAt never rolls. */
+function applyRigToCamera() {
+  const [ex, ey, ez] = flyRig.eyePosition()
+  camera.position.set(ex, ey, ez)
+  controls.target.set(flyRig.target[0], flyRig.target[1], flyRig.target[2])
+  camera.lookAt(controls.target)
+}
+
+/** Locked axis views are fixed reference views: zoom only (desktop
+ *  _orbit_camera returns outright; the pan path checks the same flag). */
+function applyLockedViewLimits() {
+  const locked = flyRig.activeCameraLocked()
+  controls.enableRotate = !locked
+  controls.enablePan = !locked
+}
+
+function updateCameraUi() {
+  cameraSelect.value = String(flyRig.activeCamera)
+  flyCheckbox.checked = flyRig.flyMode
+}
+
+/** Toggle free-flight Camera Mode (C, the checkbox, or picking a locked
+ *  view). Ports the desktop's set_fly_mode + _on_fly_mode_changed pair. */
+function setCameraMode(on: boolean) {
+  if (!flyRig.flyMode) flyRig.syncFromView(camera.position, controls.target)
+  if (!flyRig.setFlyMode(on)) {
+    updateCameraUi()
+    return
+  }
+  if (on) {
+    // Following pins the target to a node every frame, which would undo
+    // flight's translation on the spot (desktop set_fly_mode).
+    followSelected = false
+    followCheckbox.checked = false
+    manualDrag = null // Camera Mode owns every drag button from here
+    // The locked-view rule may have switched to Main and loaded its slot.
+    applyRigToCamera()
+  }
+  controls.enabled = !on && rubberStart === null
+  applyLockedViewLimits()
+  // Move/Rotate/Size drags are suspended until Camera Mode is off; the armed
+  // mode stays sticky (the 6h rule), the handles just go away.
+  updateGizmoAttachment()
+  updateCameraUi()
+  status(
+    on
+      ? 'Camera Mode ON — Left: fly/turn · Right: look around · Both: slide · Wheel: fly  [C]'
+      : 'Camera Mode off.',
+  )
+}
+
+/** Switch to a saved camera view (Shift+C cycling or the Camera row),
+ *  saving the live viewpoint into the outgoing slot first. */
+function selectCameraView(index: number) {
+  const wasFly = flyRig.flyMode
+  if (!wasFly) flyRig.syncFromView(camera.position, controls.target)
+  flyRig.selectCamera(index)
+  applyRigToCamera()
+  controls.update()
+  if (flyRig.flyMode !== wasFly) {
+    // Picking a locked reference view leaves Camera Mode (the rig's rule);
+    // redo the app-side interlocks the rig cannot reach.
+    controls.enabled = rubberStart === null
+    updateGizmoAttachment()
+  }
+  applyLockedViewLimits()
+  updateCameraUi()
+  status(`Camera: ${flyRig.cameras[flyRig.activeCamera].name}`)
+}
+
+/** Scene load (desktop set_nodes): re-derive the axis views' distance from
+ *  how far content actually reaches from the origin — they look AT the
+ *  origin, so the scene's span around its own center is the wrong measure —
+ *  and drop back to Main. Fly mode survives, as on the desktop. */
+function resetCameraViews() {
+  let originRadius = 0
+  if (currentFrames) {
+    const p = new THREE.Vector3()
+    for (const frame of currentFrames.values()) {
+      p.setFromMatrixPosition(frame.matrixWorld)
+      originRadius = Math.max(originRadius, p.length())
+    }
+  }
+  const axisDistance = originRadius > 0 ? Math.max(originRadius * 1.5, 50) : 500
+  // Main's saved slot becomes the fresh framing fitCameraTo just applied.
+  flyRig.syncFromView(camera.position, controls.target)
+  flyRig.resetCameras(axisDistance)
+  applyLockedViewLimits()
+  updateCameraUi()
+}
+
+/** Route a canvas pointer event to Camera Mode; true = the mode owns it
+ *  (every drag button outright — that is the point of a mode). A Shift
+ *  rubber-band sweep in progress keeps the pointer it grabbed first. */
+function routeFlyPointer(e: PointerEvent): boolean {
+  if (!flyRig.flyMode || rubberStart !== null) return false
+  const chord = e.buttons & 3
+  if (chord === 3) comboUsedInPress = true // a strafe is never a selection click
+  if (
+    chord !== 0 &&
+    downAt !== null &&
+    Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > CLICK_SLOP_PX
+  ) {
+    flyPressMoved = true
+  }
+  flyRig.flyPointerEvent(e.buttons, e.clientX, e.clientY)
+  return true
+}
+
+flyCheckbox.addEventListener('change', () => setCameraMode(flyCheckbox.checked))
+cameraSelect.addEventListener('change', () => selectCameraView(Number(cameraSelect.value)))
+
+// In Camera Mode the wheel flies rather than zooms: shortening the arm would
+// creep the eye toward a target that's supposed to ride along in front of it,
+// and would quietly slow every later drag (flight speed scales off arm
+// length). OrbitControls is disabled while flying, so its zoom never fires.
+renderer.domElement.addEventListener(
+  'wheel',
+  (e) => {
+    if (!flyRig.flyMode) return
+    e.preventDefault()
+    if (e.deltaY !== 0) flyRig.wheelFly(e.deltaY < 0 ? 1 : -1)
+  },
+  { passive: false },
+)
+
+// Read-back hook for the headless drive harness (the drive-the-UI pass reads
+// camera state through page.evaluate — nothing in the DOM shows the eye
+// position). Never read by the app itself.
+;(window as unknown as { __gv?: object }).__gv = {
+  camera,
+  controls,
+  flyRig,
+  // Deferred: the gizmo is created later in the module; the harness reads it
+  // through this getter after boot.
+  get gizmo() {
+    return gizmo
+  },
+}
 
 const statusBar = document.createElement('div')
 statusBar.id = 'status-bar'
@@ -1487,6 +1660,7 @@ function rebuildScene(fitCamera: boolean) {
   if (fitCamera) {
     setSelection(null)
     fitCameraTo(currentRoot)
+    resetCameraViews()
   } else {
     // Ids deleted or filtered out of the rebuilt scene simply drop.
     setSelection(prevSelected)
@@ -1779,7 +1953,7 @@ function finishRubberBand(additive: boolean) {
   const start = rubberStart
   rubberStart = null
   rubberBand.hidden = true
-  controls.enabled = true
+  controls.enabled = !flyRig.flyMode // a sweep can run inside Camera Mode
   if (
     Math.abs(rubberEnd.x - start.x) <= RUBBER_SLOP_PX &&
     Math.abs(rubberEnd.y - start.y) <= RUBBER_SLOP_PX
@@ -1875,8 +2049,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y)
   downAt = null
   // A press that became a Left+Right camera combo is never a selection click,
-  // even if it moved less than the slop.
-  if (comboUsedInPress || moved > CLICK_SLOP_PX) return
+  // even if it moved less than the slop. flyPressMoved is the same idea for a
+  // rate flight, whose cursor ENDS at its press point (that is how you stop) —
+  // release displacement alone would misread the whole flight as a click.
+  if (comboUsedInPress || flyPressMoved || moved > CLICK_SLOP_PX) return
   // Clicks on (or releases over) a gizmo arrow are drag interactions, not
   // selection changes.
   if (gizmo.dragging || gizmo.axis !== null) return
@@ -1898,11 +2074,15 @@ renderer.domElement.addEventListener('pointercancel', () => {
   if (!rubberStart) return
   rubberStart = null
   rubberBand.hidden = true
-  controls.enabled = true
+  controls.enabled = !flyRig.flyMode
 })
 renderer.domElement.addEventListener('dblclick', (e) => {
   // Recenter the orbit pivot on the node under the cursor (falls back to
-  // the current selection).
+  // the current selection). Not in Camera Mode — the eye is derived from the
+  // target there, so the same snap would teleport the camera onto the node
+  // (the reason the desktop skips its combo pivot snap too) — and not on a
+  // locked axis view, which must stay aimed at the world origin.
+  if (flyRig.flyMode || flyRig.activeCameraLocked()) return
   const nodeId = pickAt(e.clientX, e.clientY) ?? selection.id
   if (nodeId === null) return
   const pos = worldPosOf(nodeId)
@@ -1991,6 +2171,11 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'j' || e.key === 'J') cycleAttribute('topo', e.shiftKey ? -1 : 1)
   else if (e.key === 'o' || e.key === 'O') cycleAttribute('geometry', e.shiftKey ? -1 : 1)
   else if (e.key === 'f' || e.key === 'F') setFollowSelected(!followSelected)
+  // The desktop's own pairing: plain C toggles Camera Mode (free flight),
+  // Shift+C steps through the saved camera views — ANTz put cycling on the
+  // bare key, and Camera Mode displaced it.
+  else if (e.key === 'C') selectCameraView(flyRig.activeCamera + 1)
+  else if (e.key === 'c') setCameraMode(!flyRig.flyMode)
   else if (e.key === 'b' || e.key === 'B') toggleBackgroundBw()
   // = / − step color_index within each node's own palette (Alt+ steps the
   // palette itself, handled above). '+' and '_' are the same physical keys with
@@ -2064,10 +2249,13 @@ function updateManualDragState(e: PointerEvent) {
   if (next === 'combo' && manualDrag !== 'combo') {
     comboUsedInPress = true
     // Desktop _maybe_snap_orbit_target: re-center the pivot on the selection.
-    const pos = selection.id !== null ? worldPosOf(selection.id) : null
+    // Never on a locked axis view, which must stay aimed at the world origin
+    // (Camera Mode's own guard is upstream: fly routes around this entirely).
+    const pos =
+      selection.id !== null && !flyRig.activeCameraLocked() ? worldPosOf(selection.id) : null
     if (pos) controls.target.copy(pos)
   }
-  if (next === null && manualDrag !== null) controls.enabled = true
+  if (next === null && manualDrag !== null) controls.enabled = !flyRig.flyMode
   manualDrag = next
 }
 
@@ -2075,13 +2263,18 @@ function manualDragMove(e: PointerEvent) {
   const dx = e.clientX - manualLast.x
   const dy = e.clientY - manualLast.y
   manualLast = { x: e.clientX, y: e.clientY }
+  // Locked axis views: the combo keeps its zoom half and drops the orbit
+  // (desktop _orbit_zoom_camera); a plain orbit drag does nothing at all
+  // (desktop _orbit_camera returns outright).
+  const locked = flyRig.activeCameraLocked()
+  if (locked && manualDrag !== 'combo') return
   const offset = camera.position.clone().sub(controls.target)
   const r0 = offset.length()
   if (r0 < 1e-9) return
   // Z-up azimuth/elevation/distance, the desktop camera model. Azimuth sign is
   // the grab-the-object convention (matches both the desktop and what
   // OrbitControls does for a plain left drag).
-  const az = Math.atan2(offset.y, offset.x) - dx * COMBO_ORBIT_DEG_PER_PX * DEG
+  const az = Math.atan2(offset.y, offset.x) - (locked ? 0 : dx * COMBO_ORBIT_DEG_PER_PX * DEG)
   let el = Math.asin(THREE.MathUtils.clamp(offset.z / r0, -1, 1))
   let r = r0
   if (manualDrag === 'combo') {
@@ -2098,11 +2291,25 @@ function manualDragMove(e: PointerEvent) {
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
   comboUsedInPress = false // pointerdown always starts a fresh button chord
+  flyPressMoved = false
+  if (routeFlyPointer(e)) {
+    // A rate-flight hold routinely lasts seconds and wanders off the canvas;
+    // capture keeps the drag (and its release) coming to this element.
+    renderer.domElement.setPointerCapture(e.pointerId)
+    return
+  }
   updateManualDragState(e)
 })
-renderer.domElement.addEventListener('pointerup', updateManualDragState)
-renderer.domElement.addEventListener('pointercancel', updateManualDragState)
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (routeFlyPointer(e)) return
+  updateManualDragState(e)
+})
+renderer.domElement.addEventListener('pointercancel', (e) => {
+  if (routeFlyPointer(e)) return
+  updateManualDragState(e)
+})
 renderer.domElement.addEventListener('pointermove', (e) => {
+  if (routeFlyPointer(e)) return
   updateManualDragState(e)
   if (manualDrag !== null) manualDragMove(e)
 })
@@ -2211,6 +2418,9 @@ function updateGizmoAttachment() {
   const frame = primary ? currentFrames?.get(primary.id) : undefined
   if (
     gizmoMode === null ||
+    // Camera Mode owns every drag button, so manipulation is suspended until
+    // it is off — the armed mode stays sticky, the handles just go away.
+    flyRig.flyMode ||
     !primary ||
     !frame ||
     primary.type === NodeType.WorldGrid ||
@@ -3076,6 +3286,11 @@ function applyFollowTarget() {
 }
 
 function setFollowSelected(value: boolean) {
+  // Follow pins the pivot to a node every frame; flight translates it every
+  // frame. Entering Camera Mode clears Follow (desktop set_fly_mode), so
+  // turning Follow on mid-flight takes the same interlock in reverse —
+  // rather than the desktop's accident of letting the two fight per frame.
+  if (value && flyRig.flyMode) setCameraMode(false)
   followSelected = value
   followCheckbox.checked = value
   if (!value) return status('Follow off.')
@@ -3163,6 +3378,13 @@ renderer.setAnimationLoop(() => {
   // After the animation tick, like the desktop's paintGL: the followed node has
   // already moved this frame, so the pivot lands on where it actually is.
   applyFollowTarget()
+  // Camera Mode: integrate the held-offset rate flight on the same dt the
+  // rate fields use — that is what keeps flying while the mouse sits still —
+  // and push the rig into the camera OrbitControls is standing aside from.
+  if (flyRig.flyMode) {
+    flyRig.applyFlyDrag(dtMs)
+    applyRigToCamera()
+  }
   controls.update()
   // The key light lives in eye space on the desktop, so it follows the camera
   // the controls just moved. Both stereo eyes share that camera's orientation,

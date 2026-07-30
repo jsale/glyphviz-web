@@ -1426,26 +1426,84 @@ something to decide now).
      is 315 MB and is never shipped wholesale). Lower priority per Jeff
      (2026-07-25): folder drop and zip already let users draw from their
      own copy of the GlyphViz examples.
-8. Agreed next (2026-07-30, Jeff's four-feature ask — the first two shipped
-   as 6r, the Channels expansion as 6s; this one is its OWN session, because
-   it ends in a behaviour harness plus a drive-the-UI pass and the real risk
-   is running out of context halfway through):
-   a. CAMERA MODE (desktop `7a73392` then `d66304a`): **C** toggles free
-      flight, **Shift+C** cycles camera views. It is two features — this
-      app has no fixed-axis camera set at all, and on the desktop plain C
-      DISPLACED that cycling onto Shift+C, so the displaced thing has to
-      exist first. Port `d66304a`, the ANTz-style **rate flight** rework,
-      NOT the original per-move drag with transient banking (the standing
-      "port the revisit" rule, and here the desktop says outright that the
-      first attempt was replaced at the test group's request).
-      - Web integration is the real cost: OrbitControls yielding, stereo's
-        remapped per-eye cameras, Follow Selected cleared on entry, the
-        existing Left+Right combo drag, and per-tick integration in the
-        animation loop so motion continues while the mouse sits still (dt
-        is already there — the FPS meter's clock).
-      - `tests/test_camera_mode.py` (271 lines) is the behaviour spec.
-      - Keep C and Shift+C free until then; Alt+P was taken for Save PNG
-        partly for this reason.
+8. ~~Camera Mode + camera views~~ (shipped 2026-07-30, the last of Jeff's
+   four-feature ask): **C** toggles free flight, **Shift+C** cycles the
+   camera views. Ports desktop `d66304a`, the ANTz-style RATE flight rework,
+   not `7a73392`'s per-move drag with banking (the port-the-revisit rule; the
+   desktop replaced that at its test group's request, and banking went with
+   it — the up vector is always world-Z). `src/render/cameraMode.ts` is the
+   whole model, DOM- and THREE-free; `cameraMode.test.ts` is the desktop's
+   271-line `tests/test_camera_mode.py` spec ported test for test.
+   - The model: the rig stays the same azimuth/elevation/distance/target
+     orbit rig, and flight only changes which end of the arm the mouse
+     drives. Orbit swings the EYE around a fixed target; flight swings the
+     TARGET around a fixed eye (turning, look-around) and translates both
+     together (flying, sliding) — the arm length never changes, so the
+     target rides along in front of the camera instead of pinning it, and
+     switching back off leaves it wherever flight ended, ready to orbit.
+   - Rate flight, desktop constants exactly: the left-press point is a
+     bearings origin; the held cursor offset sets a continuous speed
+     (0.01 arm-lengths/s and 0.5°/s per px, 3px per-axis dead zone measured
+     from its EDGE so motion ramps from zero), integrated per frame on the
+     animation loop's existing dtMs — motion continues while the mouse sits
+     still, returning to the origin stops it, and a click (never leaving the
+     dead zone) still picks. Translation is plane-locked to the heading
+     (forward with pitch dropped): altitude never changes. Turning re-aims
+     ABOUT THE EYE — reaimAboutEye re-derives the target from the preserved
+     eye, since naively bumping azimuth orbits, the exact anchored feel the
+     mode exists to escape. Right-drag look-around (0.25°/px, elevation
+     clamped ±89°), Left+Right strafe (0.004 arm/px), wheel flies 0.12
+     arm-lengths/notch (zooming would silently slow every later drag —
+     speeds scale off the arm).
+   - The desktop's press/release/combo handlers collapse to ONE transition
+     rule in `flyPointerEvent`: whenever the Left/Right chord changes,
+     exactly-Left (re)drops the origin at the cursor, anything else suspends
+     flight. That single rule reproduces the fresh press, the combo-start
+     suspension, the combo-end re-anchor (the stale origin would lurch), and
+     the toggled-mid-drag adoption; the rig also forgets the chord on mode
+     entry, so a button held from before Camera Mode can't replay a stale
+     delta. main.ts routes every canvas pointer event to the rig first while
+     the mode is on (a Shift rubber-band sweep in progress keeps the pointer
+     it grabbed — sweeps still work in flight, desktop parity) and captures
+     the pointer, so a long hold survives leaving the canvas.
+   - OrbitControls stands aside COMPLETELY while flying (every place that
+     restored `controls.enabled = true` now restores `!flyMode`), and the
+     loop pushes the rig into the camera each frame. A sticky flyPressMoved
+     flag joins comboUsedInPress in the click guard: a rate flight ENDS its
+     cursor at the press point (that is how you stop), so the release-
+     displacement test alone would misread a whole flight as a click.
+   - Camera views: Main + locked +X/+Y/+Z reference views onto the world
+     origin (elevation 89 for +Z, short of the singularity), in a Scene-
+     panel Camera row; switching saves the live viewpoint into the outgoing
+     slot, so Main's zoom survives a round trip through the axis views.
+     Locked views are zoom-only — OrbitControls rotate/pan off, the manual
+     combo keeps its zoom half and drops the orbit, plain orbit is inert,
+     and the combo pivot snap and dblclick recenter are skipped. Picking a
+     locked view LEAVES Camera Mode; C on a locked view switches to Main
+     first (desktop rules). A scene load re-derives the axis distance (max
+     node distance from the ORIGIN × 1.5, min 50 — they aim at the origin,
+     so the scene's span about its own centre is the wrong measure) and
+     drops back to Main; fly mode itself survives the load, as there.
+   - Interlocks: entering Camera Mode clears Follow Selected (following
+     would undo flight's translation on the spot) and detaches the gizmo
+     handles — the armed mode stays sticky per the 6h rule, the handles
+     just go away and return on exit. Stereo needed nothing: flight drives
+     the one main camera and the per-eye derivation is downstream (driven
+     in stereo to prove it). Divergences, deliberate: F mid-flight leaves
+     Camera Mode (the entry interlock in reverse — the desktop lets follow
+     and flight fight per frame, which reads as an accident, not a design);
+     middle-button does nothing while flying where the desktop keeps its
+     pan (OrbitControls is all-or-nothing; simplest default); no
+     camera_state snapshot API (it exists for desktop Watch-and-Reload,
+     which this app doesn't have).
+   - `window.__gv` exposes camera/controls/flyRig/gizmo read-only for the
+     headless drive harness — nothing in the DOM shows the eye position.
+     Driven in Chrome twice (45 + 9 measured checks): held-offset flight
+     continues over two 600ms samples with the mouse still, altitude and
+     arm length hold to 1e-6, turn pivots at 1e-13 of eye movement, strafe
+     keeps cos(aim) ≥ 1−1e-9, handles detach/reattach, axis distances came
+     out 159/50/861 across three scenes, stereo flight and look both move,
+     console clean throughout.
 9. WebXR (headset stereo): still deliberately deferred until basic parity
    exists. The free-view cross-eye pair shipped as 6n and is a different
    thing — one canvas, no device, no session lifecycle.
