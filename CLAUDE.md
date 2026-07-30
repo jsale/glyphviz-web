@@ -1507,6 +1507,16 @@ something to decide now).
 9. WebXR (headset stereo): still deliberately deferred until basic parity
    exists. The free-view cross-eye pair shipped as 6n and is a different
    thing — one canvas, no device, no session lifecycle.
+10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
+    through step 8 — the two remaining desktop features, by conscious
+    choice, so their absence is a decision and not a gap):
+    - PDB molecule import. No revisit planned.
+    - File ▸ Watch and Reload, and with it the RSS Feed example that
+      depends on it. Excluded FOR NOW — Jeff explicitly reserved the right
+      to change his mind ("it could make a great web demo"). If he asks
+      for web-demo ideas, this is the one to offer; don't start it
+      unprompted. (This is also why the desktop's camera_state snapshot
+      API has no web counterpart — see section 8.)
 
 ## Collaboration notes
 
