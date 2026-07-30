@@ -14,12 +14,23 @@ did not: the web app floored the ACCUMULATED world scale instead of each node's
 own, which left deeply nested glyphs too big (reported 2026-07-27, visible as a
 pasted hyperglyph overwhelming the child it was pasted onto).
 
+An optional third argument is the Global Scale (`Viewport.base_scale`, the
+desktop's Display-panel slider) to dump at, defaulting to its 1.0. It is the one
+input to these matrices that no fixture CSV can carry, and it is not confined to
+them either — `compute_world_transforms` takes it as every topology's base
+radius, so a non-default dump pins the placement of children on a parent's
+surface at the same time as the draw scale.
+
 Run with the desktop repo's conda env python (see that repo's CLAUDE.md for how
 to locate it; never `conda run`):
 
     <glyphviz-env-python> tools/dump_draw_matrices.py \
         src/gv/fixtures/draw_scale_example_gv_node.csv \
         src/gv/fixtures/draw_scale_example_draw_matrices.json
+
+    <glyphviz-env-python> tools/dump_draw_matrices.py \
+        src/gv/fixtures/draw_scale_example_gv_node.csv \
+        src/gv/fixtures/draw_scale_example_draw_matrices_scale25.json 2.5
 
 Regenerate the vendored JSON whenever the fixture CSV changes or the desktop
 draw math changes. CI never runs this — the JSON is committed.
@@ -36,17 +47,18 @@ sys.path.insert(0, str(DESKTOP_REPO))
 from glyphviz_core.csv_reader import load_node_csv   # noqa: E402
 from glyphviz_core.scene import Scene                # noqa: E402
 
-BASE_SCALE = 1.0  # desktop Global Scale default (glyphviz_gl/viewport.py)
+DEFAULT_BASE_SCALE = 1.0  # desktop Global Scale default (glyphviz_gl/viewport.py)
 
 
 def main() -> int:
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 4):
         print(__doc__)
         return 2
     csv_path, out_path = Path(sys.argv[1]), Path(sys.argv[2])
+    base_scale = float(sys.argv[3]) if len(sys.argv) == 4 else DEFAULT_BASE_SCALE
 
     nodes = load_node_csv(str(csv_path))
-    scene = Scene(nodes, BASE_SCALE)
+    scene = Scene(nodes, base_scale)
 
     entries = []
     for nd in nodes:
@@ -60,7 +72,7 @@ def main() -> int:
 
     out = {
         "source_csv": csv_path.name,
-        "base_scale": BASE_SCALE,
+        "base_scale": base_scale,
         "engine": "glyphviz_core.scene.Scene.node_draw_data",
         "nodes": entries,
     }

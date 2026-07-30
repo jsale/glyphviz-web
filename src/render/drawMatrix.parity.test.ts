@@ -28,13 +28,16 @@
 // the desktop draw math changes.
 
 import * as THREE from 'three'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
-import { buildScene } from './buildScene'
+import { DEFAULT_BASE_SCALE, setBaseScale } from './baseScale'
+import { buildScene, rescaleSceneFrames } from './buildScene'
 import drawScaleCsv from '../gv/fixtures/draw_scale_example_gv_node.csv?raw'
 import drawScaleReferenceRaw from '../gv/fixtures/draw_scale_example_draw_matrices.json?raw'
+import drawScaleScaled25Raw from '../gv/fixtures/draw_scale_example_draw_matrices_scale25.json?raw'
 import topologyCsv from '../gv/fixtures/topology_example_gv_node.csv?raw'
 import topologyReferenceRaw from '../gv/fixtures/topology_example_draw_matrices.json?raw'
+import topologyScaled25Raw from '../gv/fixtures/topology_example_draw_matrices_scale25.json?raw'
 
 interface DrawReference {
   source_csv: string
@@ -45,6 +48,36 @@ interface DrawReference {
 /** Desktop row-major M[row][col] → the Three.js column-major element index. */
 function webElement(m: THREE.Matrix4, row: number, col: number): number {
   return m.elements[col * 4 + row]
+}
+
+/**
+ * Diff every glyph in a build against a dump, returning how many were compared —
+ * the loop the two default-scale suites below spell out, reused by the Global
+ * Scale ones so a difference between them can only be the scale.
+ */
+function expectMatchesDump(
+  built: ReturnType<typeof buildScene>,
+  reference: DrawReference,
+  label: string,
+): number {
+  built.root.updateMatrixWorld(true)
+  let compared = 0
+  for (const entry of reference.nodes) {
+    // World/Camera rows, links and hidden nodes carry a frame but no glyph; the
+    // desktop's node_draw_data answers for every row regardless.
+    const glyph = built.frames.get(entry.id)?.getObjectByName('glyph')
+    if (!glyph) continue
+    compared++
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 4; col++) {
+        expect(
+          webElement(glyph.matrixWorld, row, col),
+          `${label}: node ${entry.id} M[${row}][${col}]`,
+        ).toBeCloseTo(entry.matrix[row][col], 9)
+      }
+    }
+  }
+  return compared
 }
 
 describe('draw-matrix parity with the desktop engine', () => {
@@ -189,5 +222,114 @@ describe('draw-matrix parity on the real Topology_Example', () => {
     // Guards the loop itself: a build that stopped producing glyphs would
     // otherwise pass by comparing nothing.
     expect(compared).toBeGreaterThan(100)
+  })
+})
+
+// Global Scale (`Viewport.base_scale`), shipped 2026-07-30. Until then this
+// harness only ever ran at the default 1.0 — it asserted so — which made it
+// blind to the one input to a draw matrix that no CSV can carry, and blind in
+// both directions: base_scale multiplies the own scale BEFORE the 0.2 floor (so
+// it lifts small nodes off it, rather than scaling what the floor produced), and
+// `compute_world_transforms` separately takes it as every topology's base
+// radius, so children placed on a parent's surface ride outward with it.
+//
+// 2.5 is chosen to be a scale where all of that is visible at once: the deep
+// 0.3-chain node lands at 0.75 (still shrinking, nowhere near the floor), the
+// 0.05 node reaches 0.125 and is still floored to 0.2, and the rod's own
+// factors compose on top of a scaled base.
+describe('draw-matrix parity at a non-default Global Scale', () => {
+  const GLOBAL_SCALE = 2.5
+
+  beforeEach(() => {
+    setBaseScale(GLOBAL_SCALE)
+  })
+  afterEach(() => {
+    // Module-level state: every other suite in this run reads the default.
+    setBaseScale(DEFAULT_BASE_SCALE)
+  })
+
+  it('matches the desktop on the draw-scale fixture', () => {
+    const reference: DrawReference = JSON.parse(drawScaleScaled25Raw)
+    expect(reference.base_scale).toBe(GLOBAL_SCALE)
+    const parsed = parseGvNodeCsv(drawScaleCsv)
+    const built = buildScene(parsed.nodes, {})
+    expect(expectMatchesDump(built, reference, 'draw-scale @2.5')).toBeGreaterThan(10)
+  })
+
+  it('matches the desktop on the real Topology_Example', () => {
+    const reference: DrawReference = JSON.parse(topologyScaled25Raw)
+    const parsed = parseGvNodeCsv(topologyCsv)
+    const built = buildScene(parsed.nodes, {})
+    // Every topology family at once, which is what makes this the placement half
+    // of the check: a base radius applied to the wrong term would move children
+    // off their parents' surfaces here while the synthetic fixture (Cartesian
+    // throughout, bar its rods) stayed green.
+    expect(expectMatchesDump(built, reference, 'topology @2.5')).toBeGreaterThan(100)
+  })
+
+  it('floors after the multiply, not before', () => {
+    // The order the desktop uses: max(own · base, 0.2). A node at 0.05 is
+    // floored to 0.2 at scale 1 and still floored at 2.5 (0.125), so a
+    // "floor first, then scale" implementation would draw it at 0.5.
+    const parsed = parseGvNodeCsv(drawScaleCsv)
+    const built = buildScene(parsed.nodes, {})
+    built.root.updateMatrixWorld(true)
+    const floored = new THREE.Vector3().setFromMatrixScale(
+      built.frames.get(6)!.getObjectByName('glyph')!.matrixWorld,
+    )
+    expect(floored.y).toBeCloseTo(0.2, 9)
+    // …while the deep chain, which the floor never touches, scales cleanly.
+    const deep = new THREE.Vector3().setFromMatrixScale(
+      built.frames.get(5)!.getObjectByName('glyph')!.matrixWorld,
+    )
+    expect(deep.x).toBeCloseTo(0.3 ** 4 * GLOBAL_SCALE, 9)
+  })
+})
+
+// The Global Scale slider does NOT rebuild the scene — it rewrites the existing
+// Object3Ds in place (rescaleSceneFrames), because re-creating every glyph,
+// material binding and pick proxy per slider step is unaffordable at 209k nodes.
+// That makes "in place equals rebuilt" the one thing the feature rests on, and
+// this is the check for it: the same scene taken to 2.5 both ways, diffed
+// against each other AND against the desktop's own dump for that scale.
+describe('in-place rescale equals a fresh build', () => {
+  afterEach(() => {
+    setBaseScale(DEFAULT_BASE_SCALE)
+  })
+
+  it('reproduces the desktop matrices after a slider drag', () => {
+    const reference: DrawReference = JSON.parse(topologyScaled25Raw)
+
+    // Built at the default, like a scene loaded before the slider is touched…
+    setBaseScale(DEFAULT_BASE_SCALE)
+    const built = buildScene(parseGvNodeCsv(topologyCsv).nodes, {})
+    built.root.updateMatrixWorld(true)
+
+    // …then dragged, twice, since a slider passes through values on the way and
+    // each apply must start from the node rows rather than from the last result.
+    for (const value of [7.3, 2.5]) {
+      setBaseScale(value)
+      rescaleSceneFrames(parseGvNodeCsv(topologyCsv).nodes, built.frames)
+    }
+
+    expect(expectMatchesDump(built, reference, 'rescaled @2.5')).toBeGreaterThan(100)
+  })
+
+  it('leaves a World Grid footprint alone while still placing it', () => {
+    // gridDrawScale is base_scale-exempt on both sides (scene._grid_draw_scale),
+    // so a grid's plate must not move under the slider — but its own frame still
+    // takes a topology offset from whatever it hangs under.
+    const parsed = parseGvNodeCsv(drawScaleCsv)
+    setBaseScale(DEFAULT_BASE_SCALE)
+    const built = buildScene(parsed.nodes, {})
+    built.root.updateMatrixWorld(true)
+    const gridGlyph = built.frames.get(19)!.getObjectByName('glyph')!
+    const before = gridGlyph.scale.clone()
+
+    setBaseScale(4)
+    rescaleSceneFrames(parsed.nodes, built.frames)
+    expect(gridGlyph.scale.x).toBeCloseTo(before.x, 12)
+    expect(gridGlyph.scale.y).toBeCloseTo(before.y, 12)
+    expect(gridGlyph.scale.z).toBeCloseTo(before.z, 12)
   })
 })

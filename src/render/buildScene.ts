@@ -19,6 +19,7 @@ import type { GvNode } from '../gv/types'
 import { Geometry, NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { worldNodeOf } from '../gv/worldNode'
+import { baseScale } from './baseScale'
 import { drawLimitPlan } from './drawLimit'
 import {
   createGlyphObject,
@@ -32,8 +33,6 @@ import { topoBaseRotation, topoOffset } from './topology'
 import { buildTopologyOverlay, TopologyOverlay } from './topologyOverlay'
 import { createWorldGridObject } from './worldGridGeometry'
 
-/** Desktop "Global Scale" B — the unscaled base glyph size. */
-export const BASE_SCALE = 1.0
 /** Draw-time per-axis floor on world scale (placement always uses raw scale). */
 export const RENDER_SCALE_FLOOR = 0.2
 /** Background when no World (type 0) row is present. */
@@ -112,7 +111,9 @@ function framePosition(node: GvNode, parentGv: GvNode | null): THREE.Vector3 {
     tz: node.translate.z,
     parentRatio: parentGv?.ratio ?? 0,
     subspace: node.subspace,
-    baseScale: BASE_SCALE,
+    // The live Global Scale: a topology's base radius is the size of the glyph
+    // its children sit on, so raising it moves them outward with it.
+    baseScale: baseScale(),
   })
 }
 
@@ -182,6 +183,30 @@ export interface BuildSceneOptions {
   drawLimit?: number | null
 }
 
+/** id → row, FIRST row wins on a duplicate id (the engine's own rule). */
+function nodesById(nodes: readonly GvNode[]): Map<number, GvNode> {
+  const byId = new Map<number, GvNode>()
+  for (const node of nodes) {
+    if (!byId.has(node.id)) byId.set(node.id, node)
+  }
+  return byId
+}
+
+/**
+ * The row a node actually hangs from, or null when it is a root: parent_id 0 is
+ * the root sentinel, a self-parented row cannot nest under itself, and a
+ * dangling reference attaches at the root (the parser warns about it).
+ *
+ * Shared so the placement rule has exactly one statement — rescaleSceneFrames
+ * has to resolve the same parent buildScene's recursion passed down, or a
+ * regrafted node would take a different topology offset than the one it was
+ * built with.
+ */
+function effectiveParent(node: GvNode, byId: ReadonlyMap<number, GvNode>): GvNode | null {
+  if (node.parentId === 0 || node.parentId === node.id) return null
+  return byId.get(node.parentId) ?? null
+}
+
 export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): SceneBuildResult {
   const warnings = new Set<string>()
   const root = new THREE.Group()
@@ -197,17 +222,14 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     )
   }
 
-  const byId = new Map<number, GvNode>()
-  for (const node of nodes) {
-    if (!byId.has(node.id)) byId.set(node.id, node)
-  }
+  const byId = nodesById(nodes)
 
   // Children in file order; nodes with a missing parent attach at the root
   // (the parser already warns about the dangling reference).
   const childrenOf = new Map<number, GvNode[]>()
   const roots: GvNode[] = []
   for (const node of nodes) {
-    if (node.parentId === 0 || node.parentId === node.id || !byId.has(node.parentId)) {
+    if (effectiveParent(node, byId) === null) {
       roots.push(node)
     } else {
       let siblings = childrenOf.get(node.parentId)
@@ -418,5 +440,44 @@ export function drawScaleCorrection(ownAxisScale: number): number {
   // A zero-scale axis leaves nothing to multiply back up: the desktop draws
   // such a node at the 0.2 floor, this draws it flat. Degenerate either way.
   if (Math.abs(ownAxisScale) < 1e-12) return 1
-  return Math.max(ownAxisScale * BASE_SCALE, RENDER_SCALE_FLOOR) / ownAxisScale
+  return Math.max(ownAxisScale * baseScale(), RENDER_SCALE_FLOOR) / ownAxisScale
+}
+
+/**
+ * Re-apply every frame's transform and every glyph's draw scale from the
+ * current node rows, in place — the Global Scale path.
+ *
+ * base_scale reaches the screen through both of the functions above, so a change
+ * to it moves frames (topology offsets) AND resizes glyphs. On the desktop that
+ * is one `Scene.invalidate()` and a batched numpy recompute; here a full
+ * `buildScene` would be the equivalent, and at 209k nodes it is far too
+ * expensive for a slider being dragged — it re-creates every Object3D, geometry
+ * binding and pick proxy to change two vectors per node.
+ *
+ * So this is the DynamicNodes trade in the small: the graph's shape does not
+ * change (no node is added, removed, hidden or re-parented), only the numbers on
+ * it, so the existing objects are rewritten. Callers must then refresh anything
+ * that caches world space — the caller's `updateMatrixWorld` plus the selection
+ * halos; links and topology overlays re-read matrices every frame already.
+ *
+ * A World Grid's glyph is skipped for the same reason buildScene gives it a
+ * bespoke path: `gridDrawScale` is base_scale-exempt, so there is nothing to
+ * rewrite. Its FRAME still moves if its own parent places it by topology.
+ */
+export function rescaleSceneFrames(
+  nodes: readonly GvNode[],
+  frames: ReadonlyMap<number, THREE.Object3D>,
+): void {
+  const byId = nodesById(nodes)
+  for (const node of nodes) {
+    const frame = frames.get(node.id)
+    if (!frame) continue // past the draw limit, or a truncated parent cycle
+    // A duplicate id gets its own Object3D at build time but only the first row
+    // is in `frames`, so writing from the later row would move the wrong glyph.
+    if (byId.get(node.id) !== node) continue
+    applyFrameTransform(frame, node, effectiveParent(node, byId))
+    if (node.type === NodeType.WorldGrid) continue
+    const glyph = frame.children.find((c) => c.userData.isGlyph)
+    if (glyph) applyGlyphDrawScale(glyph, node)
+  }
 }

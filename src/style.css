@@ -361,7 +361,8 @@ canvas {
   opacity: 0.5;
 }
 
-#hud-stereo-sep {
+#hud-stereo-sep,
+#hud-base-scale {
   flex: 1;
   min-width: 0;
   height: 14px;
@@ -370,11 +371,30 @@ canvas {
 
 /* Beats `#hud-world .hud-create-row span`, which would give the readout the
    86px label column. */
-#hud-world #hud-stereo-sep-value {
+#hud-world #hud-stereo-sep-value,
+#hud-world #hud-base-scale-value {
   flex: 0 0 38px;
   text-align: right;
   color: #9aa3b5;
   font-variant-numeric: tabular-nums;
+}
+
+/* Save PNG: an action in a panel of settings, so it reads like the Create
+   group's buttons rather than like Delete's warning colour. */
+#hud-save-png {
+  width: 100%;
+  margin-top: 6px;
+  padding: 3px 0;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-save-png:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 #hud-hint {

@@ -63,7 +63,13 @@ import {
 } from './gv/worldNode'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
-import { applyFrameTransform, BASE_SCALE, buildScene, frameBaseRotation } from './render/buildScene'
+import { baseScale, formatBaseScale, setBaseScale } from './render/baseScale'
+import {
+  applyFrameTransform,
+  buildScene,
+  frameBaseRotation,
+  rescaleSceneFrames,
+} from './render/buildScene'
 import type { SceneBuildResult } from './render/buildScene'
 import {
   DRAW_LIMIT_DOUBLE,
@@ -87,6 +93,7 @@ import {
 } from './render/textureLibrary'
 import type { AudioMode, TextureLibrary } from './render/textureLibrary'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
+import { composeScreenshot, downloadCanvasPng, screenshotFilename } from './render/screenshot'
 import { nodeIdsInRect } from './render/rectSelect'
 import {
   applyRenderMode,
@@ -294,9 +301,15 @@ hud.innerHTML = `
     <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
       <input type="checkbox">Follow Selected (F)
     </label>
+    <div class="hud-create-row" id="hud-base-scale-row" title="Global Scale — the size of an unscaled glyph, for the whole scene at once.&#10;Children placed on a parent's surface (Sphere, Cube, Torus…) ride outward with it, and small nodes lift off the 0.2 draw floor.&#10;A viewer setting: it never reaches the CSV.">
+      <span>Global Scale</span>
+      <input id="hud-base-scale" type="range" min="1" max="100" step="1" value="10">
+      <span id="hud-base-scale-value">1.0</span>
+    </div>
     <label id="hud-show-fps" class="sel-check" title="Frame rate, this app's CPU time per frame, and the draw calls and triangles the last frame sent to the GPU.&#10;Shown bottom-right; switch it off for a clean screengrab.">
       <input type="checkbox" checked>Show FPS
     </label>
+    <button id="hud-save-png" title="Save the viewport exactly as it looks right now as a PNG, tag labels included  [Alt+P]&#10;The HUD panels are not in the image. Desktop GlyphViz puts this on F12, which a browser reserves.">Save PNG</button>
     <label id="hud-stereo" class="sel-check" title="Side-by-side stereo pair, free-viewed by crossing your eyes — no glasses, no headset.&#10;Camera orbit/pan/zoom and click/double-click selection still work; rubber-band region select is disabled while active.">
       <input type="checkbox">Stereo 3D (Cross-Eye)
     </label>
@@ -336,6 +349,9 @@ const gridColorInput = hud.querySelector<HTMLInputElement>('#hud-grid-color')!
 const renderModeSelect = hud.querySelector<HTMLSelectElement>('#hud-render-mode')!
 const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
 const showFpsCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-fps input')!
+const baseScaleSlider = hud.querySelector<HTMLInputElement>('#hud-base-scale')!
+const baseScaleValue = hud.querySelector<HTMLSpanElement>('#hud-base-scale-value')!
+const savePngButton = hud.querySelector<HTMLButtonElement>('#hud-save-png')!
 const stereoCheckbox = hud.querySelector<HTMLInputElement>('#hud-stereo input')!
 const stereoSepRow = hud.querySelector<HTMLDivElement>('#hud-stereo-sep-row')!
 const stereoSepSlider = hud.querySelector<HTMLInputElement>('#hud-stereo-sep')!
@@ -438,6 +454,79 @@ app.appendChild(fpsMeter.element)
 showFpsCheckbox.addEventListener('change', () => {
   fpsMeter.visible = showFpsCheckbox.checked
 })
+
+// --- Global Scale ------------------------------------------------------------
+//
+// The desktop's Display-panel slider (`_update_scale` → `Viewport.base_scale`),
+// range and label included: 0.1–10.0 in tenths, default 1.0. See
+// render/baseScale.ts for what the value does — it is both the draw scale and
+// every topology's base radius, so glyphs grow AND the children placed on their
+// surfaces move outward with them.
+//
+// Applied in place rather than through rebuildScene: the graph's shape does not
+// change, only its numbers, and a slider dragged at Event_Cloud's 209k nodes
+// cannot afford re-creating every Object3D, material binding and pick proxy per
+// step. Coalesced to one apply per frame for the same reason — a range input
+// fires `input` far faster than a big scene can be rewritten.
+let baseScaleFrame = 0
+
+function applyBaseScale(value: number) {
+  const applied = setBaseScale(value)
+  baseScaleValue.textContent = formatBaseScale(applied)
+  if (!currentRoot || !currentFrames) return
+  rescaleSceneFrames(currentNodes, currentFrames)
+  // Halos are world-space geometry written from these matrices (they are only
+  // refreshed from the loop while something is animating), so both have to be
+  // brought forward here.
+  currentRoot.updateMatrixWorld(true)
+  selection.refreshHalos()
+  // The inspector's world-pos line is a snapshot taken when the selection last
+  // changed, and this is the one edit that moves a node without touching a
+  // single CSV field — so nothing else here would refresh it. Found by driving
+  // it: the readout sat at its old position while the glyph moved under it.
+  if (selection.size > 0) refreshSelectionUi()
+}
+
+baseScaleSlider.addEventListener('input', () => {
+  if (baseScaleFrame) return
+  baseScaleFrame = requestAnimationFrame(() => {
+    baseScaleFrame = 0
+    applyBaseScale(Number(baseScaleSlider.value) / 10)
+  })
+})
+
+// --- Save PNG ----------------------------------------------------------------
+//
+// Desktop File ▸ Save Scene as PNG (F12). The request is deferred to the tail of
+// the animation loop because a WebGL drawing buffer is only readable inside the
+// task that drew it — see render/screenshot.ts.
+//
+// The key is Alt+P, not the desktop's F12: browsers reserve F12 for developer
+// tools and deliver the keydown too late to stop it. Same substitution the
+// Node Table's Alt+N makes for a reserved Ctrl+N, and Ctrl+P is already the
+// Properties panel.
+let pngRequested = false
+
+function requestScreenshot() {
+  if (pngRequested) return
+  pngRequested = true
+  status('Saving PNG…')
+}
+
+function captureScreenshot() {
+  pngRequested = false
+  const filename = screenshotFilename(currentNodes.length > 0 ? currentFilename : null)
+  try {
+    const canvas = composeScreenshot(renderer.domElement, labels.canvas)
+    void downloadCanvasPng(canvas, filename)
+      .then(() => status(`Saved the viewport to ${filename}`))
+      .catch((err: unknown) => status(`Screenshot error: ${String(err)}`))
+  } catch (err) {
+    status(`Screenshot error: ${String(err)}`)
+  }
+}
+
+savePngButton.addEventListener('click', requestScreenshot)
 
 // --- Cross-eye stereo --------------------------------------------------------
 //
@@ -1735,6 +1824,8 @@ window.addEventListener('keydown', (e) => {
     const key = e.key.toLowerCase()
     if (key === 'c') channelsPanel.panel.cycle()
     else if (key === 'n') nodeTable.panel.cycle()
+    // The desktop's F12 (Save Scene as PNG), which a browser will not give up.
+    else if (key === 'p') requestScreenshot()
     // Alt+= / Alt+− step the PALETTE, the bare keys its index (below) — the
     // desktop's pairing, and the reason the palette keys live up here.
     else if (!typing && (key === '=' || key === '+')) cyclePaletteAttribute('palette', 1)
@@ -2092,7 +2183,10 @@ gizmo.addEventListener('objectChange', () => {
       ? parentGv.topo
       : -1
   const parentRatio = gridParent ? 0 : (parentGv?.ratio ?? 0)
-  const baseScale = gridGlobe ? GRID_GLOBE_RADIUS : BASE_SCALE
+  // A globe grid's children place at the geographic radius, which the Global
+  // Scale plays no part in; everything else inverts through the live value the
+  // frame was placed with.
+  const dragBaseScale = gridGlobe ? GRID_GLOBE_RADIUS : baseScale()
 
   // Live re-read of the primary + followers while a drag is in flight.
   const showDragged = () => {
@@ -2135,7 +2229,7 @@ gizmo.addEventListener('objectChange', () => {
       gridParent ? gridOffsetSpace(motion, gridParent) : motion,
       parentRatio,
       node.subspace,
-      baseScale,
+      dragBaseScale,
     )
   }
 
@@ -2145,7 +2239,7 @@ gizmo.addEventListener('objectChange', () => {
     prev: node.translate, // last committed tick — keeps unwrap continuous
     parentRatio,
     subspace: node.subspace,
-    baseScale,
+    baseScale: dragBaseScale,
   })
   if (gridParent && !gridGlobe) {
     // Cartesian inversion recovered the window-relative offset; translate
@@ -2927,6 +3021,12 @@ renderer.setAnimationLoop(() => {
     renderer.render(scene, camera)
     if (currentFrames) labels.render(currentNodes, currentFrames, camera, labelState)
   }
+  // Still inside the frame that drew them, which is the only place the WebGL
+  // drawing buffer can be read back — and after the label pass, so the image
+  // holds the labels that are on screen. In stereo both halves are already in
+  // the one buffer, so the pair saves as it appears.
+  if (pngRequested) captureScreenshot()
+
   // Bracket the whole loop, and read the counters after the render call so
   // they describe the frame just drawn.
   fpsMeter.frame(now, performance.now(), renderer.info.render)

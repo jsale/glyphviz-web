@@ -758,6 +758,88 @@ something to decide now).
         stores and saves the value but does not flow link textures yet
         (deferred at the link step, still open) — the tooltip says so
         rather than promising it.
+   r. Global Scale + Save PNG (shipped 2026-07-30, Jeff's request — the
+      first two of four desktop features this app was missing; the other
+      two, the expanded Channels attribute set and Camera Mode free
+      flight, are each their own session, see the Pending list below).
+      - GLOBAL SCALE (`src/render/baseScale.ts`), the desktop's
+        Display-panel slider (`_update_scale` → `Viewport.base_scale`):
+        0.1–10.0 in tenths, default 1.0, in the Scene panel's world
+        group. Quantized through the same integer lattice the desktop
+        divides by ten, so a stored value is bit for bit the one that app
+        holds (`Math.round(v * 10) / 10`, never `× 0.1`).
+        - It is NOT a multiplier on rendered size, which is why it could
+          not be a render-time flourish. Two separate things read it:
+          the DRAW scale (`S_child = diag(own · base, floored at 0.2)`,
+          floored AFTER the multiply, so raising it lifts small nodes off
+          the floor) and every topology's BASE RADIUS through
+          `compute_world_transforms` — a Sphere parent's surface, a
+          Torus's major radius, a Rod's length, a Spiral's pitch — so
+          children ride outward with the parent they sit on instead of
+          sinking into it. Both were already threaded through one
+          constant here; the port is making that constant live.
+        - A viewer setting, never CSV: it survives a scene load, like
+          Show Grid/Axes, and no writer knows about it. World Grids are
+          exempt on both sides (`gridDrawScale` is raw scale × extents
+          half-spans), and a globe grid's children keep the geographic
+          GRID_GLOBE_RADIUS.
+        - The slider does NOT rebuild the scene. `rescaleSceneFrames`
+          rewrites the existing Object3Ds — the graph's shape does not
+          change, only its numbers — which is the DynamicNodes trade in
+          the small. Measured at 100,400 nodes in Chrome: ~129 ms per
+          step in place against ~783 ms for the equivalent full rebuild,
+          6× cheaper, and rAF-coalesced so a drag applies once per frame.
+          The parent-resolution rule buildScene's recursion carries is
+          now one shared `effectiveParent`, because the in-place path has
+          to resolve exactly the parent a node was built under.
+        - Module-level mutable state, deliberately: the desktop has one
+          such value for the whole viewport, and threading it would put a
+          parameter on eight signatures — two parity-tested — to say the
+          same thing. Tests must restore it.
+        - Divergence: the Hyperglyph/Composer previews follow the slider,
+          where the desktop's dialogs each hold their own Viewport at
+          1.0. A preview that draws the design the way the scene will is
+          the better default, and it is free.
+        - Parity: `tools/dump_draw_matrices.py` takes the base scale as an
+          argument now, and `drawMatrix.parity.test.ts` diffs BOTH
+          fixtures at 2.5 — the synthetic one and the real
+          Topology_Example, all 109 rows, which is the placement half
+          (every topology family at once). Verified to FAIL both when
+          placement ignores the value and when the floor is applied
+          before the multiply. Until this, that harness asserted
+          `base_scale === 1` and was blind to the one input to a draw
+          matrix that no CSV can carry.
+      - SAVE PNG (`src/render/screenshot.ts`), desktop File ▸ Save Scene
+        as PNG (F12 → `Viewport.save_screenshot`'s `grabFramebuffer`): a
+        Scene-panel button and **Alt+P**. F12 is unusable — browsers
+        reserve it for developer tools and deliver the keydown too late
+        to stop it — so this takes the Alt lane the Node Table's Alt+N
+        already uses for a reserved Ctrl+N (Ctrl+P is the Properties
+        panel).
+        - Two things had to be reproduced rather than inherited. A WebGL
+          drawing buffer is only readable inside the task that drew it,
+          so the click sets a flag and the capture runs at the TAIL of the
+          animation loop; `preserveDrawingBuffer: true` is the
+          alternative and taxes every frame for the sake of a rare one.
+          And tag labels are a second canvas over the WebGL one, so the
+          image is COMPOSITED or every label goes missing from it.
+        - Everything else falls out: the HUD is DOM, so panels, status
+          line and FPS readout stay out of the image exactly as the
+          desktop's Qt widgets do (the point of the screengrab-chrome
+          work this belongs to); stereo saves the pair as it appears,
+          both eyes already being in the one buffer; and the file is at
+          full device resolution (verified 2000×1400 at dpr 2).
+        - Filename is `with_suffix('.png')`, so
+          `topology_example_gv_node.csv` → `topology_example_gv_node.png`
+          and no scene open → `scene.png`. One divergence: an extension
+          must start with a letter, so `scene_v1.2` keeps its tail —
+          Python would eat it, which is tolerable in a save DIALOG the
+          user can correct and not here, where this IS the name.
+      - Found by driving it, not by reading it: the inspector's world-pos
+        line is a snapshot taken when the selection last changed, and the
+        Global Scale is the only edit that moves a node without touching
+        a CSV field, so the readout sat at the old position while the
+        glyph moved under it. `applyBaseScale` refreshes it.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -1268,7 +1350,51 @@ something to decide now).
      is 315 MB and is never shipped wholesale). Lower priority per Jeff
      (2026-07-25): folder drop and zip already let users draw from their
      own copy of the GlyphViz examples.
-8. WebXR (headset stereo): still deliberately deferred until basic parity
+8. Agreed next, in order (2026-07-30, Jeff's four-feature ask — the first
+   two shipped as 6r; these two are each their OWN session, because each
+   ends in a parity or behaviour harness plus a drive-the-UI pass and the
+   real risk is running out of context halfway through one):
+   a. CHANNELS, the desktop's expanded bindable set (22 → 34 attributes,
+      desktop `77d6361`): shape (`ratio`/`topo`/`geometry`/`mesh_id`),
+      palette (`palette_id` + `color_index`, resolved to literal RGB every
+      frame — the first automatic palette resolution, where this app so
+      far resolves only on a keypress), visibility (`hide`/`show_text`),
+      and the World row's `render_mode` + `fog_*`.
+      - FOG DOES NOT RENDER HERE YET and is the prerequisite: exactly the
+        `render_mode` situation of 6j, a parsed and written column
+        (`fogEnabled`/`fogStart`/`fogEnd` are already on the World row in
+        `gv/types.ts`) that does nothing. Ship it as a scene feature
+        first — World-row fields, a Scene-panel group, GL_LINEAR fog under
+        this app's raw-sRGB output pipeline — then binding it is one table
+        entry.
+      - The desktop's commit message lists three fast-path bugs it had to
+        fix for this, and TWO have exact counterparts already documented
+        in this file: plot/surface membership is baked per scene build
+        here (so a node animating INTO topo 16/17 gets no polyline), and
+        `pinnedTagNodes` is refreshed per build (so `show_text` animated
+        on a scene that loaded with none draws nothing). Its torus-cache
+        leak maps onto this app's geometry cache. Read that message as a
+        bug list for this port, not as background.
+      - Fixtures: the desktop's two new examples, `Channel_Parameters_Example`
+        and `Mood_Background_Example`, plus an extended
+        `tools/dump_channel_frames.py`.
+   b. CAMERA MODE (desktop `7a73392` then `d66304a`): **C** toggles free
+      flight, **Shift+C** cycles camera views. It is two features — this
+      app has no fixed-axis camera set at all, and on the desktop plain C
+      DISPLACED that cycling onto Shift+C, so the displaced thing has to
+      exist first. Port `d66304a`, the ANTz-style **rate flight** rework,
+      NOT the original per-move drag with transient banking (the standing
+      "port the revisit" rule, and here the desktop says outright that the
+      first attempt was replaced at the test group's request).
+      - Web integration is the real cost: OrbitControls yielding, stereo's
+        remapped per-eye cameras, Follow Selected cleared on entry, the
+        existing Left+Right combo drag, and per-tick integration in the
+        animation loop so motion continues while the mouse sits still (dt
+        is already there — the FPS meter's clock).
+      - `tests/test_camera_mode.py` (271 lines) is the behaviour spec.
+      - Keep C and Shift+C free until then; Alt+P was taken for Save PNG
+        partly for this reason.
+9. WebXR (headset stereo): still deliberately deferred until basic parity
    exists. The free-view cross-eye pair shipped as 6n and is a different
    thing — one canvas, no device, no session lifecycle.
 
