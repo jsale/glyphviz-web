@@ -916,6 +916,60 @@ something to decide now).
         exercises: a hide-bound LINK's edge (link batches are per build) and
         World-Grid colour writes (excluded from appearance sync since 6,
         for the per-part colour rule).
+   t. Fetch Basemap (shipped 2026-07-31, Jeff's request — a port of desktop
+      `8573571`, the GIS mapping feature): a flat World Grid downloads real
+      map imagery (OSM streets / Esri World Imagery satellite / OpenTopoMap
+      terrain — free, key-less) for its data's lon/lat bounding box and wears
+      it as its texture, with the grid extents set to the map's EXACT
+      coverage so glyphs and map features line up. Button in the Properties
+      panel when a single World Grid is selected (the desktop's World Grid
+      panel doesn't exist here yet), disabled for a globe; it opens a
+      FloatWindow that prefills the window from the grid's DIRECT children
+      (descendants place relative to them), previews tiles/zoom/output size
+      live, and fetches without blocking.
+      - Split mirrors the desktop's: `src/gv/basemap.ts` is the pure math
+        (providers, bbox pad/clamp/validate, zoom selection under the 60-tile
+        politeness cap, slippy-tile ranges, and the Web Mercator →
+        plate-carrée ROW resample as typed-array ops, node-testable);
+        `src/render/basemapFetch.ts` is the browser half (fetch + canvas
+        stitch + attribution stamp + PNG encode); `src/ui/basemapWindow.ts`
+        the dialog; main.ts `applyBasemap` the scene wiring — extents into
+        the trigger_lo/hi extras, texture_id assigned with the desktop's
+        insertion-shift rule (a NEW image at sort position N bumps every
+        node's id ≥ N; a refetch overwrites in place, nothing moves), Grid
+        Wire promoted to Grid so the texture shows, texture cache fully
+        reset (ids may have shifted AND bytes changed behind a decoded id).
+      - Reprojection is mandatory, same reason as there: tiles are Mercator,
+        the grid drapes linearly in latitude — a plain crop is ~40 rows off
+        mid-image for a US-sized window. Two int()-vs-floor traps surfaced
+        by parity: Python truncates toward zero (at the Mercator limit the
+        norm is −2e−16, floor answers −1) and Math.trunc's −0 fails a strict
+        0 compare. Both pinned by the whole_earth parity case.
+      - Platform divergences, deliberate: the tile cache is the Cache API
+        (per-origin, survives reloads) instead of a disk folder; the
+        identifying User-Agent is impossible in a browser (forbidden header)
+        so the browser's own UA + Referer stand in; and the PNG persists by
+        DOWNLOAD (like Save CSV) since a browser can't write media/ — the
+        saved CSV references `media/zz_basemap_grid<id>.png` and the download
+        hands the user exactly that file, said in the status line. In-scene
+        it applies live either way (media index insertion, so the texture
+        row lists it by name).
+      - Parity: `tools/dump_basemap_plans.py` runs the REAL desktop planner
+        AND its private `_reproject_to_equirect` (fed canvases whose pixels
+        encode their own position, the desktop test's own trick) over 12
+        windows; `src/gv/basemap.parity.test.ts` diffs plans exactly and the
+        sampling arrays value for value. Verified to FAIL against floor
+        truncation and against a linear (no-reproject) row map.
+        `src/gv/basemap.test.ts` ports tests/test_basemap.py's pure cases.
+      - Driven in Chrome (18 checks): real OSM fetch on the World Grid
+        example (56 tiles, 1.9 s, PNG inspected — San Diego streets,
+        attribution stamped), refetch entirely from cache (0 network hits),
+        Fit to Children, live preview, globe refusal, extents/texture/status
+        all measured, console clean.
+      - Same V1 gaps as the desktop, on purpose: globe grids, antimeridian
+        windows, no one-click grid adoption for gridless lat/lon scenes.
+        Adding Mapbox or another key-carrying provider is a PROVIDERS entry
+        plus auth, both sides.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

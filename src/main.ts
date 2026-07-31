@@ -25,6 +25,7 @@ import {
 } from './gv/channels'
 import type { ChannelAnimation } from './gv/channels'
 import { applyRateAnimation, rateCandidates } from './gv/rates'
+import { buildMediaIndex } from './gv/media'
 import type { MediaIndex } from './gv/media'
 import {
   isDesktopOnlyMeshFileName,
@@ -108,6 +109,8 @@ import { eyeForX, StereoRig } from './render/stereo'
 import type { StereoEye } from './render/stereo'
 import { CameraRig } from './render/cameraMode'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
+import { BasemapWindow } from './ui/basemapWindow'
+import type { BasemapApplyPayload } from './ui/basemapWindow'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
 import { FpsMeter } from './ui/fpsMeter'
 import { GlyphComposerWindow } from './ui/glyphComposerWindow'
@@ -427,7 +430,10 @@ exampleSelect.addEventListener('change', () => {
 })
 
 function download(text: string, filename: string, type = 'text/csv') {
-  const blob = new Blob([text], { type })
+  downloadBlob(new Blob([text], { type }), filename)
+}
+
+function downloadBlob(blob: Blob, filename: string) {
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = filename
@@ -491,8 +497,96 @@ const inspector = new Inspector({
       sceneEpoch,
     )
   },
+  onFetchBasemap(grid) {
+    basemapWindow.open(grid, currentNodes)
+  },
 })
 app.appendChild(inspector.element)
+
+// --- Fetch Basemap -------------------------------------------------------------
+//
+// Desktop MainWindow._on_fetch_basemap, replumbed for a browser: the window
+// (ui/basemapWindow.ts) downloads tiles and produces the reprojected PNG; this
+// side wires the image into the scene — grid extents set to the map's exact
+// coverage, texture_id assigned (shifting other nodes' ids when the insertion
+// changes the media numbering), wire geometry promoted to solid so the texture
+// is actually visible.
+const basemapWindow = new BasemapWindow({ onApply: applyBasemap })
+
+function applyBasemap(payload: BasemapApplyPayload) {
+  const grid = currentNodes.find(
+    (n) => n.id === payload.gridId && n.type === NodeType.WorldGrid,
+  )
+  if (!grid) {
+    status(`World Grid ${payload.gridId} is no longer in the scene — basemap not applied.`)
+    return
+  }
+
+  // A stable per-grid name: refetching overwrites in place (same texture_id,
+  // no renumbering); the zz_ prefix keeps it sorted after the scene's own
+  // deliberately-ordered media files.
+  const name = `zz_basemap_grid${grid.id}.png`
+  const pngFile = new File([payload.png], name, { type: 'image/png' })
+
+  // texture_id is a 1-based index into media/ sorted alphanumerically (images
+  // first, then videos) — inserting a NEW image shifts every id at or after
+  // its sort position, so shift referencing nodes to match. An overwrite
+  // keeps its old position: nothing moves.
+  const oldEntries = currentMedia?.index.entries ?? []
+  const oldFileByName = new Map(
+    oldEntries.map((e) => [e.name, currentMedia!.fileById.get(e.textureId)] as const),
+  )
+  const existed = oldEntries.some((e) => e.name === name)
+  const names = existed ? oldEntries.map((e) => e.name) : [...oldEntries.map((e) => e.name), name]
+  const index = buildMediaIndex(names)
+  const newId = index.entries.find((e) => e.name === name)!.textureId
+  if (!existed) {
+    for (const n of currentNodes) {
+      if (n.textureId >= newId) n.textureId += 1
+    }
+  }
+
+  // The grid's extents become the map's EXACT coverage (the dialog's planned
+  // bbox, never the typed values), so texture and child placement can't drift
+  // apart. Extents live in the trigger_lo/hi extras columns, the same storage
+  // the desktop and the CSV writer use.
+  const f = (v: number) => String(Number(v.toFixed(6)))
+  grid.extras['trigger_lo_x'] = f(payload.bbox.lonMin)
+  grid.extras['trigger_hi_x'] = f(payload.bbox.lonMax)
+  grid.extras['trigger_lo_y'] = f(payload.bbox.latMin)
+  grid.extras['trigger_hi_y'] = f(payload.bbox.latMax)
+  grid.textureId = newId
+  if (grid.geometry === Geometry.GridWire) grid.geometry = Geometry.GridSolid
+
+  const fileById = new Map<number, File>()
+  for (const entry of index.entries) {
+    const file = entry.name === name ? pngFile : oldFileByName.get(entry.name)
+    if (file) fileById.set(entry.textureId, file)
+  }
+  currentMedia = { index, fileById }
+  inspector.setMedia(index)
+
+  // Ids may have shifted, and a refetch changes bytes behind an id that was
+  // already decoded — so the texture cache restarts from nothing, exactly as
+  // a scene load does. A basemap fetch is rare; the reset is cheap next to it.
+  disposeTextures(currentTextures)
+  clearMaterialCache()
+  currentTextures = emptyTextureLibrary()
+  attemptedTextureIds = new Set()
+  rebuildScene(false)
+  void decodeSceneTextures(sceneEpoch)
+
+  // The browser can't write into the scene folder, so persistence is a
+  // download (the same way Save CSV persists the nodes): the saved CSV
+  // references media/<name>, and this hands the user that exact file.
+  downloadBlob(payload.png, name)
+  status(
+    `Basemap applied to World Grid ${grid.id}: ${name} (texture ${newId}), ` +
+      `extents lon ${payload.bbox.lonMin.toFixed(3)}..${payload.bbox.lonMax.toFixed(3)}, ` +
+      `lat ${payload.bbox.latMin.toFixed(3)}..${payload.bbox.latMax.toFixed(3)}. ` +
+      `${payload.attribution} — PNG downloaded; keep it in the scene's media/ folder.`,
+  )
+}
 
 // Bottom-right, opposite the status line — the desktop's status bar reads the
 // same way, message left and the FPS label added as a permanent right-hand
@@ -1422,6 +1516,8 @@ function loadScene(source: SceneSource) {
   // The texture row offers this scene's media, so it has to know before the
   // first selection lands in the panel.
   inspector.setMedia(currentMedia?.index ?? null)
+  // A basemap window left open belongs to the previous scene's grid.
+  basemapWindow.close()
 
   // Draw immediately, untextured; media decodes asynchronously and triggers a
   // second, camera-preserving rebuild when it lands.

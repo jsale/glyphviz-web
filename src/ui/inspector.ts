@@ -23,7 +23,15 @@ import type { MediaIndex } from '../gv/media'
 import { shiftAxis } from '../gv/multiEdit'
 import type { VectorField } from '../gv/multiEdit'
 import type { GvNode, Vec3 } from '../gv/types'
-import { GEOMETRY_NAMES, Geometry, NODE_TYPE_NAMES, RotationMode, TOPO_NAMES } from '../gv/types'
+import {
+  GEOMETRY_NAMES,
+  Geometry,
+  NODE_TYPE_NAMES,
+  NodeType,
+  RotationMode,
+  TOPO_NAMES,
+} from '../gv/types'
+import { gridIsGlobe } from '../gv/worldGrid'
 import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
 import { meshChoices } from '../render/meshLibrary'
 import type { MeshLibrary } from '../render/meshLibrary'
@@ -32,6 +40,8 @@ import { Panel } from './panel'
 export interface InspectorHost {
   /** Called after an edit mutates the selection: rebuild scene, then re-show. */
   onNodesEdited(nodes: GvNode[]): void
+  /** Fetch Basemap… pressed with a single flat World Grid selected. */
+  onFetchBasemap(grid: GvNode): void
 }
 
 export interface WorldPos {
@@ -522,6 +532,30 @@ export class Inspector {
       ),
       this.textureRow(primary),
     )
+
+    // Fetch Basemap: the desktop keeps this on its World Grid panel; this app
+    // has no grid panel yet, so it rides with the texture row it ends up
+    // setting. Flat grids only — a regional map can't wrap a globe (a globe
+    // still takes any whole-earth equirect image the ordinary way).
+    if (!multi && primary.type === NodeType.WorldGrid) {
+      const button = el('button', {
+        type: 'button',
+        className: 'ins-basemap',
+        textContent: 'Fetch Basemap…',
+      })
+      const globe = gridIsGlobe(primary)
+      button.disabled = globe
+      button.title = globe
+        ? 'Fetch Basemap needs the flat form — a regional map can’t wrap a globe.\n' +
+          'Switch the grid’s geometry to Grid / Grid Wire first.'
+        : 'Download a map image (OpenStreetMap, satellite, or terrain) for this\n' +
+          'grid: the lon/lat window is prefilled from the grid’s children, the\n' +
+          'map is reprojected to line up exactly with child placement, and\n' +
+          'applied as the grid’s texture. Free services, no API key; tiles are\n' +
+          'cached so refetches don’t re-download.'
+      button.addEventListener('click', () => this.host.onFetchBasemap(primary))
+      parts.push(row('basemap', button))
+    }
 
     const hide = el('input', { type: 'checkbox', checked: primary.hide !== 0 })
     hide.addEventListener('change', () => this.commit((n) => (n.hide = hide.checked ? 1 : 0)))

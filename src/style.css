@@ -516,6 +516,26 @@ canvas {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.ins-value .ins-basemap {
+  flex: 1;
+  padding: 2px 0;
+  background: none;
+  color: #cfd6e4;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.ins-value .ins-basemap:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.ins-value .ins-basemap:disabled {
+  color: #6c7488;
+  cursor: default;
+}
+
 .ins-value input[type='color'] {
   width: 34px;
   height: 22px;
@@ -958,6 +978,53 @@ canvas {
 #hyperglyph-window .hud-create-row span,
 #glyph-composer-window .hud-create-row span {
   flex: 0 0 86px;
+}
+
+/* --- Fetch Basemap window --------------------------------------------------
+   Small and form-shaped: no preview canvas, just the lon/lat window, the live
+   plan line, and the fetch. Height follows content instead of the tool
+   windows' fixed band. */
+
+#basemap-window {
+  width: 360px;
+  height: auto;
+  min-height: 0;
+  resize: horizontal;
+}
+
+#basemap-window .hud-create-row span {
+  flex: 0 0 86px;
+}
+
+.basemap-pair {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+}
+
+.basemap-pair input {
+  width: 50%;
+  min-width: 0;
+}
+
+.basemap-preview,
+.basemap-status {
+  margin-top: 8px;
+  white-space: pre-line;
+  user-select: text;
+}
+
+.basemap-preview {
+  color: #aeb6c8;
+}
+
+.basemap-status {
+  color: #8f98ac;
+}
+
+.basemap-buttons {
+  display: flex;
+  gap: 8px;
 }
 
 /* --- Glyph Composer ------------------------------------------------------
