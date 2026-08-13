@@ -30,20 +30,40 @@
 import * as THREE from 'three'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
-import { DEFAULT_BASE_SCALE, setBaseScale } from './baseScale'
+import {
+  DEFAULT_BASE_SCALE,
+  DEFAULT_SCALE_FLOOR,
+  enforceScaleFloor,
+  NO_SCALE_FLOOR,
+  scaleFloor,
+  setBaseScale,
+  setEnforceScaleFloor,
+} from './baseScale'
 import { buildScene, rescaleSceneFrames } from './buildScene'
 import drawScaleCsv from '../gv/fixtures/draw_scale_example_gv_node.csv?raw'
 import drawScaleReferenceRaw from '../gv/fixtures/draw_scale_example_draw_matrices.json?raw'
 import drawScaleScaled25Raw from '../gv/fixtures/draw_scale_example_draw_matrices_scale25.json?raw'
+import drawScaleNoFloorRaw from '../gv/fixtures/draw_scale_example_draw_matrices_nofloor.json?raw'
 import topologyCsv from '../gv/fixtures/topology_example_gv_node.csv?raw'
 import topologyReferenceRaw from '../gv/fixtures/topology_example_draw_matrices.json?raw'
 import topologyScaled25Raw from '../gv/fixtures/topology_example_draw_matrices_scale25.json?raw'
+import topologyNoFloorRaw from '../gv/fixtures/topology_example_draw_matrices_nofloor.json?raw'
 
 interface DrawReference {
   source_csv: string
   base_scale: number
+  /** Desktop `Scene.scale_floor` the dump was taken at: 0.2 on, 0 off. */
+  scale_floor: number
   nodes: { id: number; matrix: number[][]; radius: number }[]
 }
+
+// Every fixture below except the two `_nofloor` ones was dumped with the
+// minimum-rendered-size clamp ON (`Scene.scale_floor = 0.2`), which is how both
+// apps rendered unconditionally until 2026-08-13. It is opt-in and OFF by
+// default on both sides now, so the suites that diff those dumps have to switch
+// it on — and the `_nofloor` suite at the end is the other half of the check.
+beforeEach(() => setEnforceScaleFloor(true))
+afterEach(() => setEnforceScaleFloor(false))
 
 /** Desktop row-major M[row][col] → the Three.js column-major element index. */
 function webElement(m: THREE.Matrix4, row: number, col: number): number {
@@ -87,6 +107,7 @@ describe('draw-matrix parity with the desktop engine', () => {
   it('parses the fixture cleanly', () => {
     expect(parsed.errors).toEqual([])
     expect(reference.base_scale).toBe(1)
+    expect(reference.scale_floor).toBe(0.2)
     expect(reference.nodes.length).toBe(parsed.nodes.length)
   })
 
@@ -331,5 +352,77 @@ describe('in-place rescale equals a fresh build', () => {
     expect(gridGlyph.scale.x).toBeCloseTo(before.x, 12)
     expect(gridGlyph.scale.y).toBeCloseTo(before.y, 12)
     expect(gridGlyph.scale.z).toBeCloseTo(before.z, 12)
+  })
+})
+
+// The minimum rendered size (desktop `Scene.scale_floor`), which BOTH apps now
+// leave off by default — shipped there in 6d82d68 because the clamp silently
+// overrode authored data (its AutoSleep example's deliberately thin 0.07 h axis
+// was inflated to 0.2, so the encoding lied about the data), and ported here
+// 2026-08-13.
+//
+// This is the direction the harness could not previously see at all: it
+// asserted the clamp as a renderer fact, so a build that ignored the setting
+// would have gone on passing. These two dumps are the same fixtures at the same
+// Global Scale with `scale_floor = 0`, so any difference between them and the
+// suites above is the clamp and nothing else.
+describe('draw-matrix parity with the minimum glyph size OFF', () => {
+  beforeEach(() => setEnforceScaleFloor(false))
+
+  it('matches the desktop on the draw-scale fixture', () => {
+    const reference: DrawReference = JSON.parse(drawScaleNoFloorRaw)
+    expect(reference.scale_floor).toBe(0)
+    expect(reference.base_scale).toBe(1)
+    const built = buildScene(parseGvNodeCsv(drawScaleCsv).nodes, {})
+    expect(expectMatchesDump(built, reference, 'draw-scale, floor off')).toBeGreaterThan(10)
+  })
+
+  it('matches the desktop on the real Topology_Example', () => {
+    const reference: DrawReference = JSON.parse(topologyNoFloorRaw)
+    expect(reference.scale_floor).toBe(0)
+    const built = buildScene(parseGvNodeCsv(topologyCsv).nodes, {})
+    expect(expectMatchesDump(built, reference, 'topology, floor off')).toBeGreaterThan(100)
+  })
+
+  it('draws a tiny glyph at exactly its authored scale', () => {
+    // Node 6's own scale is 0.05 — clamped to 0.2 (4× too big) with the option
+    // on, which is the case that made the desktop turn it off by default.
+    const built = buildScene(parseGvNodeCsv(drawScaleCsv).nodes, {})
+    built.root.updateMatrixWorld(true)
+    const glyph = built.frames.get(6)!.getObjectByName('glyph')!
+    const scale = new THREE.Vector3().setFromMatrixScale(glyph.matrixWorld)
+    expect(scale.y).toBeCloseTo(0.05, 9)
+  })
+
+  it('keeps a sliver its own shape instead of squaring it up', () => {
+    // The desktop's own test case: a 4 × 0.05 × 0.05 node is a needle, and the
+    // clamp turns two of its axes into 0.2 — a 20:1 shape becomes 20:4.
+    const parsed = parseGvNodeCsv(drawScaleCsv)
+    const sliver = parsed.nodes.find((n) => n.id === 6)!
+    sliver.scale = { x: 4, y: 0.05, z: 0.05 }
+    const built = buildScene(parsed.nodes, {})
+    built.root.updateMatrixWorld(true)
+    const scale = new THREE.Vector3().setFromMatrixScale(
+      built.frames.get(6)!.getObjectByName('glyph')!.matrixWorld,
+    )
+    expect(scale.x / scale.y).toBeCloseTo(80, 6)
+
+    // …and with the clamp on, the same node is 4 × 0.2 × 0.2.
+    setEnforceScaleFloor(true)
+    const clamped = buildScene(parsed.nodes, {})
+    clamped.root.updateMatrixWorld(true)
+    const clampedScale = new THREE.Vector3().setFromMatrixScale(
+      clamped.frames.get(6)!.getObjectByName('glyph')!.matrixWorld,
+    )
+    expect(clampedScale.x / clampedScale.y).toBeCloseTo(20, 6)
+  })
+
+  it('is the DEFAULT — a fresh module state renders authored scale', () => {
+    // The setting is module-level state; this pins which way it boots, since
+    // every other suite in this file explicitly turns it on.
+    setEnforceScaleFloor(false)
+    expect(enforceScaleFloor()).toBe(false)
+    expect(scaleFloor()).toBe(NO_SCALE_FLOOR)
+    expect(DEFAULT_SCALE_FLOOR).toBe(0.2)
   })
 })

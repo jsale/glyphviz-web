@@ -156,13 +156,14 @@ describe('selection box', () => {
     expect(sel.id).toBe(2)
     expect(sel.haloCount).toBe(1)
 
-    // The drawn scale carries the glyph's 0.2 floor, not the raw 0.1 — so the
-    // halo is ±1.05 × 0.2 around the node, exactly as parenting used to make it.
+    // The halo measures the glyph's RENDERED size, exactly as parenting used to
+    // make it — here the authored 0.1, since the minimum glyph size is off by
+    // default (see baseScale.setEnforceScaleFloor).
     const [box] = haloBoxes(sel)
-    expect(box.min.x).toBeCloseTo(5 - SELECTION_BOX_HALF * 0.2)
-    expect(box.max.x).toBeCloseTo(5 + SELECTION_BOX_HALF * 0.2)
-    expect(box.min.z).toBeCloseTo(-SELECTION_BOX_HALF * 0.2)
-    expect(box.max.z).toBeCloseTo(SELECTION_BOX_HALF * 0.2)
+    expect(box.min.x).toBeCloseTo(5 - SELECTION_BOX_HALF * 0.1)
+    expect(box.max.x).toBeCloseTo(5 + SELECTION_BOX_HALF * 0.1)
+    expect(box.min.z).toBeCloseTo(-SELECTION_BOX_HALF * 0.1)
+    expect(box.max.z).toBeCloseTo(SELECTION_BOX_HALF * 0.1)
 
     // 12 edges × 2 ends per halo, indexed into the 8 corners.
     expect(sel.object.geometry.drawRange.count).toBe(24)

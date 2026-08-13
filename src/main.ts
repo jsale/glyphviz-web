@@ -74,7 +74,13 @@ import {
 } from './gv/worldNode'
 import { writeGvNodeCsv } from './gv/writeNodeCsv'
 import { Backdrop } from './render/backdrop'
-import { baseScale, formatBaseScale, setBaseScale } from './render/baseScale'
+import {
+  baseScale,
+  DEFAULT_SCALE_FLOOR,
+  formatBaseScale,
+  setBaseScale,
+  setEnforceScaleFloor,
+} from './render/baseScale'
 import {
   applyFrameTransform,
   buildScene,
@@ -384,6 +390,9 @@ hud.innerHTML = `
       <input id="hud-base-scale" type="range" min="1" max="100" step="1" value="10">
       <span id="hud-base-scale-value">1.0</span>
     </div>
+    <label id="hud-scale-floor" class="sel-check" title="Clamp every glyph's rendered size (its scale × Global Scale) to at least 0.2 per axis, so a very small or zero-scale node stays visible and clickable.&#10;Off by default: glyphs render at exactly their authored scale, because clamping makes the encoding lie about the data (a deliberately thin 0.07 axis would draw as 0.2).&#10;World Grids are never clamped.&#10;A viewer setting: it never reaches the CSV.">
+      <input type="checkbox">Enforce Minimum Glyph Size (0.2)
+    </label>
     <label id="hud-show-fps" class="sel-check" title="Frame rate, this app's CPU time per frame, and the draw calls and triangles the last frame sent to the GPU.&#10;Shown bottom-right; switch it off for a clean screengrab.">
       <input type="checkbox" checked>Show FPS
     </label>
@@ -440,6 +449,7 @@ const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
 const cameraSelect = hud.querySelector<HTMLSelectElement>('#hud-camera')!
 const flyCheckbox = hud.querySelector<HTMLInputElement>('#hud-fly input')!
 const showFpsCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-fps input')!
+const scaleFloorCheckbox = hud.querySelector<HTMLInputElement>('#hud-scale-floor input')!
 const baseScaleSlider = hud.querySelector<HTMLInputElement>('#hud-base-scale')!
 const baseScaleValue = hud.querySelector<HTMLSpanElement>('#hud-base-scale-value')!
 const savePngButton = hud.querySelector<HTMLButtonElement>('#hud-save-png')!
@@ -655,6 +665,16 @@ let baseScaleFrame = 0
 function applyBaseScale(value: number) {
   const applied = setBaseScale(value)
   baseScaleValue.textContent = formatBaseScale(applied)
+  refreshDrawScales()
+}
+
+/**
+ * Push the current Global Scale / minimum-size settings onto the live scene.
+ * Split out because the checkbox below does exactly what the slider does — both
+ * are terms of the same `max(own scale · base_scale, floor)` product, and
+ * neither changes the graph's SHAPE, so both take the in-place path.
+ */
+function refreshDrawScales() {
   if (!currentRoot || !currentFrames) return
   rescaleSceneFrames(currentNodes, currentFrames)
   // Halos are world-space geometry written from these matrices (they are only
@@ -675,6 +695,26 @@ baseScaleSlider.addEventListener('input', () => {
     baseScaleFrame = 0
     applyBaseScale(Number(baseScaleSlider.value) / 10)
   })
+})
+
+// The opt-in minimum rendered size (desktop `Scene.scale_floor` /
+// `Viewport.enforce_scale_floor`, its commit 6d82d68). It sits in the Global
+// Scale group because it is the other half of that group's expression: the
+// clamp lands on scale × Global Scale, so raising the slider lifts a small node
+// off it. Off by default on both sides — the clamp silently overrode authored
+// data, which is what made the desktop turn it off (a deliberately thin 0.07
+// axis drew as 0.2 and the encoding then lied about the data).
+//
+// A viewer setting like Show Grid, never CSV: no writer knows about it, and it
+// survives a scene load.
+scaleFloorCheckbox.addEventListener('change', () => {
+  setEnforceScaleFloor(scaleFloorCheckbox.checked)
+  refreshDrawScales()
+  status(
+    scaleFloorCheckbox.checked
+      ? `Minimum glyph size ${DEFAULT_SCALE_FLOOR} enforced.`
+      : 'Minimum glyph size off — glyphs render at their authored scale.',
+  )
 })
 
 // --- Save PNG ----------------------------------------------------------------

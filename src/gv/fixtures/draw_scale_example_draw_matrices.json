@@ -1,6 +1,7 @@
 {
  "source_csv": "draw_scale_example_gv_node.csv",
  "base_scale": 1.0,
+ "scale_floor": 0.2,
  "engine": "glyphviz_core.scene.Scene.node_draw_data",
  "nodes": [
   {

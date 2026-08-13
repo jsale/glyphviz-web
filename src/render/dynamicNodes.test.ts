@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { DynamicNodes } from './dynamicNodes'
-import { buildScene, RENDER_SCALE_FLOOR } from './buildScene'
+import { buildScene } from './buildScene'
+import { DEFAULT_SCALE_FLOOR, setEnforceScaleFloor } from './baseScale'
 import { clearMaterialCache } from './glyphGeometry'
 import { RenderMode, applyRenderMode } from './renderMode'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
@@ -191,6 +192,9 @@ describe('DynamicNodes', () => {
   })
 
   it('re-derives the draw-scale floor from the animated node\'s OWN scale', () => {
+    // The floor is opt-in and off by default (desktop Scene.scale_floor), so
+    // the case where it does anything has to switch it on.
+    setEnforceScaleFloor(true)
     const nodes = scene({ scale_x: 1, scale_y: 1, scale_z: 1 }, { parent_id: 1, branch_level: 1 })
     const built = buildScene(nodes)
     const dynamic = new DynamicNodes(
@@ -207,13 +211,14 @@ describe('DynamicNodes', () => {
     // Its own scale under the floor raises its own correction...
     nodes[0].scale = { x: 0.05, y: 0.05, z: 0.05 }
     dynamic.update()
-    expect(parentGlyph.scale.x).toBeCloseTo(RENDER_SCALE_FLOOR / 0.05, 10)
+    expect(parentGlyph.scale.x).toBeCloseTo(DEFAULT_SCALE_FLOOR / 0.05, 10)
     // ...and leaves the CHILD's alone. The floor is per node (desktop
     // node_world_matrix's S_child), never on the accumulated world scale, so
     // the child simply shrinks with its parent through the frame chain.
     // Compensating here is what made deeply nested glyphs balloon.
     expect(childGlyph.scale.x).toBeCloseTo(1, 12)
     dynamic.dispose()
+    setEnforceScaleFloor(false)
   })
 
   it('is empty when nothing is registered, and skips ids with no frame', () => {

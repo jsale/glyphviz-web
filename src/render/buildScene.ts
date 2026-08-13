@@ -19,7 +19,7 @@ import type { GvNode } from '../gv/types'
 import { Geometry, NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { worldNodeOf } from '../gv/worldNode'
-import { baseScale } from './baseScale'
+import { baseScale, scaleFloor } from './baseScale'
 import { drawLimitPlan } from './drawLimit'
 import {
   createGlyphObject,
@@ -33,8 +33,6 @@ import { topoBaseRotation, topoOffset } from './topology'
 import { buildTopologyOverlay, TopologyOverlay } from './topologyOverlay'
 import { createWorldGridObject } from './worldGridGeometry'
 
-/** Draw-time per-axis floor on world scale (placement always uses raw scale). */
-export const RENDER_SCALE_FLOOR = 0.2
 /** Background when no World (type 0) row is present. */
 export const DEFAULT_BACKGROUND = new THREE.Color(
   WORLD_DEFAULT_BG.r / 255,
@@ -433,9 +431,14 @@ export function applyGlyphDrawScale(glyph: THREE.Object3D, node: GvNode): void {
 /**
  * Ratio to apply on the glyph so its drawn scale respects the floor.
  *
- * The floor is on the node's OWN scale × base_scale, applied exactly once —
- * `node_world_matrix`'s `S_child = diag(this node's own scale * base_scale,
- * floored at 0.2)`. It is NOT a floor on the accumulated world scale: an
+ * The floor is OPT-IN and off by default (`scaleFloor()`, src/render/baseScale.ts
+ * — desktop `Scene.scale_floor`): with it off this is just the Global Scale, and
+ * a glyph renders at exactly the size its scale fields ask for, however small.
+ *
+ * When it is on, the floor is on the node's OWN scale × base_scale, applied
+ * exactly once — `node_world_matrix`'s `S_child = diag(this node's own scale *
+ * base_scale, floored at scale_floor)`. It is NOT a floor on the accumulated
+ * world scale: an
  * ancestor chain keeps shrinking a descendant without limit, which is what
  * makes a hyperglyph pasted onto a small child render small. Flooring the
  * cumulative product instead (what this did until 2026-07-27) halts the shrink
@@ -448,10 +451,16 @@ export function applyGlyphDrawScale(glyph: THREE.Object3D, node: GvNode): void {
  * changed and no longer walks descendants (src/render/dynamicNodes.ts).
  */
 export function drawScaleCorrection(ownAxisScale: number): number {
-  // A zero-scale axis leaves nothing to multiply back up: the desktop draws
-  // such a node at the 0.2 floor, this draws it flat. Degenerate either way.
+  // A zero-scale axis leaves nothing to multiply back up: with the floor on the
+  // desktop draws such a node at it, this draws it flat. Degenerate either way,
+  // and with the floor off both draw it flat.
   if (Math.abs(ownAxisScale) < 1e-12) return 1
-  return Math.max(ownAxisScale * baseScale(), RENDER_SCALE_FLOOR) / ownAxisScale
+  const rendered = ownAxisScale * baseScale()
+  const floor = scaleFloor()
+  // `if (floor)` rather than an unconditional max, matching the desktop: with
+  // the clamp off a NEGATIVE authored scale keeps its sign (a mirrored glyph
+  // stays mirrored) instead of being pulled up to +0.2.
+  return (floor ? Math.max(rendered, floor) : rendered) / ownAxisScale
 }
 
 /**

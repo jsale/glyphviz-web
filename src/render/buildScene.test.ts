@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { buildScene, DEFAULT_BACKGROUND } from './buildScene'
+import { setEnforceScaleFloor } from './baseScale'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
 import { Geometry, NodeType, RotationMode, Topo } from '../gv/types'
 import type { GvNode } from '../gv/types'
@@ -102,7 +103,10 @@ describe('buildScene hierarchy and transforms', () => {
 })
 
 describe('buildScene drawing rules', () => {
-  it('floors the drawn world scale at 0.2 per axis without touching placement', () => {
+  it('draws a tiny glyph at its authored scale — the minimum size is off by default', () => {
+    // Desktop `Scene.scale_floor`, opt-in since its 6d82d68: an authored 0.1
+    // renders as 0.1, because clamping it would make the encoding lie about
+    // the data it stands for.
     const { root } = buildScene([
       makeNode({ id: 1, scale: { x: 0.1, y: 0.5, z: 1 } }),
       makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 1, y: 0, z: 0 } }),
@@ -110,9 +114,26 @@ describe('buildScene drawing rules', () => {
     root.updateMatrixWorld(true)
     const drawn = new THREE.Vector3()
     glyphOf(root, 1)!.getWorldScale(drawn)
-    expectVec([drawn.x, drawn.y, drawn.z], [0.2, 0.5, 1])
-    // Placement still uses the raw 0.1 scale.
+    expectVec([drawn.x, drawn.y, drawn.z], [0.1, 0.5, 1])
     expectVec(worldPosition(root, 2), [0.1, 0, 0])
+  })
+
+  it('floors the drawn world scale per axis when asked, without touching placement', () => {
+    setEnforceScaleFloor(true)
+    try {
+      const { root } = buildScene([
+        makeNode({ id: 1, scale: { x: 0.1, y: 0.5, z: 1 } }),
+        makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 1, y: 0, z: 0 } }),
+      ])
+      root.updateMatrixWorld(true)
+      const drawn = new THREE.Vector3()
+      glyphOf(root, 1)!.getWorldScale(drawn)
+      expectVec([drawn.x, drawn.y, drawn.z], [0.2, 0.5, 1])
+      // Placement still uses the raw 0.1 scale, under either setting.
+      expectVec(worldPosition(root, 2), [0.1, 0, 0])
+    } finally {
+      setEnforceScaleFloor(false)
+    }
   })
 
   it('skips the glyph of hidden nodes but still renders their children', () => {

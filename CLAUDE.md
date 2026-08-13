@@ -1053,6 +1053,60 @@ something to decide now).
         Draw Mode button rendering as an unstyled default-white browser button
         (it is not inside `.hud-create-buttons`) — screenshot-visible, and
         invisible to all 1215 unit tests.
+   v. Minimum glyph size, opt-in (shipped 2026-08-13, same session as 6u at
+      Jeff's ask — a port of desktop `6d82d68`). GlyphViz clamped every
+      glyph's rendered scale to 0.2 per axis from its earliest commits, so a
+      near-zero-scale node stayed big enough to click. The clamp silently
+      overrode authored data — the desktop's AutoSleep example has a
+      deliberately thin 0.07 h deep-sleep axis that drew as 0.2, so the
+      encoding lied about the data it stands for — and it is now OFF by
+      default on both sides, behind an **Enforce Minimum Glyph Size (0.2)**
+      checkbox in the Scene panel's Global Scale group (the desktop's own
+      placement, its Properties-panel Global Scale group; its second surface,
+      a View-menu item, has no counterpart here because this app has no menu
+      bar).
+      - The setting lives in `src/render/baseScale.ts`
+        (`scaleFloor` / `setEnforceScaleFloor`, desktop `Scene.scale_floor` /
+        `Viewport.enforce_scale_floor`) rather than a module of its own,
+        because it is the second half of ONE expression —
+        `max(own scale · base_scale, floor)` — and that is also why the
+        desktop puts the checkbox inside the Global Scale group. The order
+        matters and is pinned: the clamp lands on scale × Global Scale, so
+        raising the slider LIFTS a small node off it (0.05 × 5 = 0.25),
+        where a floor-then-scale reading would draw it at 1.0.
+      - One reader, `drawScaleCorrection`, where the desktop has four
+        (`_bake_draw_data`, `_bake_draw_rows`, `node_world_matrix` and
+        `viewport._radius_of`). Its camera-framing hint needed the setting
+        because it frames from node DATA; `fitCameraTo` here frames from
+        `Box3.setFromObject`, i.e. the real geometry, so it already matches
+        whatever was drawn. `RENDER_SCALE_FLOOR` retired in favour of
+        `DEFAULT_SCALE_FLOOR` beside the setting, one name for one thing.
+      - Toggling takes the Global Scale slider's in-place path
+        (`rescaleSceneFrames`, now shared as `refreshDrawScales`), not a
+        rebuild: the graph's shape does not change, only its numbers. A
+        viewer setting like Show Grid — it survives a scene load and no
+        writer knows about it.
+      - Divergence from the desktop's `max()`, deliberate: with the clamp OFF
+        a NEGATIVE authored scale keeps its sign (a mirrored glyph stays
+        mirrored) instead of being pulled up to +0.2. That follows from the
+        desktop's own `if self.scale_floor:` guard, which this mirrors.
+      - Parity: `tools/dump_draw_matrices.py` takes the floor as a fourth
+        argument and records it, since like the Global Scale it is an input to
+        a draw matrix that no CSV can carry. All four existing fixtures were
+        REGENERATED at 0.2 and came back byte-identical (a check on the
+        desktop engine itself), and two new `_nofloor` fixtures diff the
+        default state — the direction the harness previously could not see at
+        all, since it asserted the clamp as a renderer fact. Verified to FAIL
+        when `drawScaleCorrection` ignores the setting.
+      - Three existing tests had baked the clamp in (buildScene's draw rules,
+        the DynamicNodes re-derivation, and the selection halo, which measures
+        RENDERED size) — each now states which setting it is exercising, and
+        the buildScene one covers both.
+      - Driven in Chrome, 15 measured checks: a 0.05 glyph draws at 0.05 and
+        clamps to 0.2 on demand, a 4 × 0.05 sliver keeps its 80:1 shape and is
+        squared to 20:1 by the clamp, a full-size glyph is untouched either
+        way, the Global-Scale ordering above, both status messages, survival
+        across a scene load, and nothing about it in the saved CSV.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -1670,13 +1724,8 @@ something to decide now).
       / ANTz presets. **Knock-on:** `Channel_Parameters_Example`'s CSV was
       REGENERATED with the ANTz value, so this app's vendored channel-parity
       fixture and its built-in copy of that scene are stale until this lands.
-    - **The 0.2 render scale floor is now OPT-IN, default OFF** (desktop
-      `6d82d68`, 2026-08-11) — queued next, agreed 2026-08-13. Until it
-      lands the same CSV renders differently in the two apps (a 0.05-scale
-      glyph draws at 0.05 there, 0.2 here), and `tools/dump_draw_matrices.py`
-      would disagree with our vendored fixtures if regenerated. The port is a
-      module setting beside `baseScale()` plus a checkbox in the Global Scale
-      group; `Scene.DEFAULT_SCALE_FLOOR` keeps the old value.
+    - ~~The 0.2 render scale floor is opt-in, default OFF~~ (desktop
+      `6d82d68`) — **shipped 2026-08-13, see roadmap 6v.**
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
       already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
       the desktop had none for — but the desktop's crop-not-stretch rule

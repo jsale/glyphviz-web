@@ -6,20 +6,26 @@ diffs. This one captures what actually reaches the screen: the 4x4 returned by
 `Scene.node_draw_data`, i.e. `node_world_matrix`'s
 
     M3 = parent_basis @ child_local @ S_child
-    S_child = diag(own scale * base_scale, floored at 0.2)
+    S_child = diag(own scale * base_scale, floored at scene.scale_floor)
 
-The distinction is the whole point of this tool. base_scale and the 0.2 floor
-live ONLY in the draw matrix, so a placement-only harness cannot see them — and
-did not: the web app floored the ACCUMULATED world scale instead of each node's
-own, which left deeply nested glyphs too big (reported 2026-07-27, visible as a
+The distinction is the whole point of this tool. base_scale and the floor live
+ONLY in the draw matrix, so a placement-only harness cannot see them — and did
+not: the web app floored the ACCUMULATED world scale instead of each node's own,
+which left deeply nested glyphs too big (reported 2026-07-27, visible as a
 pasted hyperglyph overwhelming the child it was pasted onto).
 
-An optional third argument is the Global Scale (`Viewport.base_scale`, the
-desktop's Display-panel slider) to dump at, defaulting to its 1.0. It is the one
-input to these matrices that no fixture CSV can carry, and it is not confined to
-them either — `compute_world_transforms` takes it as every topology's base
-radius, so a non-default dump pins the placement of children on a parent's
-surface at the same time as the draw scale.
+Two optional arguments, and NEITHER can be carried by a fixture CSV, which is
+why they are dumped alongside the matrices:
+
+  3. the Global Scale (`Viewport.base_scale`, the desktop's Display-panel
+     slider), default 1.0. Not confined to the draw matrix either —
+     `compute_world_transforms` takes it as every topology's base radius, so a
+     non-default dump pins the placement of children on a parent's surface at
+     the same time as the draw scale.
+  4. the minimum rendered size (`Scene.scale_floor`, the opt-in clamp behind
+     "Enforce Minimum Glyph Size"), default 0.0 = OFF, which has been the
+     desktop's default since its commit 6d82d68. Pass 0.2 to dump the clamped
+     behaviour this app rendered unconditionally before 2026-08-13.
 
 Run with the desktop repo's conda env python (see that repo's CLAUDE.md for how
 to locate it; never `conda run`):
@@ -30,7 +36,7 @@ to locate it; never `conda run`):
 
     <glyphviz-env-python> tools/dump_draw_matrices.py \
         src/gv/fixtures/draw_scale_example_gv_node.csv \
-        src/gv/fixtures/draw_scale_example_draw_matrices_scale25.json 2.5
+        src/gv/fixtures/draw_scale_example_draw_matrices_scale25.json 2.5 0.2
 
 Regenerate the vendored JSON whenever the fixture CSV changes or the desktop
 draw math changes. CI never runs this — the JSON is committed.
@@ -48,17 +54,19 @@ from glyphviz_core.csv_reader import load_node_csv   # noqa: E402
 from glyphviz_core.scene import Scene                # noqa: E402
 
 DEFAULT_BASE_SCALE = 1.0  # desktop Global Scale default (glyphviz_gl/viewport.py)
+NO_SCALE_FLOOR = 0.0      # desktop Scene.scale_floor default — the clamp is off
 
 
 def main() -> int:
-    if len(sys.argv) not in (3, 4):
+    if len(sys.argv) not in (3, 4, 5):
         print(__doc__)
         return 2
     csv_path, out_path = Path(sys.argv[1]), Path(sys.argv[2])
-    base_scale = float(sys.argv[3]) if len(sys.argv) == 4 else DEFAULT_BASE_SCALE
+    base_scale = float(sys.argv[3]) if len(sys.argv) >= 4 else DEFAULT_BASE_SCALE
+    scale_floor = float(sys.argv[4]) if len(sys.argv) == 5 else NO_SCALE_FLOOR
 
     nodes = load_node_csv(str(csv_path))
-    scene = Scene(nodes, base_scale)
+    scene = Scene(nodes, base_scale, scale_floor)
 
     entries = []
     for nd in nodes:
@@ -73,6 +81,7 @@ def main() -> int:
     out = {
         "source_csv": csv_path.name,
         "base_scale": base_scale,
+        "scale_floor": scale_floor,
         "engine": "glyphviz_core.scene.Scene.node_draw_data",
         "nodes": entries,
     }
