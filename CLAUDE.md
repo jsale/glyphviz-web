@@ -970,6 +970,89 @@ something to decide now).
         windows, no one-click grid adoption for gridless lat/lon scenes.
         Adding Mapbox or another key-carrying provider is a PROVIDERS entry
         plus auth, both sides.
+   u. Draw Mode (shipped 2026-08-13, Jeff's request — a port of desktop
+      `dfef096` + `253547b`, v1 and v2 together): **D** paints objects onto a
+      flat World Grid with the mouse. A left click stamps the brush where the
+      cursor meets the grid's drawing plane; a left drag stamps a trail, one
+      per Stamp Spacing pixels of cursor travel (the fractal-forest rule).
+      Every stamp is a real child of the grid, so a drawing saves, reloads and
+      moves with the grid like any other part of the scene.
+      - Split as the desktop's is: `src/gv/drawMode.ts` is the data half
+        (`placeStamp`, `shouldStamp`, no THREE in it) and
+        `src/render/drawPlane.ts` the geometry (`gridHit`). The inversion is
+        EXACT rather than approximate, which is the point: our forward rule
+        (buildScene's `framePosition`) puts a flat grid's child at
+        `gridFrame.matrixWorld · diag(grid.scale) · (lon − c_lon, lat − c_lat,
+        tz)`, so the desktop's `grid_world_basis` is that product here — the
+        grid's own scale re-spaces its children rather than living on its
+        frame (the ANTz Grid rule), so it has to be multiplied back in. A
+        stamp then lands under the cursor by construction at any grid
+        translate/rotate/scale or nesting depth.
+      - The brush is Single Object (the New Object Defaults) or any Glyph
+        Composer hyperglyph, chosen in a Stamp menu that brushes ACCUMULATE
+        into so strokes can alternate. Templates arrive by Load… (a saved
+        .json) or the Composer's new **Use as Draw Brush** button, which
+        registers a SNAPSHOT (a JSON round trip, as there — later edits must
+        not mutate what an in-progress drawing stamps) and turns Draw Mode on.
+      - Jitter is drawn ONCE per stamp, not per node, so a hyperglyph stays
+        coherent: heading adds a uniform spin to each ROOT's rotate_z (child
+        placement composes the parent rotation, so the subtree turns) and
+        scale multiplies all three root axes by one factor. Only rows at the
+        stamp's base branch level are touched; everything deeper rides along.
+        A jitter left at 0 does not consult the rng at all — the desktop's own
+        short-circuit, and observable, since it decides where a later stamp's
+        draws land in the stream.
+      - Gestures, all desktop parity: plain click-select is suspended while
+        the mode is on, but Ctrl+click add-select, Shift+drag region select
+        (the documented way to grab a bad stroke and Delete it), right-drag
+        orbit, middle-button pan and the wheel keep working. The stroke owns
+        the whole left drag (no orbiting underneath it) and captures the
+        pointer. Draw Mode and Camera Mode displace each other, both claiming
+        the left button; the gizmo handles go away for the same reason while
+        the armed mode stays sticky (the 6h rule). Esc or D exits.
+      - Web-side adaptations, both forced by the platform rather than chosen:
+        `rebuildScene` rebuilds the whole graph, so a stroke's stamps are
+        rAF-COALESCED into one rebuild per frame (the Global Scale slider's
+        trade, for the same reason), flushed when the stroke ends so the
+        report and the screen agree; and a frame built since the last render
+        has no world matrix, so `drawStamp` calls `updateWorldMatrix` on the
+        grid's ancestors chain — a stamp is routinely the very next thing
+        after a rebuild.
+      - Divergence, agreed with Jeff 2026-08-13: drawing WORKS IN STEREO,
+        where the desktop refuses it (its per-eye camera matrices are never
+        captured, the same restriction its rubber band and gizmo carry). Ours
+        come free — `cameraForPointer` already remaps the eye that drew the
+        half the pointer is in onto full-canvas coordinates for single-node
+        picking, and `gridHit` takes a ray. Measured: a left-half click reads
+        against its own half (mono re-projection 750 px where a mono reading
+        would give 400), and the two eyes agree on the cursor's grid position
+        to 0.33 units out of 24.
+      - `createWorldGrid` (`src/gv/createNode.ts`) came with it — desktop
+        `_create_world_grid`, whole-earth window at 1:1, Grid Wire, 36×18
+        segments. Entering Draw Mode in a gridless scene creates one (the mode
+        is meaningless without a target) and it also earns a New World Grid
+        button, which this app had been missing outright.
+      - Target precedence is the desktop's: a SELECTED grid, else the scene's
+        first in file order. Globe grids are refused with a hint, as there.
+      - Parity: `tools/dump_draw_stamps.py` runs the REAL desktop `grid_hit`,
+        `place_stamp` (under a seeded `random.Random`, so the jitter diffs
+        against CPython through `PythonRandom`) and `should_stamp`;
+        `src/render/drawMode.parity.test.ts` diffs 9 grid hits, 7 stamps and
+        the spacing gate. Verified to FAIL against a dropped extents-centre
+        term, against swapping the two jitter draws, and against losing the
+        zero-jitter short-circuit. `drawPlane.test.ts` adds the round trip
+        (click a pixel, stamp, re-project onto the same pixel at 1e-6) under
+        translate/rotate/scale, a windowed grid and a nested one.
+      - Driven in Chrome, 50 measured checks over two passes: stamp lands on
+        the clicked pixel to 0.01 px (raised Draw Z included), 300 px of
+        travel at 30 px spacing = 11 stamps and at 100 px = 4, jitter ranges
+        and per-stamp coherence, every suspended/surviving gesture, the mode
+        interlocks, a composer brush planting a 7-node subtree with only its
+        root on the grid, stereo both halves, the globe refusal, and a
+        save→reload round trip of 115 rows. The first pass also caught the
+        Draw Mode button rendering as an unstyled default-white browser button
+        (it is not inside `.hud-create-buttons`) — screenshot-visible, and
+        invisible to all 1215 unit tests.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -1571,6 +1654,42 @@ something to decide now).
       for web-demo ideas, this is the one to offer; don't start it
       unprompted. (This is also why the desktop's camera_state snapshot
       API has no web counterpart — see section 8.)
+11. Desktop features awaiting a port (surveyed 2026-08-13 over the desktop's
+    commits since 2026-08-01 — most of that stretch is docs-site, packaging
+    and example content; these are the app-behaviour ones):
+    - **Topology Scale** (desktop `55928c0`, 2026-08-12) — the big one, and
+      DELIBERATELY held: Jeff wants a few days of real use on the desktop
+      before this app commits to it (2026-08-13). `Node.topo_scale` multiplies
+      only the DISTANCE-valued translate axes of a topology
+      (`topology.LINEAR_PLACEMENT_AXES`), so switching a parent from Sphere
+      (angular) to Cube (linear) no longer throws its children ~180× out.
+      Default 1.0 = today's behaviour and the missing-column default, so
+      nothing existing changes; `TOPO_SCALE_ANTZ` is 1/180. The port is a new
+      tracked column, a pre-multiply in `topoOffset` and in the move-drag
+      inverse's divisors, a Channels attribute, and an inspector row with 1:1
+      / ANTz presets. **Knock-on:** `Channel_Parameters_Example`'s CSV was
+      REGENERATED with the ANTz value, so this app's vendored channel-parity
+      fixture and its built-in copy of that scene are stale until this lands.
+    - **The 0.2 render scale floor is now OPT-IN, default OFF** (desktop
+      `6d82d68`, 2026-08-11) — queued next, agreed 2026-08-13. Until it
+      lands the same CSV renders differently in the two apps (a 0.05-scale
+      glyph draws at 0.05 there, 0.2 here), and `tools/dump_draw_matrices.py`
+      would disagree with our vendored fixtures if regenerated. The port is a
+      module setting beside `baseScale()` plus a checkbox in the Global Scale
+      group; `Scene.DEFAULT_SCALE_FLOOR` keeps the old value.
+    - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
+      already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
+      the desktop had none for — but the desktop's crop-not-stretch rule
+      (it reuses the Grid's [−1,1]²→[0,1]² window) is worth one check.
+    - Two desktop commits in that window are the desktop catching up to THIS
+      app, and need nothing here: `e47754e` (mesh NaN/inf face removal, which
+      `meshFile.ts` already did) and `aa7fa89` (the transform gizmo handles,
+      added there "matching what users liked in GlyphViz Web").
+    - Seven new example scenes landed too (Cosmic Web at 43,414 galaxies, RFC
+      Genealogy, Periodic System, Wind Rose, Decay Chain, Tropical Cyclone,
+      Magnetic Field), and the desktop docs site now publishes ONE ZIP PER
+      EXAMPLE (`6041af2`) — those open directly in this app, which is the
+      cheapest possible answer to the hosted-examples item in section 7.
 
 ## Collaboration notes
 

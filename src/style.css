@@ -235,6 +235,38 @@ canvas {
   border-color: #5a6a96;
 }
 
+/* Draw Mode: a full-width button of its own, above the rows that configure it
+   (the desktop's Create-group layout). It is a mode you are IN, like the gizmo
+   modes, so it wears their armed look — the only on-screen sign that the left
+   button now paints instead of selecting. */
+#hud-draw-mode {
+  width: 100%;
+  margin: 8px 0 4px;
+  padding: 3px 0;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-draw-mode:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#hud-draw-mode.active {
+  background: #2a3350;
+  border-color: #5a6a96;
+}
+
+/* The Stamp row's Load… picker sits beside the menu rather than filling the
+   row, so the brush name keeps the width. */
+#hud-draw-stamp-row .hud-file-button {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+}
+
 #hud-create {
   margin-top: 8px;
   padding-top: 8px;

@@ -15,6 +15,13 @@ export const GRID_GLOBE_RADIUS = 180.0 / Math.PI
 /** Whole-earth window used when an extents axis is degenerate (hi ≤ lo). */
 export const GRID_DEFAULT_EXTENTS = [-180, 180, -90, 90] as const
 
+/**
+ * Segments a NEWLY CREATED grid gets — 10°-cell lines across the whole-earth
+ * window (desktop GRID_DEFAULT_SEGMENTS). Not the same number as gridSegments'
+ * fallback for a row that names none, which stays the desktop's own 16.
+ */
+export const GRID_DEFAULT_SEGMENTS = [36, 18] as const
+
 export interface GridExtents {
   lonLo: number
   lonHi: number

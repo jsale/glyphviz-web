@@ -19,6 +19,7 @@ import {
   Topo,
   WORLD_DEFAULT_BG,
 } from './types'
+import { GRID_DEFAULT_EXTENTS, GRID_DEFAULT_SEGMENTS } from './worldGrid'
 
 /** The subset of fields the New Object Defaults panel controls. */
 export interface NewObjectDefaults {
@@ -133,6 +134,34 @@ export function createWorldNode(nodes: readonly GvNode[]): GvNode {
     color: { ...WORLD_DEFAULT_BG },
   })
   node.type = NodeType.World
+  return node
+}
+
+/**
+ * A new World Grid (type 6) at the world origin carrying the whole-earth
+ * window at 1:1 scale, so a child at translate (180, 90) lands at world
+ * (180, 90) — desktop `_create_world_grid`, including its Grid Wire geometry,
+ * Plane topology, slate colour and 36×18 (10°-cell) segments.
+ *
+ * Several grids per scene are allowed, and nothing attaches to one implicitly:
+ * children arrive by having their parent_id set (New Child, paste, or a Draw
+ * Mode stamp). Draw Mode is what needed this first — the mode is meaningless
+ * without a target, so entering it in a gridless scene creates one.
+ */
+export function createWorldGrid(nodes: readonly GvNode[]): GvNode {
+  const node = blankNode(nextNodeId(nodes), {
+    geometry: Geometry.GridWire,
+    topo: Topo.Plane,
+    scale: { x: 1, y: 1, z: 1 },
+    color: { r: 64, g: 80, b: 96, a: 255 },
+  })
+  node.type = NodeType.WorldGrid
+  node.extras.trigger_lo_x = String(GRID_DEFAULT_EXTENTS[0])
+  node.extras.trigger_hi_x = String(GRID_DEFAULT_EXTENTS[1])
+  node.extras.trigger_lo_y = String(GRID_DEFAULT_EXTENTS[2])
+  node.extras.trigger_hi_y = String(GRID_DEFAULT_EXTENTS[3])
+  node.extras.segments_x = String(GRID_DEFAULT_SEGMENTS[0])
+  node.extras.segments_y = String(GRID_DEFAULT_SEGMENTS[1])
   return node
 }
 

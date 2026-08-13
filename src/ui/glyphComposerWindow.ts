@@ -97,6 +97,11 @@ export interface GlyphComposerHost {
    * or as a new root object with nothing selected. Reports on the status line.
    */
   insert(recipe: GlyphRecipe): void
+  /**
+   * Register this template as the Draw Mode brush and switch Draw Mode on —
+   * compose a tree, press, paint a forest (desktop `_use_as_draw_brush`).
+   */
+  useAsDrawBrush(recipe: GlyphRecipe): void
   /** Report a message on the status line (a failed template load, say). */
   status(message: string): void
 }
@@ -275,6 +280,25 @@ export class GlyphComposerWindow {
     })
     insertButton.addEventListener('click', () => this.host.insert(this.recipe))
     footer.appendChild(insertButton)
+
+    const brushButton = el('button', {
+      type: 'button',
+      className: 'float-window-action',
+      textContent: 'Use as Draw Brush',
+      title:
+        'Make Draw Mode stamp this glyph: registers a snapshot of the template\n' +
+        'as the brush (Create panel ▸ Stamp) and turns Draw Mode on — click or\n' +
+        'drag in the viewport to paint it.\n' +
+        "Later edits here don't change the registered brush; press again to\n" +
+        'register the edited version.',
+    })
+    // A SNAPSHOT (a dict round trip, as the desktop does it), so continuing to
+    // edit levels here doesn't silently mutate what an in-progress drawing
+    // stamps.
+    brushButton.addEventListener('click', () =>
+      this.host.useAsDrawBrush(recipeFromJson(recipeToJson(this.recipe))),
+    )
+    footer.appendChild(brushButton)
 
     body.appendChild(footer)
 

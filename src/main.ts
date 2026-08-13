@@ -6,9 +6,18 @@ import { cycleGeometry, cycleTargets, cycleTopology } from './gv/attrCycle'
 import { cycleColorIndex, cyclePalette, PALETTE_NAMES } from './gv/colorPalette'
 import { copySubtree, pasteSubtree } from './gv/clipboard'
 import type { Clipboard } from './gv/clipboard'
-import { createChildNode, createRootNode, nextNodeId, NEW_OBJECT_DEFAULTS } from './gv/createNode'
+import {
+  blankNode,
+  createChildNode,
+  createRootNode,
+  createWorldGrid,
+  nextNodeId,
+  NEW_OBJECT_DEFAULTS,
+} from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
-import { generateNodes } from './gv/glyphRecipe'
+import { placeStamp, shouldStamp } from './gv/drawMode'
+import { generateNodes, recipeFromJson } from './gv/glyphRecipe'
+import type { GlyphRecipe } from './gv/glyphRecipe'
 import { buildHyperglyphNodes } from './gv/hyperglyph'
 import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
 import type { DragMode, DragSnapshot } from './gv/multiEdit'
@@ -54,6 +63,7 @@ import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOp
 import type { GvNode, GvParseIssue, Rgb, Vec3 } from './gv/types'
 import { GEOMETRY_NAMES, Geometry, NodeType, TagColorMode, TOPO_NAMES, Topo } from './gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
+import { gridHit } from './render/drawPlane'
 import {
   backgroundRgb,
   ensureWorldNode,
@@ -293,6 +303,9 @@ hud.innerHTML = `
       <button id="hud-new-child" title="New child under the selected node; repeated presses spread children along X." disabled>New Child (Shift+N)</button>
     </div>
     <div class="hud-create-buttons">
+      <button id="hud-new-grid" title="New World Grid at the world origin: the whole-earth window (lon −180…180, lat −90…90) at 1:1 world units.&#10;G selects and cycles grids; New Child, paste and Draw Mode add glyphs onto it.">New World Grid</button>
+    </div>
+    <div class="hud-create-buttons">
       <button id="hud-copy" title="Copy the selected node and its whole descendant subtree.&#10;Exactly one node — a partial subtree is never copied." disabled>Copy (Ctrl+C)</button>
       <button id="hud-paste" title="Paste the copied subtree with fresh ids: as a child of the selected node, or as a new root object with nothing selected." disabled>Paste (Ctrl+V)</button>
     </div>
@@ -307,6 +320,25 @@ hud.innerHTML = `
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
     <div class="hud-create-row"><span>Scale</span><input id="hud-new-scale" type="number" min="0.001" step="0.1" value="1"></div>
     <div class="hud-create-row"><span>Color</span><input id="hud-new-color" type="color" value="#c8c8c8"></div>
+    <button id="hud-draw-mode" title="Draw Mode — paint objects onto a World Grid with the mouse  [D]&#10;Left click stamps one brush where the cursor meets the grid's plane; click-drag stamps a trail, one per Stamp Spacing pixels of travel. Draw Z is each stamp's elevation above the plane.&#10;Draws onto the selected grid, else the scene's first; entering the mode in a gridless scene creates one. Flat grids only.&#10;Right-drag still orbits, the wheel still zooms, Shift+drag still region-selects and Ctrl+click still adds to the selection — only plain click-select is suspended. Esc or D exits.">Draw Mode (D)</button>
+    <div class="hud-create-row" id="hud-draw-stamp-row" title="What one click stamps: a single object built from the New Object Defaults above, or a whole Glyph Composer hyperglyph.&#10;Load a saved template (.json), or send one over with the Glyph Composer's Use as Draw Brush button. Loaded brushes stay in the list, so strokes can alternate.">
+      <span>Stamp</span>
+      <select id="hud-draw-stamp"></select>
+      <label id="hud-draw-brush-load" class="hud-file-button" title="Load a Glyph Composer template (.json) as the Draw Mode brush.">Load…<input type="file" accept=".json,application/json"></label>
+    </div>
+    <div class="hud-create-row" title="translate_z given to every drawn object — its elevation above the grid's drawing plane. 0 draws directly on the plane.">
+      <span>Draw Z</span>
+      <input id="hud-draw-z" type="number" min="-100000" max="100000" step="1" value="0">
+    </div>
+    <div class="hud-create-row" title="While dragging, stamp a new object every this many pixels of cursor travel. 0 stamps on every pointer move (maximum density).">
+      <span>Stamp Spacing</span>
+      <input id="hud-draw-spacing" type="number" min="0" max="500" step="1" value="30">
+    </div>
+    <div class="hud-create-row" title="Heading Jitter: spin each stamp by a random heading in ±this many degrees (added to rotate_z, so a hyperglyph turns as a whole).&#10;Scale Jitter: grow or shrink each stamp by a random factor in ±this percent, one factor for all three axes so proportions are kept.&#10;Both are drawn once per stamp; 0 = off.">
+      <span>Jitter °/%</span>
+      <input id="hud-draw-heading-jitter" type="number" min="0" max="180" step="1" value="0">
+      <input id="hud-draw-scale-jitter" type="number" min="0" max="90" step="1" value="0">
+    </div>
     <button id="hud-delete" title="Delete the selected node and all of its descendants — children are never reparented." disabled>Delete (Del)</button>
   </div>
   <div id="hud-world">
@@ -377,6 +409,14 @@ const saveButton = hud.querySelector<HTMLButtonElement>('#hud-save')!
 const saveTagsButton = hud.querySelector<HTMLButtonElement>('#hud-save-tags')!
 const newNodeButton = hud.querySelector<HTMLButtonElement>('#hud-new-node')!
 const newChildButton = hud.querySelector<HTMLButtonElement>('#hud-new-child')!
+const newGridButton = hud.querySelector<HTMLButtonElement>('#hud-new-grid')!
+const drawModeButton = hud.querySelector<HTMLButtonElement>('#hud-draw-mode')!
+const drawStampSelect = hud.querySelector<HTMLSelectElement>('#hud-draw-stamp')!
+const drawBrushInput = hud.querySelector<HTMLInputElement>('#hud-draw-brush-load input')!
+const drawZInput = hud.querySelector<HTMLInputElement>('#hud-draw-z')!
+const drawSpacingInput = hud.querySelector<HTMLInputElement>('#hud-draw-spacing')!
+const drawHeadingJitterInput = hud.querySelector<HTMLInputElement>('#hud-draw-heading-jitter')!
+const drawScaleJitterInput = hud.querySelector<HTMLInputElement>('#hud-draw-scale-jitter')!
 const newGeoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-geo')!
 const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
 const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
@@ -797,6 +837,9 @@ function setCameraMode(on: boolean) {
     // flight's translation on the spot (desktop set_fly_mode).
     followSelected = false
     followCheckbox.checked = false
+    // Camera Mode and Draw Mode both claim the left button outright, so they
+    // displace each other (desktop set_fly_mode / set_draw_mode).
+    setDrawMode(false)
     manualDrag = null // Camera Mode owns every drag button from here
     // The locked-view rule may have switched to Main and loaded its slot.
     applyRigToCamera()
@@ -900,6 +943,15 @@ renderer.domElement.addEventListener(
   // through this getter after boot.
   get gizmo() {
     return gizmo
+  },
+  // The live scene rows. Draw Mode's whole output is node data — where a stamp
+  // landed, what jitter it took, whose child it is — and none of that is
+  // legible from the DOM.
+  get nodes() {
+    return currentNodes
+  },
+  get frames() {
+    return currentFrames
   },
 }
 
@@ -2128,9 +2180,31 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
     drawRubberBand()
     return
   }
+  // Draw Mode: a plain left press stamps the brush and starts a stroke. Ctrl
+  // falls through so additive selection keeps working, and Shift was handled
+  // above, so region select does too — the desktop's own exclusions.
+  if (drawMode && !(e.ctrlKey || e.metaKey)) {
+    drawStrokeLast = { x: e.clientX, y: e.clientY }
+    // The stroke owns the whole left drag: no orbiting underneath it, and the
+    // press keeps its pointer if it wanders off the canvas.
+    controls.enabled = false
+    renderer.domElement.setPointerCapture(e.pointerId)
+    drawStamp(e.clientX, e.clientY)
+    return
+  }
   downAt = { x: e.clientX, y: e.clientY }
 })
 renderer.domElement.addEventListener('pointermove', (e) => {
+  // Draw stroke: stamp again each time the cursor gets Stamp Spacing pixels
+  // from the previous stamp.
+  if (drawStrokeLast && (e.buttons & 1) !== 0) {
+    const spacing = Number(drawSpacingInput.value) || 0
+    if (shouldStamp(drawStrokeLast, e.clientX, e.clientY, spacing)) {
+      drawStrokeLast = { x: e.clientX, y: e.clientY }
+      drawStamp(e.clientX, e.clientY)
+    }
+    return
+  }
   if (!rubberStart) return
   rubberEnd = { x: e.clientX, y: e.clientY }
   drawRubberBand()
@@ -2139,6 +2213,12 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (e.button !== 0) return
   if (rubberStart) {
     finishRubberBand(e.ctrlKey || e.metaKey)
+    return
+  }
+  // A draw click has already stamped: it must not also select or clear the
+  // selection, so the stroke returns before the click-picker below.
+  if (drawStrokeLast !== null) {
+    finishDrawStroke()
     return
   }
   if (!downAt) return
@@ -2166,6 +2246,12 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   }
 })
 renderer.domElement.addEventListener('pointercancel', () => {
+  // An aborted draw stroke keeps everything it already stamped — the nodes are
+  // real scene rows, not a preview.
+  if (drawStrokeLast !== null) {
+    finishDrawStroke()
+    return
+  }
   // Aborted press: drop the band without changing the selection.
   if (!rubberStart) return
   rubberStart = null
@@ -2257,7 +2343,11 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault() // Space would otherwise scroll or re-press a focused button
     if (e.shiftKey) channelCommands.stop()
     else channelCommands.togglePlay()
-  } else if (e.key === 'Escape') setSelection(null)
+  } else if (e.key === 'Escape') {
+    // Desktop parity: Esc leaves Draw Mode AND clears the selection.
+    setDrawMode(false)
+    setSelection(null)
+  } else if (e.key === 'd' || e.key === 'D') setDrawMode(!drawMode)
   else if (e.key === 'g' || e.key === 'G') cycleGridSelection()
   else if (e.key === 'h') selectionCommands.hideSelected()
   else if (e.key === 'H') selectionCommands.showAll()
@@ -2327,7 +2417,8 @@ let manualLast = { x: 0, y: 0 }
 let comboUsedInPress = false
 
 function updateManualDragState(e: PointerEvent) {
-  if (rubberStart !== null) return // a region sweep owns the pointer
+  // A region sweep or a draw stroke owns the pointer.
+  if (rubberStart !== null || drawStrokeLast !== null) return
   const left = (e.buttons & 1) !== 0
   const right = (e.buttons & 2) !== 0
   const next: typeof manualDrag =
@@ -2514,9 +2605,11 @@ function updateGizmoAttachment() {
   const frame = primary ? currentFrames?.get(primary.id) : undefined
   if (
     gizmoMode === null ||
-    // Camera Mode owns every drag button, so manipulation is suspended until
-    // it is off — the armed mode stays sticky, the handles just go away.
+    // Camera Mode and Draw Mode own every drag button, so manipulation is
+    // suspended until they are off — the armed mode stays sticky, the handles
+    // just go away (and come back with it).
     flyRig.flyMode ||
+    drawMode ||
     !primary ||
     !frame ||
     primary.type === NodeType.WorldGrid ||
@@ -2795,6 +2888,238 @@ function addNode() {
 newNodeButton.addEventListener('click', addNode)
 newChildButton.addEventListener('click', addChildOfSelection)
 
+function addWorldGrid(): GvNode {
+  const grid = createWorldGrid(currentNodes)
+  currentNodes.push(grid)
+  rebuildScene(false)
+  return grid
+}
+
+newGridButton.addEventListener('click', () => {
+  const grid = addWorldGrid()
+  setSelection(grid.id)
+  status(
+    `World Grid created (node ${grid.id}): lon −180…180, lat −90…90, 1:1 world units. ` +
+      'G selects/cycles grids; New Child and Draw Mode add glyphs onto it.',
+  )
+})
+
+// --- Draw Mode (D) -------------------------------------------------------------
+// Ported from the desktop's Draw Mode (glyphviz_core/draw_mode.py + the
+// viewport/main-window halves): a left click stamps a brush where the cursor
+// meets a flat World Grid's drawing plane, and a left drag stamps a trail of
+// them, one per Stamp Spacing pixels of cursor travel. Every stamp is a real
+// child of the grid, so a drawing saves, reloads and moves with the grid like
+// any other part of the scene.
+//
+// The brush is either a single object built from the New Object Defaults or a
+// whole Glyph Composer hyperglyph (desktop Draw Mode v2), with per-stamp
+// heading and scale jitter drawn once per stamp so a hyperglyph stays coherent.
+//
+// Draw Mode and Camera Mode displace each other: both claim the left button
+// outright. The gizmo handles go away while drawing for the same reason (the
+// armed mode stays sticky — the 6h rule), and plain click-select is suspended,
+// while Ctrl+click add-select, Shift+drag region select, right-drag orbit,
+// middle-button pan and the wheel all keep working.
+
+let drawMode = false
+/** Last stamped cursor position; null means no stroke is in progress. */
+let drawStrokeLast: { x: number; y: number } | null = null
+let drawStrokeStamps = 0
+let drawStrokeNodes = 0
+let drawRebuildFrame = 0
+/** Loaded Glyph Composer brushes, indexed by the Stamp menu's option values. */
+const drawBrushes: GlyphRecipe[] = []
+
+{
+  const single = document.createElement('option')
+  single.value = ''
+  single.textContent = 'Single Object'
+  drawStampSelect.appendChild(single)
+}
+
+/**
+ * Register a composer template as a brush and select it — the panel's Load…
+ * button and the Glyph Composer's Use as Draw Brush button both land here.
+ * Brushes ACCUMULATE (desktop `set_draw_stamp_recipe`), so two loaded
+ * templates stay available for alternating strokes.
+ */
+function addDrawBrush(recipe: GlyphRecipe): void {
+  drawBrushes.push(recipe)
+  const option = document.createElement('option')
+  option.value = String(drawBrushes.length - 1)
+  option.textContent = recipe.name || 'Template'
+  drawStampSelect.appendChild(option)
+  drawStampSelect.value = option.value
+}
+
+/** The selected brush, or null for the Single Object stamp. */
+function currentDrawBrush(): GlyphRecipe | null {
+  const index = Number(drawStampSelect.value)
+  return drawStampSelect.value === '' ? null : (drawBrushes[index] ?? null)
+}
+
+drawBrushInput.addEventListener('change', async () => {
+  const file = drawBrushInput.files?.[0]
+  drawBrushInput.value = '' // let the same file be picked again
+  if (!file) return
+  try {
+    const recipe = recipeFromJson(JSON.parse(await file.text()))
+    addDrawBrush(recipe)
+    status(`Draw brush: "${recipe.name}" — Draw Mode stamps this hyperglyph.`)
+  } catch (err: unknown) {
+    // A file that is not a recipe is refused and reported rather than becoming
+    // an empty brush, exactly as the Composer's own template load does.
+    status(`Template load failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+})
+
+function setDrawMode(on: boolean): void {
+  if (on === drawMode) return
+  // Camera Mode and Draw Mode both claim the left button, so each setter only
+  // ever turns the other OFF — no recursion.
+  if (on && flyRig.flyMode) setCameraMode(false)
+  drawMode = on
+  drawStrokeLast = null
+  drawModeButton.classList.toggle('active', on)
+  renderer.domElement.style.cursor = on ? 'crosshair' : ''
+  // Manipulation is suspended while drawing; the armed mode stays sticky.
+  updateGizmoAttachment()
+  if (!on) return status('Draw Mode off.')
+  // The mode is meaningless without a target, so a gridless scene gets one
+  // (desktop `_on_draw_mode_changed`).
+  if (!currentNodes.some((n) => n.type === NodeType.WorldGrid)) {
+    const grid = addWorldGrid()
+    status(
+      `Draw Mode ON — World Grid ${grid.id} created to draw on. ` +
+        'Click / drag stamps onto it at Draw Z; right-drag orbits  [D or Esc exits]',
+    )
+    return
+  }
+  status(
+    'Draw Mode ON — click / drag stamps onto the grid at Draw Z; ' +
+      'right-drag orbits  [D or Esc exits]',
+  )
+}
+
+drawModeButton.addEventListener('click', () => setDrawMode(!drawMode))
+
+/**
+ * The grid a stamp lands on: a selected grid when there is one (row order, the
+ * same precedence the desktop's World Grid panel uses), else the scene's first
+ * grid in file order.
+ */
+function drawTargetGrid(): GvNode | null {
+  for (const node of selectedNodes()) {
+    if (node.type === NodeType.WorldGrid) return node
+  }
+  return currentNodes.find((n) => n.type === NodeType.WorldGrid) ?? null
+}
+
+/**
+ * The nodes one stamp creates, at the stamp frame's ORIGIN — placeStamp then
+ * lands the roots on the cursor. Either the selected hyperglyph or a single
+ * object from the New Object Defaults (desktop `_draw_stamp_nodes`).
+ */
+function drawStampNodes(grid: GvNode, startId: number): GvNode[] {
+  const recipe = currentDrawBrush()
+  if (recipe) {
+    return generateNodes(recipe, {
+      startId,
+      parentId: grid.id,
+      baseBranchLevel: grid.branchLevel + 1,
+    })
+  }
+  const node = blankNode(startId, readNewObjectDefaults())
+  node.parentId = grid.id
+  node.branchLevel = grid.branchLevel + 1
+  return [node]
+}
+
+/**
+ * One rebuild per animation frame however many stamps land in it. A drag at
+ * the default 30 px spacing fires several stamps a second, and rebuildScene
+ * rebuilds the whole graph — the same rAF coalescing the Global Scale slider
+ * uses, for the same reason.
+ */
+function requestDrawRebuild(): void {
+  if (drawRebuildFrame) return
+  drawRebuildFrame = requestAnimationFrame(() => {
+    drawRebuildFrame = 0
+    rebuildScene(false)
+  })
+}
+
+function drawStamp(clientX: number, clientY: number): void {
+  let grid = drawTargetGrid()
+  // The mode-entry grid can be deleted mid-mode; make a fresh one.
+  if (!grid) grid = addWorldGrid()
+  if (gridIsGlobe(grid)) {
+    status(
+      `Draw Mode draws on flat grids only for now — switch grid ${grid.id}'s ` +
+        'geometry from Sphere to Grid in the Properties panel.',
+    )
+    return
+  }
+  const frame = currentFrames?.get(grid.id)
+  if (!frame) {
+    status(`Grid ${grid.id} is past the draw limit (\\) — raise it to draw on this grid.`)
+    return
+  }
+  // A frame built since the last render pass has no world matrix yet, and a
+  // stamp is often the very next thing after a rebuild (the auto-created grid,
+  // the previous stamp in this stroke). Ancestors only — O(depth).
+  frame.updateWorldMatrix(true, false)
+
+  const rect = renderer.domElement.getBoundingClientRect()
+  const ndc = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1,
+  )
+  // cameraForPointer is what makes drawing work in stereo: the pointer is
+  // measured against the half it is in, and that eye's projection is remapped
+  // onto the full canvas — the same path single-node picking already takes.
+  raycaster.setFromCamera(ndc, cameraForPointer(clientX - rect.left))
+  const drawZ = Number(drawZInput.value) || 0
+  const hit = gridHit(raycaster.ray, grid, frame, drawZ)
+  if (hit === null) return // plane edge-on or behind the camera: nothing to place
+
+  const nodes = drawStampNodes(grid, nextNodeId(currentNodes))
+  if (nodes.length === 0) return
+  placeStamp(
+    nodes,
+    grid.branchLevel + 1,
+    hit.lon,
+    hit.lat,
+    drawZ,
+    Number(drawHeadingJitterInput.value) || 0,
+    Number(drawScaleJitterInput.value) || 0,
+  )
+  currentNodes.push(...nodes)
+  drawStrokeStamps++
+  drawStrokeNodes += nodes.length
+  requestDrawRebuild()
+}
+
+function finishDrawStroke(): void {
+  drawStrokeLast = null
+  controls.enabled = !flyRig.flyMode
+  if (drawStrokeStamps === 0) return
+  // Flush the coalesced rebuild so the stroke is on screen with its report.
+  if (drawRebuildFrame) {
+    cancelAnimationFrame(drawRebuildFrame)
+    drawRebuildFrame = 0
+    rebuildScene(false)
+  }
+  const what =
+    drawStrokeNodes !== drawStrokeStamps
+      ? `${drawStrokeStamps} stamp(s), ${drawStrokeNodes} node(s)`
+      : `${drawStrokeStamps} object(s)`
+  status(`Drew ${what} — Shift+drag selects a region, Delete removes it.`)
+  drawStrokeStamps = 0
+  drawStrokeNodes = 0
+}
+
 // --- Delete + tree navigation --------------------------------------------------
 // Desktop parity: Delete/Backspace removes the selected node AND its whole
 // subtree (children are never reparented). Up/Down walk parent/first-child,
@@ -2940,6 +3265,15 @@ const composerWindow = new GlyphComposerWindow({
     status(
       `Glyph Composer: inserted ${nodes.length} nodes ` +
         `(parent=${parent ? parent.id : 0}, ids ${nodes[0].id}-${nodes[nodes.length - 1].id})`,
+    )
+  },
+  // Desktop `_use_as_draw_brush`: register the snapshot AND turn Draw Mode on,
+  // so composing a tree and painting a forest with it is one press.
+  useAsDrawBrush(recipe) {
+    addDrawBrush(recipe)
+    setDrawMode(true)
+    status(
+      `Draw brush: "${recipe.name}" — Draw Mode is on, click / drag in the viewport to paint it.`,
     )
   },
   status,
