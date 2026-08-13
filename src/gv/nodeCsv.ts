@@ -8,6 +8,7 @@
 
 import { tokenizeCsv } from './csv'
 import {
+  DEFAULT_TOPO_SCALE,
   GEOMETRY_MAX,
   REF_GRID_DEFAULT_RGB,
   TAG_DEFAULT_TEXT_RGB,
@@ -43,6 +44,7 @@ export const REQUIRED_COLUMNS = [
 // in REQUIRED_COLUMNS lands in `extras`.
 const OPTIONAL_TRACKED_COLUMNS = [
   'ratio',
+  'topo_scale',
   'subspace',
   'facet',
   'texture_id',
@@ -225,6 +227,10 @@ export function parseGvNodeCsv(text: string): GvNodeParseResult {
       topo: req('topo', true),
 
       ratio: opt('ratio', 0.1, false),
+      // A missing column is every file written before the field existed; 1.0
+      // means "a translate unit is a world unit", which is how such a file has
+      // always rendered. Symmetric with the code default, unlike rotation_mode.
+      topoScale: opt('topo_scale', DEFAULT_TOPO_SCALE, false),
       subspace,
       textureId: opt('texture_id', 0, true),
       meshId: opt('mesh_id', 0, true),

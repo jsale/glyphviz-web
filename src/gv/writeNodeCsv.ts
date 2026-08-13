@@ -10,7 +10,13 @@
 // columns from `extras` are appended verbatim.
 
 import type { GvNode } from './types'
-import { REF_GRID_DEFAULT_RGB, RotationMode, TAG_DEFAULT_TEXT_RGB, TagColorMode } from './types'
+import {
+  DEFAULT_TOPO_SCALE,
+  REF_GRID_DEFAULT_RGB,
+  RotationMode,
+  TAG_DEFAULT_TEXT_RGB,
+  TagColorMode,
+} from './types'
 
 const CRLF = '\r\n'
 
@@ -20,6 +26,25 @@ function fmtFloat(v: number): string {
 
 function fmtInt(v: number): string {
   return String(Math.trunc(v))
+}
+
+/**
+ * Significant-figure float, the desktop's `f'{v:.10g}'` (_PRECISE_FLOAT_COLS).
+ *
+ * `topo_scale` is a MULTIPLIER whose useful range spans several orders of
+ * magnitude (1.0 down to TOPO_SCALE_ANTZ = 1/180 and below), where the
+ * fixed 6 decimal places every other float column takes would quietly round
+ * 0.005555555… to four significant figures. Trailing zeros are stripped, so a
+ * node left at the default writes a bare "1" as it does there.
+ */
+function fmtPrecise(v: number): string {
+  if (!Number.isFinite(v)) return String(v)
+  if (v === 0) return '0'
+  const s = v.toPrecision(10)
+  // toPrecision pads to the full width ("1.000000000"); %g does not.
+  const [mantissa, exponent] = s.split('e')
+  const trimmed = mantissa.includes('.') ? mantissa.replace(/\.?0+$/, '') : mantissa
+  return exponent === undefined ? trimmed : `${trimmed}e${exponent}`
 }
 
 /** RFC 4180 quoting: only when the field needs it. */
@@ -76,6 +101,14 @@ export function writeGvNodeCsv(nodes: GvNode[], options: WriteNodeCsvOptions = {
   // reload (the spec's extension-column rule).
   const any = (pred: (n: GvNode) => boolean) => nodes.some(pred)
   const optional: Array<{ when: boolean; cols: Column[] }> = [
+    {
+      // No ANTz/GaiaViz column slot: an omitted column reloads as 1.0 (a
+      // translate unit is a world unit), so only a scene with a retuned parent
+      // needs it. That is what keeps every pre-existing file byte-identical
+      // through a load → save round trip.
+      when: any((n) => n.topoScale !== DEFAULT_TOPO_SCALE),
+      cols: [{ name: 'topo_scale', value: (n) => fmtPrecise(n.topoScale) }],
+    },
     {
       when: any((n) => n.textureId !== 0),
       cols: [{ name: 'texture_id', value: (n) => fmtInt(n.textureId) }],

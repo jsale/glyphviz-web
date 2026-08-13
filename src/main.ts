@@ -61,7 +61,16 @@ import {
 import type { SelectCriterion } from './gv/selectionOps'
 import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOps'
 import type { GvNode, GvParseIssue, Rgb, Vec3 } from './gv/types'
-import { GEOMETRY_NAMES, Geometry, NodeType, TagColorMode, TOPO_NAMES, Topo } from './gv/types'
+import {
+  DEFAULT_TOPO_SCALE,
+  GEOMETRY_NAMES,
+  Geometry,
+  NodeType,
+  TagColorMode,
+  TOPO_NAMES,
+  TOPO_SCALE_ANTZ,
+  Topo,
+} from './gv/types'
 import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
 import { gridHit } from './render/drawPlane'
 import {
@@ -111,6 +120,7 @@ import {
 } from './render/textureLibrary'
 import type { AudioMode, TextureLibrary } from './render/textureLibrary'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
+import { TOPO_SCALE_HINT_RATIO, worstChildPlacementRatio } from './render/scatterHint'
 import { composeScreenshot, downloadCanvasPng, screenshotFilename } from './render/screenshot'
 import { nodeIdsInRect } from './render/rectSelect'
 import {
@@ -124,6 +134,7 @@ import { invertLocalRotation } from './render/rotationInverse'
 import { eyeForX, StereoRig } from './render/stereo'
 import type { StereoEye } from './render/stereo'
 import { CameraRig } from './render/cameraMode'
+import { parentTopoScale } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { BasemapWindow } from './ui/basemapWindow'
 import type { BasemapApplyPayload } from './ui/basemapWindow'
@@ -536,7 +547,7 @@ scene.add(selection.object)
 let nodesById = new Map<number, GvNode>()
 
 const inspector = new Inspector({
-  onNodesEdited(nodes) {
+  onNodesEdited(nodes, notes) {
     // The mutated nodes live in currentNodes; rebuild in place, keeping the
     // camera and reattaching the selection + inspector.
     rebuildScene(false)
@@ -546,6 +557,9 @@ const inspector = new Inspector({
       nodes.map((n) => n.textureId),
       sceneEpoch,
     )
+    // A topology change can throw a subtree off screen; the hint names the
+    // field that brings it back (desktop `_on_insp_topo_changed`'s tail).
+    if (notes?.topologyChanged) hintScatteredChildren(nodes)
   },
   onFetchBasemap(grid) {
     basemapWindow.open(grid, currentNodes)
@@ -2774,6 +2788,10 @@ gizmo.addEventListener('objectChange', () => {
   // Scale plays no part in; everything else inverts through the live value the
   // frame was placed with.
   const dragBaseScale = gridGlobe ? GRID_GLOBE_RADIUS : baseScale()
+  // The parent's Topology Scale, divided back out per axis by the inversion so
+  // a retuned parent's children still track the cursor 1:1 (grid parents are
+  // exempt on both sides, which parentTopoScale answers with 1.0).
+  const dragTopoScale = parentTopoScale(parentGv)
 
   // Live re-read of the primary + followers while a drag is in flight.
   const showDragged = () => {
@@ -2817,6 +2835,7 @@ gizmo.addEventListener('objectChange', () => {
       parentRatio,
       node.subspace,
       dragBaseScale,
+      dragTopoScale,
     )
   }
 
@@ -2827,6 +2846,7 @@ gizmo.addEventListener('objectChange', () => {
     parentRatio,
     subspace: node.subspace,
     baseScale: dragBaseScale,
+    parentTopoScale: dragTopoScale,
   })
   if (gridParent && !gridGlobe) {
     // Cartesian inversion recovered the window-relative offset; translate
@@ -3454,6 +3474,34 @@ function cycleAttribute(kind: 'geometry' | 'topo', step: number) {
     const sign = step > 0 ? '+1' : '−1'
     status(`Cycled ${label.toLowerCase()} ${sign} on ${targets.length} node(s).`)
   }
+  // Overrides the message above when it applies — a subtree that just vanished
+  // off screen is more urgent news than which id we landed on (which the
+  // inspector shows anyway).
+  if (!isGeometry) hintScatteredChildren(targets)
+}
+
+/**
+ * After a topology change, say something if the change just flung the children
+ * off into the distance — and name the field that reels them back in (desktop
+ * `_hint_scattered_children`).
+ *
+ * Only fires on a parent still at the neutral topo_scale: a deliberately tuned
+ * value is not a mistake.
+ */
+function hintScatteredChildren(nodes: readonly GvNode[]): void {
+  const candidates = nodes.filter((n) => n.topoScale === DEFAULT_TOPO_SCALE)
+  if (candidates.length === 0 || !currentFrames) return
+  const { ratio, parentId } = worstChildPlacementRatio(
+    currentNodes,
+    currentFrames,
+    candidates.map((n) => n.id),
+  )
+  if (ratio < TOPO_SCALE_HINT_RATIO) return
+  status(
+    `Node ${parentId}: children are now ${ratio.toFixed(0)}x its own radius away — ` +
+      `lower its Topo Scale (try the ANTz preset, ${TOPO_SCALE_ANTZ.toFixed(4)}) to bring ` +
+      'them back in.',
+  )
 }
 
 // --- Palette cycling (= / − step the index, Alt+= / Alt+− the palette) ----------

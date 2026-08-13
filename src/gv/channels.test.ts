@@ -338,6 +338,24 @@ describe('the expanded bindable set', () => {
     expect([...anim.shapeBoundNodeIds]).toEqual([1])
   })
 
+  // topo_scale is the one placement field that changes nothing about the node
+  // itself — animating it alongside `topo` is what holds a subtree in frame
+  // across a switch between an angular and a linear topology.
+  it('binds topo_scale as a placement field, exactly, and applies it sign-exact', () => {
+    const { rows, anim } = boundScene([mapRow(1, 1, 'topo_scale')], 'ch1\n0.005555555556\n-2.5\n')
+    expect([...anim.placementBoundNodeIds]).toEqual([1])
+    expect([...anim.transformBoundNodeIds]).toEqual([1])
+    expect(anim.shapeBoundNodeIds.size).toBe(0)
+    expect(anim.appearanceBoundNodeIds.size).toBe(0)
+
+    applyChannelFrame(anim, 0)
+    expect(rows[0].topoScale).toBe(0.005555555556) // float, never rounded
+    applyChannelFrame(anim, 1)
+    expect(rows[0].topoScale).toBe(-2.5)
+    resetChannels(anim)
+    expect(rows[0].topoScale).toBe(1)
+  })
+
   it('classifies mesh_id as shape-only and the flags as neither transform nor appearance', () => {
     const { anim } = boundScene(
       [mapRow(1, 1, 'mesh_id'), mapRow(1, 2, 'hide'), mapRow(1, 3, 'show_text')],

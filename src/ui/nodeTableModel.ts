@@ -1,8 +1,8 @@
 // Column definitions and sorting for the Node Table panel — the data half of
 // the desktop's node_table.py (NodeTableModel), with no DOM in it.
 //
-// The 20 columns, their order, their labels and their formatting are the
-// desktop's `_COLUMNS` / `_FLOAT_ATTRS` verbatim: raw numeric ids for
+// The 21 columns, their order, their labels and their formatting are the
+// desktop's `_COLUMNS` / `_FLOAT_ATTRS` / `_SIGFIG_ATTRS` verbatim: raw numeric ids for
 // type/geometry/topology (the names live in the inspector, which has room for
 // them), three decimals for the float attributes, and a packed #RRGGBB for the
 // colour. Widths are the web's own business — Qt sizes its sections from the
@@ -28,6 +28,9 @@ export interface NodeColumn {
 const int = (v: number): string => String(v)
 /** Desktop `f"{val:.3f}"` for the float attributes. */
 const f3 = (v: number): string => (Number.isFinite(v) ? v.toFixed(3) : String(v))
+/** Desktop `f"{val:g}"` — significant figures, for a column spanning decades. */
+const g = (v: number): string =>
+  Number.isFinite(v) ? Number(v.toPrecision(6)).toString() : String(v)
 
 function hex2(v: number): string {
   return Math.max(0, Math.min(255, Math.round(v))).toString(16).toUpperCase().padStart(2, '0')
@@ -138,6 +141,18 @@ export const NODE_TABLE_COLUMNS: readonly NodeColumn[] = [
     width: 62,
     sortKey: (n) => n.ratio,
     text: (n) => f3(n.ratio),
+  },
+  {
+    id: 'TopoScl',
+    label: 'TopoScl',
+    title:
+      'topo_scale — how far one unit of a CHILD’s translate reaches on the axes this ' +
+      'node’s topology reads as a distance (1 = one world unit; 1/180 = ANTz)',
+    width: 62,
+    sortKey: (n) => n.topoScale,
+    // A multiplier spanning decades: the 3 dp every other float column takes
+    // would render the ANTz value (1/180) as a flat "0.006".
+    text: (n) => g(n.topoScale),
   },
   {
     id: 'Color',

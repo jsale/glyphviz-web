@@ -14,6 +14,8 @@ import topologyExampleCsv from '../gv/fixtures/topology_example_gv_node.csv?raw'
 import topologyReferenceRaw from '../gv/fixtures/topology_example_world_transforms.json?raw'
 import worldGridExampleCsv from '../gv/fixtures/world_grid_example_gv_node.csv?raw'
 import worldGridReferenceRaw from '../gv/fixtures/world_grid_example_world_transforms.json?raw'
+import topoScaleCsv from '../gv/fixtures/topo_scale_gv_node.csv?raw'
+import topoScaleReferenceRaw from '../gv/fixtures/topo_scale_world_transforms.json?raw'
 
 interface ReferenceEntry {
   id: number
@@ -39,6 +41,18 @@ const FIXTURES: Array<{ name: string; csv: string; reference: Reference }> = [
     name: 'world grid example (flat, region, globe, nested)',
     csv: worldGridExampleCsv,
     reference: JSON.parse(worldGridReferenceRaw) as Reference,
+  },
+  {
+    // Topology Scale (desktop 55928c0). Every topology id appears as a parent
+    // at a non-default topo_scale — including the ANTz constant, a negative and
+    // a large value — with children whose translate exercises all three axes,
+    // so the classification table (which axis is a distance, which an angle) is
+    // diffed entry by entry rather than asserted. Plus the exempt cases (World
+    // Grid parents at absurd values, a root carrying one) and a four-level
+    // chain where each level rescales the one below.
+    name: 'topology scale (all 18 topologies, grids and roots exempt, nested)',
+    csv: topoScaleCsv,
+    reference: JSON.parse(topoScaleReferenceRaw) as Reference,
   },
 ]
 

@@ -99,6 +99,26 @@ export const Topo = {
 
 export const TOPO_MAX = 17
 
+/**
+ * `topo_scale` landmarks (the field's own doc is on GvNode.topoScale below).
+ * A translate axis a topology reads as a DISTANCE is multiplied by the
+ * PARENT's value; an axis it reads as an ANGLE never is.
+ *
+ * 1.0 — a translate unit is a world unit. GlyphViz's behaviour since its first
+ *   commit, so it is also what a CSV missing the column loads as: every file
+ *   written before the field existed places exactly as it always has.
+ * 1/180 — ANTz's convention, in which a topology's linear axes span the
+ *   parent's own extent: translate ±180 reaches the edge of a cube facet, the
+ *   same way ±180 of longitude wraps a sphere. This is the value at which
+ *   switching a parent between an angular and a linear topology leaves its
+ *   children roughly where they were, which is the whole point of the field.
+ *   Rod already hardcodes this convention for its length parameter (see
+ *   topoOffset), and a globe World Grid's GRID_GLOBE_RADIUS is the same
+ *   180/π correspondence seen from the other side.
+ */
+export const DEFAULT_TOPO_SCALE = 1.0
+export const TOPO_SCALE_ANTZ = 1.0 / 180.0
+
 /** Geometry ids (`geometry` column) — this node's own shape. */
 export const Geometry = {
   CubeWire: 0,
@@ -234,6 +254,21 @@ export interface GvNode {
 
   /** Geometry/topology aspect parameter (torus tube radius, point size). */
   ratio: number
+  /**
+   * How far one unit of a CHILD's translate reaches, for the axes this node's
+   * topology reads as a DISTANCE rather than an angle (a Cube facet's two
+   * axes, Pin/Cylinder height, altitude above a Sphere, all three axes of a
+   * plain Cartesian topology — see LINEAR_PLACEMENT_AXES in
+   * src/render/topology.ts). Angular axes (longitude/latitude, orbital and
+   * tube angles) and terms already proportional to the parent's base radius
+   * (Rod's length parameter, Spiral's helical rise) are never scaled, so no
+   * value here can distort a circular layout.
+   *
+   * Lives on the PARENT because it is the parent's coordinate system being
+   * described — the same reason `topo` and `ratio` do. DEFAULT_TOPO_SCALE
+   * (1.0) is both the code default and what a CSV without the column loads as.
+   */
+  topoScale: number
   /** Cube-topology face selector, 0-indexed (facet − 1 on disk). */
   subspace: number
   /** 0 = untextured; else 1-based index into the scene media folder. */

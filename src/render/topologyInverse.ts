@@ -14,8 +14,12 @@
 
 import * as THREE from 'three'
 import type { Vec3 } from '../gv/types'
-import { Topo } from '../gv/types'
-import { topoOffset } from './topology'
+import { DEFAULT_TOPO_SCALE, Topo } from '../gv/types'
+import { LINEAR_PLACEMENT_AXES, topoOffset } from './topology'
+import type { LinearAxes } from './topology'
+
+/** Fallback classification for ids with no entry (Cartesian placement). */
+const ALL_AXES_LINEAR: LinearAxes = [true, true, true]
 
 const RAD2DEG = 180 / Math.PI
 const EPS = 1e-9
@@ -46,10 +50,46 @@ export interface InverseInput {
   parentRatio: number
   subspace: number
   baseScale: number
+  /**
+   * The PARENT's `topo_scale` (topology.ts). topoOffset multiplies the
+   * distance-valued axes by it before placing, so the inverse divides them back
+   * out — without that, a parent retuned to TOPO_SCALE_ANTZ would drag its
+   * children at 1/180 of the cursor's speed. Desktop `_move_divisors`.
+   */
+  parentTopoScale?: number
 }
 
-/** Exact inverse of topoOffset under the unwrap/hold policies. */
+/**
+ * Exact inverse of topoOffset under the unwrap/hold policies.
+ *
+ * topoOffset pre-multiplies the parent's distance-valued axes by its
+ * topo_scale, so the inversion runs entirely in that SCALED space — `prev` is
+ * lifted into it (it is only ever an unwrap reference or a singularity hold,
+ * both of which have to be comparable with what the math recovers) and the
+ * recovered translate is divided back out. Angular axes are untouched by
+ * either step, so a scene at the default 1.0 takes the same path it always did.
+ */
 export function invertTopoOffset(p: InverseInput): Vec3 {
+  const k = p.parentTopoScale ?? DEFAULT_TOPO_SCALE
+  if (k === DEFAULT_TOPO_SCALE) return invertScaledOffset(p)
+  const linear = LINEAR_PLACEMENT_AXES[p.parentTopo] ?? ALL_AXES_LINEAR
+  const t = invertScaledOffset({
+    ...p,
+    prev: {
+      x: linear[0] ? p.prev.x * k : p.prev.x,
+      y: linear[1] ? p.prev.y * k : p.prev.y,
+      z: linear[2] ? p.prev.z * k : p.prev.z,
+    },
+  })
+  return {
+    x: linear[0] ? t.x / k : t.x,
+    y: linear[1] ? t.y / k : t.y,
+    z: linear[2] ? t.z / k : t.z,
+  }
+}
+
+/** The inversion proper, in the parent's own (already scaled) coordinates. */
+function invertScaledOffset(p: InverseInput): Vec3 {
   const { parentTopo, offset, prev, parentRatio, subspace, baseScale: B } = p
   const { x, y, z } = offset
 
@@ -130,6 +170,11 @@ export function invertTopoOffset(p: InverseInput): Vec3 {
  * free. Pinning the two non-dominant fields at their drag-start values is
  * what turns TransformControls' straight-line (chord) drag into clean
  * "one arrow, one coordinate" edits with no altitude drift.
+ *
+ * `parentTopoScale` is passed through so the gradients are those of the
+ * placement function actually in force. A positive value only rescales each
+ * gradient's magnitude, and the alignment test normalizes them, so it changes
+ * no answer — it is here to keep this the same function topoOffset is.
  */
 export function pickDominantField(
   parentTopo: number,
@@ -138,6 +183,7 @@ export function pickDominantField(
   parentRatio: number,
   subspace: number,
   baseScale: number,
+  parentTopoScale = DEFAULT_TOPO_SCALE,
 ): 'x' | 'y' | 'z' | null {
   const dir = motionDir.clone()
   if (dir.lengthSq() < EPS) return null
@@ -152,6 +198,7 @@ export function pickDominantField(
       parentRatio,
       subspace,
       baseScale,
+      parentTopoScale,
     })
   const origin = at(start)
   const H = 1e-4

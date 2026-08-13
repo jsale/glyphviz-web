@@ -25,6 +25,7 @@ function makeNode(overrides: Partial<GvNode>): GvNode {
     hide: 0,
     topo: Topo.None,
     ratio: 0.1,
+    topoScale: 1,
     subspace: 0,
     textureId: 0,
     meshId: 0,

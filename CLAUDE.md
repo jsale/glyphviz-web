@@ -1107,6 +1107,94 @@ something to decide now).
         squared to 20:1 by the clamp, a full-size glyph is untouched either
         way, the Global-Scale ordering above, both status messages, survival
         across a scene load, and nothing about it in the saved CSV.
+   w. Topology Scale (shipped 2026-08-14, at Jeff's ask once the desktop
+      feature had earned real-use feedback — a port of desktop `55928c0`,
+      which section 11 had deliberately HELD until then). A topology reads
+      some of a child's translate axes as ANGLES (Sphere's longitude,
+      Torus's orbital angle) and others as DISTANCES (a Cube facet's two
+      axes, Pin/Cylinder height, every axis of the Cartesian family). Values
+      authored for the angular reading are enormous under the other one, so
+      switching a parent from Sphere to Cube threw its children ~180× out —
+      off screen, with no clue where they went. `topoScale` on the PARENT
+      multiplies exactly the distance-valued axes of its own topology.
+      - The classification is ONE table, `LINEAR_PLACEMENT_AXES` in
+        `src/render/topology.ts` (the desktop's, verbatim), and the whole
+        feature is a PRE-MULTIPLY inside `topoOffset` — every per-topology
+        case is untouched, because scaling an axis before the math is
+        identical to scaling the distance term the math derives from it
+        (`radial = B + tz` becomes `B + k·tz`). That is also what
+        guarantees the property the field exists for: an angular axis is
+        never touched, so no value can distort a circular layout.
+        `topoBaseRotation` reads the RAW translate on both sides — every
+        axis it consults is angular anyway.
+      - World Grid children and roots are exempt, which `parentTopoScale`
+        answers with 1.0 at the one call site (buildScene's
+        `framePosition`): a grid's footprint is sized from the same extents
+        window its children's coordinates are read in, and a root's
+        translate IS its world position.
+      - Default 1.0 = one translate unit is one world unit, GlyphViz's
+        behaviour since its first commit AND the load default for a missing
+        column, so nothing that exists changes. `TOPO_SCALE_ANTZ` (1/180) is
+        ANTz's convention, where a linear axis spans the parent's own extent
+        (360 units across a facet) — the setting at which a degrees-authored
+        layout survives the switch intact. Written only when some parent has
+        actually been retuned, and at 10 SIGNIFICANT FIGURES
+        (`_PRECISE_FLOAT_COLS`) rather than the 6 decimal places every other
+        float column takes, which would round 1/180 to four.
+      - The move-drag inverse divides the factor back out per axis (desktop
+        `_move_divisors`), so a retuned parent's children still track the
+        cursor 1:1. `invertTopoOffset` runs the whole inversion in SCALED
+        space — `prev` is lifted into it, since it is only ever an unwrap
+        reference or a singularity hold — and unscales the result, which
+        makes it the exact inverse rather than an approximation of one.
+      - Bindable as a Channels attribute (35 now), classified as PLACEMENT
+        but not SHAPE: it is the one placement field that changes nothing
+        about the node itself. Animating it alongside `topo` is what holds a
+        subtree in frame across a switch between an angular and a linear
+        topology.
+      - GUI: a "Topo Scale" row directly under Topology (the desktop's own
+        placement — it describes the same thing, this node's coordinate
+        system for its children), applying ABSOLUTELY to the whole
+        selection, so Select By ▸ Topology ▸ Cube and one edit retunes every
+        cube parent. Number box, log slider (`src/ui/topoScale.ts`, DOM-free
+        so it tests in plain node) and 1:1 / ANTz presets, which write the
+        EXACT constant rather than routing through the box's six decimals.
+        Divergence: the desktop's four widgets share one row; a 300px panel
+        cannot, so the box and presets take one line and the slider the
+        next. A `TopoScl` column joins the Node Table at `%g`.
+      - The scattered-children hint (`src/render/scatterHint.ts`, desktop
+        `worst_child_placement_ratio` + `_hint_scattered_children`): after a
+        topology change — J/Shift+J or the inspector's own combo, which
+        reaches it through a new `EditNotes.topologyChanged` flag rather
+        than firing on every field — a child past 20× its parent's own
+        rendered radius says so and names the field. Only for parents still
+        at the neutral value; a tuned one is not a mistake. The radius is
+        read off the GLYPH's world matrix (largest column norm), which is
+        the desktop's `node_draw_data(...)[2]` exactly, since that is where
+        the draw scale lives here.
+      - Knock-on, now closed: `Channel_Parameters_Example`'s CSV was
+        REGENERATED on the desktop with the ANTz value on station 2, so the
+        vendored channel fixture and this app's built-in copy of that scene
+        are re-vendored from the desktop repo.
+      - Parity: `topo_scale_gv_node.csv` + its `dump_world_transforms.py`
+        dump (the tool needed no change — topo_scale rides in on the CSV).
+        Every topology id appears as a parent at a non-default value,
+        including the ANTz constant, a negative and a large one, with
+        children exercising all three axes; plus the exempt cases (grids at
+        absurd values, a root carrying one) and a four-level chain where
+        each level rescales the one below. Verified to FAIL both ways: 64
+        of 104 rows wrong without the pre-multiply, 31 wrong if every axis
+        is treated as linear — which is the half that pins the angular
+        entries.
+      - Driven in Chrome, 34 measured checks over four passes: the row's
+        layout and that nothing overflows the panel, J to Cube scattering
+        the children 288× and raising the hint, the ANTz preset storing
+        1/180 exactly and pulling them back, the 1:1 preset, the slider,
+        the Node Table's `0.00555556`, the saved CSV's column, the fixture
+        loading and matching the desktop dump live in the browser to 6e-13,
+        a real gizmo drag reading back as +180 under the ANTz scale with
+        the other two axes pinned, a radial drag on a Sphere parent moving
+        altitude alone, and a ratio edit raising no hint.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -1711,19 +1799,10 @@ something to decide now).
 11. Desktop features awaiting a port (surveyed 2026-08-13 over the desktop's
     commits since 2026-08-01 — most of that stretch is docs-site, packaging
     and example content; these are the app-behaviour ones):
-    - **Topology Scale** (desktop `55928c0`, 2026-08-12) — the big one, and
-      DELIBERATELY held: Jeff wants a few days of real use on the desktop
-      before this app commits to it (2026-08-13). `Node.topo_scale` multiplies
-      only the DISTANCE-valued translate axes of a topology
-      (`topology.LINEAR_PLACEMENT_AXES`), so switching a parent from Sphere
-      (angular) to Cube (linear) no longer throws its children ~180× out.
-      Default 1.0 = today's behaviour and the missing-column default, so
-      nothing existing changes; `TOPO_SCALE_ANTZ` is 1/180. The port is a new
-      tracked column, a pre-multiply in `topoOffset` and in the move-drag
-      inverse's divisors, a Channels attribute, and an inspector row with 1:1
-      / ANTz presets. **Knock-on:** `Channel_Parameters_Example`'s CSV was
-      REGENERATED with the ANTz value, so this app's vendored channel-parity
-      fixture and its built-in copy of that scene are stale until this lands.
+    - ~~**Topology Scale**~~ (desktop `55928c0`) — held through 2026-08-13 for
+      a few days' real use on the desktop, which came back positive;
+      **shipped 2026-08-14, see roadmap 6w**, including the re-vendoring of
+      `Channel_Parameters_Example`, whose CSV that commit regenerated.
     - ~~The 0.2 render scale floor is opt-in, default OFF~~ (desktop
       `6d82d68`) — **shipped 2026-08-13, see roadmap 6v.**
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably

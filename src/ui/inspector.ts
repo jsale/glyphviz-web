@@ -24,22 +24,40 @@ import { shiftAxis } from '../gv/multiEdit'
 import type { VectorField } from '../gv/multiEdit'
 import type { GvNode, Vec3 } from '../gv/types'
 import {
+  DEFAULT_TOPO_SCALE,
   GEOMETRY_NAMES,
   Geometry,
   NODE_TYPE_NAMES,
   NodeType,
   RotationMode,
   TOPO_NAMES,
+  TOPO_SCALE_ANTZ,
 } from '../gv/types'
 import { gridIsGlobe } from '../gv/worldGrid'
 import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
 import { meshChoices } from '../render/meshLibrary'
 import type { MeshLibrary } from '../render/meshLibrary'
 import { Panel } from './panel'
+import {
+  sliderToTopoScale,
+  TOPO_SCALE_MAX,
+  TOPO_SCALE_MIN,
+  TOPO_SCALE_SLIDER_MAX,
+  topoScaleToSlider,
+} from './topoScale'
+
+export interface EditNotes {
+  /**
+   * The edit changed `topo`. The host follows a topology change with the
+   * scattered-children hint (desktop `_on_insp_topo_changed`'s tail), which
+   * would be noise on any other field.
+   */
+  topologyChanged?: boolean
+}
 
 export interface InspectorHost {
   /** Called after an edit mutates the selection: rebuild scene, then re-show. */
-  onNodesEdited(nodes: GvNode[]): void
+  onNodesEdited(nodes: GvNode[], notes?: EditNotes): void
   /** Fetch Basemap… pressed with a single flat World Grid selected. */
   onFetchBasemap(grid: GvNode): void
 }
@@ -154,10 +172,10 @@ export class Inspector {
   }
 
   /** Mutate every selected node and hand off to the host for rebuild+refresh. */
-  private commit(mutate: (n: GvNode) => void): void {
+  private commit(mutate: (n: GvNode) => void, notes?: EditNotes): void {
     if (this.nodes.length === 0) return
     for (const node of this.nodes) mutate(node)
-    this.host.onNodesEdited(this.nodes)
+    this.host.onNodesEdited(this.nodes, notes)
   }
 
   private numberInput(
@@ -251,6 +269,7 @@ export class Inspector {
     names: Record<number, string>,
     value: number,
     apply: (n: GvNode, v: number) => void,
+    notes?: EditNotes,
   ): HTMLSelectElement {
     const select = el('select')
     const ids = Object.keys(names).map(Number).sort((a, b) => a - b)
@@ -262,7 +281,7 @@ export class Inspector {
     }
     select.value = String(value)
     select.addEventListener('change', () =>
-      this.commit((n) => apply(n, Number(select.value))),
+      this.commit((n) => apply(n, Number(select.value)), notes),
     )
     return select
   }
@@ -362,6 +381,96 @@ export class Inspector {
       })
     })
     return row('geometry', select)
+  }
+
+  /**
+   * topo_scale: how far one unit of a CHILD's translate reaches on the axes
+   * this node's topology reads as a distance. A number box for an exact value,
+   * a log slider to feel for one, and the two preset buttons for the values
+   * that mean something — the desktop's own four controls (its "Topo Scale"
+   * row), stacked on two lines because this panel is 300px wide where its
+   * dialog is not.
+   *
+   * The value applies ABSOLUTELY to every selected node, like Topology and
+   * Ratio above it: Select By ▸ Topology ▸ Cube and one edit retunes every cube
+   * parent in the scene.
+   *
+   * The two number-ish controls are deliberately NOT `data-ins-key` keyed (the
+   * rate rows' rule): a keyed control comes back focused after the rebuild an
+   * edit triggers, which would park focus in a field where the viewport's
+   * single-key commands stand down. The PRESET BUTTONS are keyed, because they
+   * are buttons a user clicks in a run against a live scene.
+   */
+  private topoScaleRow(primary: GvNode): HTMLDivElement {
+    const apply = (v: number) => this.commit((n) => (n.topoScale = v))
+
+    const box = this.numberInput(primary.topoScale, apply, {
+      min: TOPO_SCALE_MIN,
+      max: TOPO_SCALE_MAX,
+    })
+    const slider = el('input', { type: 'range' })
+    slider.min = '0'
+    slider.max = String(TOPO_SCALE_SLIDER_MAX)
+    slider.step = '1'
+    slider.value = String(topoScaleToSlider(primary.topoScale))
+    slider.className = 'ins-toposcale-slider'
+    // 'input' rather than 'change': a drag should show as it happens, and the
+    // rebuild it triggers is the same one the Global Scale slider absorbs.
+    slider.addEventListener('input', () => apply(sliderToTopoScale(Number(slider.value))))
+
+    const preset = (label: string, value: number, title: string) => {
+      const button = el('button', { className: 'ins-step ins-preset', textContent: label, title })
+      button.type = 'button'
+      button.dataset.insKey = `toposcale-${label}`
+      // Applies the exact constant rather than routing through the box, whose
+      // displayed value is a rounded view — ANTz would otherwise be stored as
+      // 0.005556. A typed edit still means exactly what it says.
+      button.addEventListener('click', () => apply(value))
+      button.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') e.stopPropagation()
+      })
+      return button
+    }
+
+    const tip =
+      'How far one unit of a CHILD’s translate reaches, for the axes this node’s\n' +
+      'topology reads as a DISTANCE rather than an angle (a Cube facet’s two axes,\n' +
+      'Pin/Cylinder height, altitude above a Sphere, all three axes of a plain\n' +
+      'Cartesian topology).\n\n' +
+      'Longitude, latitude, orbital and tube angles are never scaled, so this can\n' +
+      'never distort a circular layout — turn it down and a sphere’s children stay\n' +
+      'exactly on the sphere.\n\n' +
+      '1.0 = one translate unit is one world unit (the default).\n' +
+      `${TOPO_SCALE_ANTZ.toFixed(6)} = ANTz (360 units across a cube facet).\n\n` +
+      'Set on the PARENT — it describes that node’s coordinate system, the same way\n' +
+      'Topology and Ratio do. Turn it down when children authored in degrees fly off\n' +
+      'under a linear topology.'
+    box.title = tip
+    slider.title = tip
+
+    const stack = el('div', { className: 'ins-toposcale' })
+    const line = el('div', { className: 'ins-toposcale-line' })
+    line.append(
+      box,
+      preset(
+        '1:1',
+        DEFAULT_TOPO_SCALE,
+        'Back to 1.0: one translate unit = one world unit.\n' +
+          'GlyphViz’s original behaviour, and what every file that has no\n' +
+          'topo_scale column loads as.',
+      ),
+      preset(
+        'ANTz',
+        TOPO_SCALE_ANTZ,
+        `ANTz convention (${TOPO_SCALE_ANTZ.toFixed(6)} = 1/180): a linear axis spans\n` +
+          'this glyph’s own extent, so translate 180 reaches the edge of a cube facet\n' +
+          'just as 180 degrees of longitude reaches the far side of a sphere.\n' +
+          'This is the setting at which switching between an angular and a linear\n' +
+          'topology leaves the children roughly where they were.',
+      ),
+    )
+    stack.append(line, slider)
+    return row('topo scale', stack)
   }
 
   private textInput(value: string, apply: (n: GvNode, v: string) => void): HTMLInputElement {
@@ -516,7 +625,15 @@ export class Inspector {
         }),
       ),
       this.geometryRow(primary),
-      row('topo', this.idSelect(TOPO_NAMES, primary.topo, (n, v) => (n.topo = v))),
+      row(
+        'topo',
+        this.idSelect(TOPO_NAMES, primary.topo, (n, v) => (n.topo = v), {
+          topologyChanged: true,
+        }),
+      ),
+      // Directly under Topology, the desktop's own placement — it describes the
+      // same thing: this node's coordinate system for its children.
+      this.topoScaleRow(primary),
       row(
         'ratio',
         this.numberInput(primary.ratio, (v) => this.commit((n) => (n.ratio = v)), { width: '70px' }),

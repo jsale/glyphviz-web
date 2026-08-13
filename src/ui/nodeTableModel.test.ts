@@ -7,7 +7,7 @@ import {
   sortNodesForTable,
 } from './nodeTableModel'
 import type { GvNode } from '../gv/types'
-import { Geometry, NodeType, Topo } from '../gv/types'
+import { Geometry, NodeType, Topo, TOPO_SCALE_ANTZ } from '../gv/types'
 
 function makeNode(overrides: Partial<GvNode>): GvNode {
   return {
@@ -23,6 +23,7 @@ function makeNode(overrides: Partial<GvNode>): GvNode {
     hide: 0,
     topo: Topo.None,
     ratio: 0,
+    topoScale: 1,
     subspace: 0,
     textureId: 0,
     meshId: 0,
@@ -57,7 +58,8 @@ describe('column set', () => {
   it('is the desktop _COLUMNS list, in order', () => {
     expect(NODE_TABLE_COLUMNS.map((c) => c.label)).toEqual([
       'ID', 'Type', 'Parent', 'Level', 'Geo', 'Topo', 'Hide', 'Texture',
-      'X', 'Y', 'Z', 'Rx', 'Ry', 'Rz', 'RotMode', 'Sx', 'Sy', 'Sz', 'Ratio', 'Color',
+      'X', 'Y', 'Z', 'Rx', 'Ry', 'Rz', 'RotMode', 'Sx', 'Sy', 'Sz', 'Ratio',
+      'TopoScl', 'Color',
     ])
   })
 
@@ -87,6 +89,14 @@ describe('cell text', () => {
     scale: { x: 2, y: 0.5, z: 1 },
     ratio: 0.125,
     color: { r: 1, g: 171, b: 255, a: 128 },
+  })
+
+  it('shows topo_scale at significant-figure precision, not 3 dp', () => {
+    // The ANTz value would read as a flat "0.006" under the f3 every other
+    // float column takes (desktop _SIGFIG_ATTRS).
+    expect(column('TopoScl').text(makeNode({ topoScale: TOPO_SCALE_ANTZ }))).toBe('0.00555556')
+    expect(column('TopoScl').text(makeNode({ topoScale: 1 }))).toBe('1')
+    expect(column('TopoScl').text(makeNode({ topoScale: 0.5 }))).toBe('0.5')
   })
 
   it('shows raw integer ids, matching the desktop str(val)', () => {

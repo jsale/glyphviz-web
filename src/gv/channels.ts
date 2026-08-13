@@ -245,7 +245,8 @@ const NONNEGATIVE = { min: 0, max: Infinity }
 const FLAG = { min: 0, max: 1 }
 
 /**
- * The complete bindable set — 34 attributes, matching desktop `77d6361`.
+ * The complete bindable set — 35 attributes, matching desktop `77d6361` plus
+ * `topo_scale` (desktop `55928c0`).
  * Anything else in a ch-map is silently skipped (and counted, below).
  *
  * render_mode / fog_* are scene-wide settings read only off the World row
@@ -297,6 +298,17 @@ const ATTRIBUTES: Record<string, AttributeSpec> = {
       n.topo = v
     },
     int: { min: 0, max: TOPO_MAX },
+  },
+  // A parent's topo_scale sets how far its children's distance-valued
+  // translate axes reach. Animating it alongside `topo` is what lets a scene
+  // hold its children in frame across a switch between an angular and a linear
+  // topology, instead of flinging them ~180x further out on the frame the
+  // topology changes.
+  topo_scale: {
+    read: (n) => n.topoScale,
+    write: (n, v) => {
+      n.topoScale = v
+    },
   },
   geometry: {
     read: (n) => n.geometry,
@@ -373,11 +385,12 @@ const ATTRIBUTES: Record<string, AttributeSpec> = {
 
 /**
  * Attributes that can move or reshape geometry — the desktop's
- * `_TRANSFORM_FIELDS`. The three shape fields are here because they re-place a
- * node's CHILDREN: `ratio` is the child placement radius on Torus/Ztorus,
- * `topo` IS the child-placement rule, and on a World Grid `geometry` is what
- * switches children between globe and flat-window placement. Everything else
- * changes what is drawn but never where anything sits.
+ * `_TRANSFORM_FIELDS`. The four shape/coordinate fields are here because they
+ * re-place a node's CHILDREN: `ratio` is the child placement radius on
+ * Torus/Ztorus, `topo` IS the child-placement rule, `topo_scale` sizes that
+ * rule's distance-valued axes, and on a World Grid `geometry` is what switches
+ * children between globe and flat-window placement. Everything else changes
+ * what is drawn but never where anything sits.
  */
 const TRANSFORM_ATTRIBUTES = new Set([
   'translate_x', 'translate_y', 'translate_z',
@@ -386,15 +399,17 @@ const TRANSFORM_ATTRIBUTES = new Set([
   'translate_rate_x', 'translate_rate_y', 'translate_rate_z',
   'rotate_rate_x', 'rotate_rate_y', 'rotate_rate_z',
   'scale_rate_x', 'scale_rate_y', 'scale_rate_z',
-  'ratio', 'topo', 'geometry',
+  'ratio', 'topo', 'topo_scale', 'geometry',
 ])
 
 /** Attributes whose change means the node's GLYPH must be rebuilt (its shape,
  *  not just its material): the geometry id itself, the mesh it names, the
  *  torus/point aspect, and the node's own topo (Rod draw factors). */
 const SHAPE_ATTRIBUTES = new Set(['ratio', 'topo', 'geometry', 'mesh_id'])
-/** The subset of shape attributes that re-place the node's children. */
-const PLACEMENT_ATTRIBUTES = new Set(['ratio', 'topo', 'geometry'])
+/** Attributes that re-place the node's children. Every shape field here does
+ *  it as a side effect of changing the node itself; `topo_scale` does nothing
+ *  BUT this, which is why it is absent from the shape set above. */
+const PLACEMENT_ATTRIBUTES = new Set(['ratio', 'topo', 'topo_scale', 'geometry'])
 /** Attributes the material fast path serves (colour, texture, palette). */
 const APPEARANCE_ATTRIBUTES = new Set([
   'color_r', 'color_g', 'color_b', 'color_a',

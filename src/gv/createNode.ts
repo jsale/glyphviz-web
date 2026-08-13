@@ -10,6 +10,7 @@
 
 import type { GvNode, Rgba, Vec3 } from './types'
 import {
+  DEFAULT_TOPO_SCALE,
   Geometry,
   NodeType,
   REF_GRID_DEFAULT_RGB,
@@ -72,6 +73,7 @@ export function blankNode(id: number, d: NewObjectDefaults): GvNode {
     hide: 0,
     topo: d.topo,
     ratio: 0.1,
+    topoScale: DEFAULT_TOPO_SCALE,
     subspace: 0,
     textureId: 0,
     meshId: d.meshId ?? 0,

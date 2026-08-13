@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseGvNodeCsv } from './nodeCsv'
-import { REF_GRID_DEFAULT_RGB } from './types'
+import { DEFAULT_TOPO_SCALE, REF_GRID_DEFAULT_RGB, TOPO_SCALE_ANTZ } from './types'
 import { writeGvNodeCsv } from './writeNodeCsv'
 import topologyExampleCsv from './fixtures/topology_example_gv_node.csv?raw'
 
@@ -114,6 +114,32 @@ describe('writeGvNodeCsv', () => {
     const reparsed = parseGvNodeCsv(written)
     expect(reparsed.nodes[0].text).toBe('Hello, "world"')
     expect(reparsed.nodes[0].extras.note).toBe('keep-me')
+  })
+
+  // topo_scale has no ANTz/GaiaViz slot either, so an omitted column reloads as
+  // 1.0 — which is what keeps every file written before the field existed
+  // byte-identical through a load → save round trip.
+  it('writes topo_scale only for a scene with a retuned parent, at 10 sig figs', () => {
+    const base =
+      'id,type,parent_id,branch_level,translate_x,translate_y,translate_z,rotate_x,rotate_y,rotate_z,scale_x,scale_y,scale_z,color_r,color_g,color_b,color_a,geometry,hide,topo'
+    const nodes = parseGvNodeCsv(
+      `${base}\n1,5,0,0,0,0,0,0,0,0,1,1,1,0,0,0,255,1,0,0\n2,5,1,1,0,0,0,0,0,0,1,1,1,0,0,0,255,1,0,0`,
+    ).nodes
+    expect(nodes[0].topoScale).toBe(DEFAULT_TOPO_SCALE)
+    expect(writeGvNodeCsv(nodes).split('\r\n')[0]).not.toContain('topo_scale')
+
+    nodes[0].topoScale = TOPO_SCALE_ANTZ
+    const written = writeGvNodeCsv(nodes)
+    const header = written.split('\r\n')[0].split(',')
+    const rows = written.split('\r\n').slice(1, 3).map((r) => r.split(','))
+    const at = header.indexOf('topo_scale')
+    expect(at).toBeGreaterThan(-1)
+    // Ten significant figures, not the 6 decimal places every other float
+    // column takes — which would round this to 0.005556.
+    expect(rows[0][at]).toBe('0.005555555556')
+    expect(rows[1][at]).toBe('1') // untouched node, trailing zeros stripped
+    // And it survives the trip: the desktop reads what we write.
+    expect(parseGvNodeCsv(written).nodes[0].topoScale).toBeCloseTo(TOPO_SCALE_ANTZ, 12)
   })
 
   it('writes show_text only for a scene that pins a label', () => {

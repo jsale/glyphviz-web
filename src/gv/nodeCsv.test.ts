@@ -30,6 +30,8 @@ describe('parseGvNodeCsv', () => {
     expect(node.topo).toBe(0)
     // Load-time defaults for absent optional columns.
     expect(node.ratio).toBe(0.1)
+    // Every file written before the field existed places as it always has.
+    expect(node.topoScale).toBe(1)
     expect(node.subspace).toBe(0)
     expect(node.rotationMode).toBe(1) // absent column → Heading/Tilt/Roll
     expect(node.textureId).toBe(0)
@@ -164,6 +166,15 @@ describe('parseGvNodeCsv', () => {
   it('applies column defaults to empty optional cells', () => {
     const result = parseGvNodeCsv(csv([`${HEADER},ratio`, `${PLAIN_ROW},`]))
     expect(result.nodes[0].ratio).toBe(0.1)
+  })
+
+  it('reads topo_scale as a full-precision float when the column is present', () => {
+    const result = parseGvNodeCsv(
+      csv([`${HEADER},topo_scale`, `${PLAIN_ROW},0.005555555556`]),
+    )
+    expect(result.nodes[0].topoScale).toBe(0.005555555556)
+    // An unreadable cell is not a reason to place a subtree 180x out.
+    expect(parseGvNodeCsv(csv([`${HEADER},topo_scale`, `${PLAIN_ROW},`])).nodes[0].topoScale).toBe(1)
   })
 
   it('defaults the tag-styling columns to unpinned, uniform, pale yellow', () => {

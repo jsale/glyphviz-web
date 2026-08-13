@@ -29,7 +29,7 @@ import {
 } from './glyphGeometry'
 import { buildLinkOverlay, LinkOverlay } from './linkOverlay'
 import { localRotationMatrix } from './rotation'
-import { topoBaseRotation, topoOffset } from './topology'
+import { parentTopoScale, topoBaseRotation, topoOffset } from './topology'
 import { buildTopologyOverlay, TopologyOverlay } from './topologyOverlay'
 import { createWorldGridObject } from './worldGridGeometry'
 
@@ -112,6 +112,10 @@ function framePosition(node: GvNode, parentGv: GvNode | null): THREE.Vector3 {
     // The live Global Scale: a topology's base radius is the size of the glyph
     // its children sit on, so raising it moves them outward with it.
     baseScale: baseScale(),
+    // How far one unit of this child's translate reaches on the axes the
+    // parent's topology reads as distances. A root has no parent to ask, so
+    // parentTopoScale answers 1.0 — its translate IS its world position.
+    parentTopoScale: parentTopoScale(parentGv),
   })
 }
 

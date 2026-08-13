@@ -21,6 +21,7 @@ function makeNode(overrides: Partial<GvNode>): GvNode {
     hide: 0,
     topo: Topo.None,
     ratio: 0.1,
+    topoScale: 1,
     subspace: 0,
     textureId: 0,
     meshId: 0,
@@ -90,6 +91,32 @@ describe('buildScene hierarchy and transforms', () => {
     ])
     // Node 2 at 2·(1,0,0) = (2,0,0); node 3 offset 1 on Y through cum scale 2·0.5 = 1.
     expectVec(worldPosition(root, 3), [2, 1, 0])
+  })
+
+  it('sizes a child’s distance axes by the PARENT’s topo_scale', () => {
+    const { root } = buildScene([
+      makeNode({ id: 1, topo: Topo.None, topoScale: 0.25 }),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 8, y: -4, z: 20 } }),
+      // The child's own value governs ITS children, never its own placement.
+      makeNode({ id: 3, parentId: 2, branchLevel: 2, topoScale: 100 }),
+    ])
+    expectVec(worldPosition(root, 2), [2, -1, 5])
+    expectVec(worldPosition(root, 3), [2, -1, 5])
+  })
+
+  it('exempts World Grid children — extents already size their coordinates', () => {
+    const { root } = buildScene([
+      makeNode({
+        id: 1,
+        type: NodeType.WorldGrid,
+        geometry: Geometry.GridWire,
+        topo: Topo.Plane,
+        topoScale: 0.001,
+      }),
+      makeNode({ id: 2, parentId: 1, branchLevel: 1, translate: { x: 10, y: 20, z: 3 } }),
+    ])
+    // Default whole-earth window is centred on (0, 0), so lon/lat pass through.
+    expectVec(worldPosition(root, 2), [10, 20, 3])
   })
 
   it('applies Euler XYZ when rotation_mode is 0', () => {

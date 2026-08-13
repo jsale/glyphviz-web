@@ -17,6 +17,7 @@ function makeLink(extras: Record<string, string>): GvNode {
     hide: 0,
     topo: 0,
     ratio: 0.1,
+    topoScale: 1,
     subspace: 0,
     textureId: 0,
     meshId: 0,

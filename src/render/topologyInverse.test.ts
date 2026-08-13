@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
 import { invertTopoOffset, pickDominantField, unwrapDeg } from './topologyInverse'
 import { topoOffset } from './topology'
-import { Topo } from '../gv/types'
+import { Topo, TOPO_SCALE_ANTZ } from '../gv/types'
 import type { Vec3 } from '../gv/types'
 
 const B = 1
 
-function roundTrip(parentTopo: number, t: Vec3, opts: { ratio?: number; subspace?: number } = {}): Vec3 {
+function roundTrip(
+  parentTopo: number,
+  t: Vec3,
+  opts: { ratio?: number; subspace?: number; topoScale?: number } = {},
+): Vec3 {
   const offset = topoOffset({
     parentTopo,
     tx: t.x,
@@ -16,6 +20,7 @@ function roundTrip(parentTopo: number, t: Vec3, opts: { ratio?: number; subspace
     parentRatio: opts.ratio ?? 0.1,
     subspace: opts.subspace ?? 0,
     baseScale: B,
+    parentTopoScale: opts.topoScale,
   })
   return invertTopoOffset({
     parentTopo,
@@ -24,6 +29,7 @@ function roundTrip(parentTopo: number, t: Vec3, opts: { ratio?: number; subspace
     parentRatio: opts.ratio ?? 0.1,
     subspace: opts.subspace ?? 0,
     baseScale: B,
+    parentTopoScale: opts.topoScale,
   })
 }
 
@@ -57,6 +63,18 @@ describe('invertTopoOffset round-trips topoOffset', () => {
     it(name, () => {
       expectVec(roundTrip(topo, t, opts), t)
     })
+  }
+
+  // Every one of them again under a retuned parent (desktop `_move_divisors`):
+  // the forward pass scales the distance-valued axes, so the drag inverse has
+  // to divide them back out or a parent at the ANTz value would drag its
+  // children at 1/180 of the cursor's speed.
+  for (const topoScale of [TOPO_SCALE_ANTZ, 0.4, 6]) {
+    for (const [name, topo, t, opts] of cases) {
+      it(`${name} at topo_scale ${topoScale}`, () => {
+        expectVec(roundTrip(topo, t, { ...opts, topoScale }), t)
+      })
+    }
   }
 })
 
