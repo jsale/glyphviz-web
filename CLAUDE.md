@@ -1270,6 +1270,115 @@ something to decide now).
         it exactly. Plus an end-to-end generator diff: seed 2147483646 at five
         levels inserts 469 nodes with 42 fitted Pins, the vendored desktop
         fixture's own numbers. Console clean.
+   y. Camera smoothing (shipped 2026-08-14, Jeff's request — a port of desktop
+      `81f28e1` + `2404f86`): optional ANTz-style "inertia" on camera
+      navigation. A **Smoothing** slider (a time constant, 0–0.60 s in
+      hundredths — the desktop's own scale, so a number set here reads straight
+      across), Off/ANTz presets and an **Applies to** scope, in the Scene
+      panel's world group directly under the Camera row. Off by default, and a
+      viewer setting: it survives a scene load and never reaches the CSV.
+      - WHY: former ANTz users missed the glide under the Left+Right drag, and
+        Dr. Warner reported patients with movement disorders such as
+        Parkinson's benefiting from how it buffered their tremor. ANTz offered
+        no way to adjust or disable it, which is the other half of the ask.
+      - ANTz had TWO independent smoothers and only one is the effect people
+        remember: a 10-cycle boxcar of the raw mouse deltas (the tremor
+        filter), and a first-order low-pass on the camera's world POSITION
+        while targeting. The second is the divisive one, and the smoothing was
+        never the problem — ANTz eased position while applying the orbit angle
+        and the zoom instantly the same frame, so the eye crawled toward a
+        solution the aim had already left and the orbited object swung out of
+        frame. This eases the whole rig COHERENTLY (azimuth, elevation,
+        distance and target under one time constant), so the framing holds
+        throughout; measured in Chrome, the eye stays on its orbit sphere to
+        1.7e-13 of a 220-unit arm across a 128° glide. The filter is
+        `1 − exp(−dt/tau)`, exactly frame-rate independent, unlike ANTz's
+        `0.05·(65/(fps+5))` fudge. The boxcar is deliberately NOT ported: pure
+        latency plus ringing, and it cannot produce coast-to-rest.
+      - `src/render/cameraSmoothing.ts` is the desktop's Qt-free
+        `camera_smoothing.py` plus the goal-state block `viewport.py` wraps
+        around it, pure and DOM-free so it tests in plain node;
+        `cameraSmoothing.test.ts` ports `tests/test_camera_smoothing.py` case
+        for case and adds the goal-state rules.
+      - THE ONE ARCHITECTURAL DIFFERENCE: the desktop owns its actual rig as
+        four `_cam_*` fields, so pointing each gesture at `_cam_goal_*` was the
+        whole job. Here the actual IS `camera.position` + `controls.target`,
+        because OrbitControls owns them — so only the GOAL is stored, the
+        actual is decomposed per call (`rigFromView`, moved out of `CameraRig`
+        so both share one convention), and every reader of the live camera
+        (matrices, picking, distance-scaled speeds, stereo, the FPS panel)
+        stays untouched, which is the desktop's own contract read the other way
+        round.
+      - `SmoothOrbitControls` (`src/render/smoothOrbitControls.ts`) is how
+        orbit/pan/wheel — three's code, not ours — come to write a goal: its
+        `update()` hands OrbitControls the goal, lets it accumulate the drag
+        onto that, reads the new goal back and restores the lagging actual for
+        rendering. Handing it the ACTUAL instead would cost gain rather than
+        add lag: the goal would only ever lead by one frame's delta, so there
+        would be no coast-to-rest at all. tau = 0 steps aside on the first
+        line, floating-point noise included.
+        - Its own `update()` return value cannot say whether a gesture
+          happened — it reports whether the CAMERA moved since the last call,
+          which is also true on every frame of a manual combo glide. So the
+          goal handed in is compared with the goal handed back, at 1e-9 of the
+          arm length (one pixel of orbit moves the eye seven orders of
+          magnitude further). That test is what keeps the once-a-frame update
+          from being mistaken for an unsmoothed gesture and halting the glide.
+      - The Left+Right combo drag is this app's own code, so it writes the goal
+        directly (desktop `_orbit_zoom_camera`), and the pivot snap onto the
+        selection glides with it — precisely where ANTz put its low-pass
+        (`npSetCamTarget`), except that easing the pivot together with the aim
+        is the version that does not throw the object out of frame. Measured:
+        the pivot travels 99 units onto the selected node over the glide and
+        lands on it exactly.
+      - Everything PROGRAMMATIC snaps (`snapCameraGoal`, the desktop's
+        `_snap_camera_goal`): scene framing, camera presets, double-click
+        focus, Follow Selected, flight, the exit from an immersive session.
+        Switching cameras or entering Camera Mode RECONCILES instead (a direct
+        write wins if nothing was gliding, otherwise the glide lands), so a
+        saved viewpoint records where the user aimed. Camera Mode is excluded
+        outright: rate flight is already integrated per tick and re-derives the
+        rig from the current eye, so a lagging actual would curve the flight
+        path.
+      - An unsmoothed gesture HALTS a glide in progress, which falls out of
+        `_settle_camera` collapsing the goal onto the camera. Jeff's follow-up
+        commit records that as emergent and wanted; it is why a left-click
+        stops a coasting camera dead.
+      - Web-only divergences:
+        - No repaint timer to release — this app's animation loop always runs,
+          where the desktop's ~30 fps timer has to be held open for the glide
+          and let go at sub-pixel tolerance. The tolerance is kept at the
+          desktop's numbers anyway, and still earns its place twice: it LANDS
+          the glide exactly on its goal, and it is what lets a direct camera
+          write be adopted at face value. Not to be tightened — it is the fix
+          for the ANTz complaint about waiting for the camera to lock.
+        - With smoothing ON, an orbit stops one degree short of the pole: the
+          goal is a rig and a rig has no representation for the up-vector
+          singularity. That is the desktop's own ±89° limit and this app's
+          combo drag's; only a plain OrbitControls drag could previously go
+          over.
+        - Three's own `enableDamping` stays off. It is a per-frame constant, so
+          it drifts with frame rate, cannot be scoped, and knows nothing of the
+          combo drag it never sees.
+        - The readout says `0.33 s` where the desktop appends `(ANTz)`; a 300px
+          panel row has no width for it, so the suffix is in the status line
+          the presets print.
+      - Found by DRIVING it, and invisible to every other check: releasing one
+        button of a chord arrives as a zero-delta `pointermove` carrying the
+        new bitmask (which is why the combo state machine hangs off pointermove
+        at all — Qt has no equivalent, so the desktop never meets this). That
+        no-op was running the plain-orbit path and ending the glide at the
+        exact moment the user let go. A move that moves nothing is no longer a
+        gesture.
+      - Driven in Chrome, 30 measured checks: the rows' layout, order and
+        styling; off = the camera stops dead at the release (drift 7e-13); the
+        combo gliding 190 units past the release and settling in 2.1 s with a
+        zero azimuth residual; the arm length holding; monotone approach (a lag
+        filter, never momentum); the halt; scope=all covering plain orbit,
+        wheel zoom and pan; presets, focus and scene framing staying jumps;
+        Camera Mode flying and stopping dead with smoothing on; and the setting
+        surviving a scene load. Plus a stereo pass: the pair glides with the
+        arm length unchanged to 1e-3 and a clean console.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -2042,14 +2151,11 @@ something to decide now).
       `6d82d68`) — **shipped 2026-08-13, see roadmap 6v.**
     - ~~Glyph Composer Topology Scale + preview camera~~ (desktop `88091e1`,
       landed after this survey) — **shipped 2026-08-14, see roadmap 6x.**
-    - **Camera smoothing** (desktop, 2026-08-14) — optional ANTz-style
-      navigation inertia: one time constant easing azimuth/elevation/distance/
-      target coherently, `tau = 0` (off) by default, a Properties-panel slider
-      with Off/ANTz presets and an "Applies to" scope, Camera Mode excluded
-      outright. Jeff confirmed 2026-08-14 that he wants this and the other
-      recent desktop features ported "asap", after the XR work. Read the
-      desktop's own notes before starting: it is a REVISIT of ANTz's
-      mechanism, not a copy of it, and the reasons it diverges are the design.
+    - ~~**Camera smoothing**~~ (desktop `81f28e1` + `2404f86`, 2026-08-14) —
+      **shipped 2026-08-14, see roadmap 6y.** It is a REVISIT of ANTz's
+      mechanism rather than a copy of it, and the reasons it diverges are the
+      design — that is why the port follows the desktop's coherent-rig version
+      and not ANTz's own.
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
       already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
       the desktop had none for — but the desktop's crop-not-stretch rule

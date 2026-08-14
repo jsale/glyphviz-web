@@ -41,6 +41,50 @@ export const LOOK_DEG_PER_PX = 0.25 // look-around (right-drag) rate, both axes
 const DEG = Math.PI / 180
 const ELEVATION_CLAMP = 89 // short of the up-vector singularity, as everywhere
 
+/** The orbit rig every camera path in the app shares: an eye swung around a
+ *  pivot by two angles at a fixed arm length. The desktop viewport keeps these
+ *  four as `_cam_azimuth` / `_cam_elevation` / `_cam_distance` / `_cam_target`;
+ *  here they are also what camera smoothing eases (render/cameraSmoothing.ts),
+ *  which is why the conversion lives out here rather than on CameraRig. */
+export interface OrbitRig {
+  azimuth: number
+  elevation: number
+  distance: number
+  target: Vec3
+}
+
+/** eye = target + distance·(cos el·cos az, cos el·sin az, sin el) — the
+ *  desktop's gluLookAt convention, Z-up. */
+export function eyeFromRig(rig: OrbitRig): Vec3 {
+  const az = rig.azimuth * DEG
+  const el = rig.elevation * DEG
+  const [tx, ty, tz] = rig.target
+  return [
+    tx + rig.distance * Math.cos(el) * Math.cos(az),
+    ty + rig.distance * Math.cos(el) * Math.sin(az),
+    tz + rig.distance * Math.sin(el),
+  ]
+}
+
+/** The inverse: decompose a live eye/target pair back into the rig. Returns
+ *  null for a degenerate (zero-length) arm, which has no angles at all — the
+ *  caller keeps whatever rig it already had. Elevation is clamped to ±89°
+ *  because OrbitControls can reach the pole exactly and the rig's own moves
+ *  never do (a sub-1° dip, and only at the pole). */
+export function rigFromView(eye: Vec3, target: Vec3): OrbitRig | null {
+  const ox = eye[0] - target[0]
+  const oy = eye[1] - target[1]
+  const oz = eye[2] - target[2]
+  const r = Math.sqrt(ox * ox + oy * oy + oz * oz)
+  if (r < 1e-9) return null
+  return {
+    azimuth: Math.atan2(oy, ox) / DEG,
+    elevation: Math.max(-ELEVATION_CLAMP, Math.min(ELEVATION_CLAMP, Math.asin(oz / r) / DEG)),
+    distance: r,
+    target: [target[0], target[1], target[2]],
+  }
+}
+
 /** Pixels of flight-drag cursor offset beyond the dead zone (0 inside it) —
  *  measured from the edge, so motion ramps up from zero as the cursor leaves
  *  the zone instead of jumping to a dead-zone-sized speed. */
@@ -98,14 +142,7 @@ export class CameraRig {
 
   /** eye = target + distance·(cos el·cos az, cos el·sin az, sin el). */
   eyePosition(): Vec3 {
-    const az = this.azimuth * DEG
-    const el = this.elevation * DEG
-    const [tx, ty, tz] = this.target
-    return [
-      tx + this.distance * Math.cos(el) * Math.cos(az),
-      ty + this.distance * Math.cos(el) * Math.sin(az),
-      tz + this.distance * Math.sin(el),
-    ]
+    return eyeFromRig(this)
   }
 
   /** The camera's (forward, right, up) unit vectors in world space:
@@ -135,17 +172,12 @@ export class CameraRig {
    *  rig's own — called before any camera-view op or fly-mode entry, since
    *  outside Camera Mode the orbit controls are the source of truth. */
   syncFromView(eye: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }) {
-    const ox = eye.x - target.x
-    const oy = eye.y - target.y
-    const oz = eye.z - target.z
-    const r = Math.sqrt(ox * ox + oy * oy + oz * oz)
-    if (r < 1e-9) return // degenerate view: keep the previous rig state
-    this.distance = r
-    this.azimuth = Math.atan2(oy, ox) / DEG
-    // OrbitControls can reach the pole exactly; the rig's own moves never
-    // exceed ±89°, so clamp on the way in (a <1° dip, only at the pole).
-    this.elevation = Math.max(-ELEVATION_CLAMP, Math.min(ELEVATION_CLAMP, Math.asin(oz / r) / DEG))
-    this.target = [target.x, target.y, target.z]
+    const rig = rigFromView([eye.x, eye.y, eye.z], [target.x, target.y, target.z])
+    if (!rig) return // degenerate view: keep the previous rig state
+    this.azimuth = rig.azimuth
+    this.elevation = rig.elevation
+    this.distance = rig.distance
+    this.target = rig.target
   }
 
   // --- saved camera views (Shift+C) ---

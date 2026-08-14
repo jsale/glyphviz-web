@@ -1,6 +1,5 @@
 import './style.css'
 import * as THREE from 'three'
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { TransformControls } from 'three/addons/controls/TransformControls.js'
 import { cycleGeometry, cycleTargets, cycleTopology } from './gv/attrCycle'
 import { cycleColorIndex, cyclePalette, PALETTE_NAMES } from './gv/colorPalette'
@@ -137,7 +136,18 @@ import type { StereoEye } from './render/stereo'
 import { XrRig } from './render/xrSession'
 import { XrLabel } from './render/xrLabel'
 import { XrPanel } from './render/xrPanel'
-import { CameraRig } from './render/cameraMode'
+import { CameraRig, rigFromView } from './render/cameraMode'
+import type { OrbitRig } from './render/cameraMode'
+import {
+  CameraSmoothing,
+  SCOPE_ALL,
+  SCOPE_COMBO,
+  TAU_ANTZ,
+  TAU_MAX,
+  TAU_OFF,
+} from './render/cameraSmoothing'
+import type { SmoothingScope } from './render/cameraSmoothing'
+import { SmoothOrbitControls } from './render/smoothOrbitControls'
 import { parentTopoScale } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { BasemapWindow } from './ui/basemapWindow'
@@ -274,10 +284,20 @@ camera.up.set(0, 0, 1)
 // re-aimed once per frame in the animation loop.
 const lighting = new SceneLighting(scene)
 
-const controls = new OrbitControls(camera, renderer.domElement)
-// No damping: the camera stops dead when the mouse button comes up. Inertial
-// glide reads as lag on big scenes, where a low frame rate stretches the
-// spin-down out over many seconds.
+// Optional ANTz-style camera smoothing (render/cameraSmoothing.ts). Off by
+// default, in which case the controls below are plain OrbitControls: the goal
+// state and every branch that reads it stand down on one comparison.
+const camSmoothing = new CameraSmoothing()
+
+const controls = new SmoothOrbitControls(camera, renderer.domElement, camSmoothing, () =>
+  // Camera Mode drives the camera itself and is never smoothed; flyRig is
+  // declared further down, so this is read lazily rather than captured.
+  flyRig.flyMode,
+)
+// No OrbitControls damping: three's own is a per-frame constant, which drifts
+// with frame rate and cannot be switched off per gesture. The camera-smoothing
+// filter above is the app's glide — exponentially exact, scoped, and shared
+// with the manual Left+Right combo drag, which OrbitControls never sees.
 controls.enableDamping = false
 
 // Desktop-style procedural backdrop: the "infinite" reference grid (hidden
@@ -339,6 +359,10 @@ const xrRig = new XrRig(renderer, camera, scene, {
   },
   onEnd() {
     controls.enabled = !flyRig.flyMode
+    // The session restored the desktop camera pose wholesale — a jump, so the
+    // smoothing goal takes it rather than dragging the view back to wherever
+    // the pre-session goal was.
+    snapCameraGoal()
     updateGizmoAttachment()
     xrLabel.hide()
     applyLineResolution()
@@ -490,6 +514,20 @@ hud.innerHTML = `
       <span>Camera</span>
       <select id="hud-camera"></select>
     </div>
+    <div class="hud-create-row" id="hud-cam-smooth-row" title="Camera glide (ANTz-style inertia). 0 = Off: the view tracks the mouse exactly.&#10;Higher = the camera eases toward where you drag, which looks smoother in demos and buffers hand tremor.&#10;Unlike ANTz, aim and position ease together, so what you are orbiting never swings out of frame.&#10;A viewer setting: it never reaches the CSV.">
+      <span>Smoothing</span>
+      <input id="hud-cam-smooth" type="range" min="0" max="60" step="1" value="0">
+      <span id="hud-cam-smooth-value">Off</span>
+    </div>
+    <div class="hud-create-row" id="hud-cam-smooth-presets">
+      <span></span>
+      <button id="hud-cam-smooth-off" title="No smoothing — the default.">Off</button>
+      <button id="hud-cam-smooth-antz" title="ANTz's own feel (0.33 s), without its swing-out-of-frame artefact.">ANTz</button>
+    </div>
+    <div class="hud-create-row" id="hud-cam-smooth-scope-row" title="Which gestures glide. Left+Right drag only matches ANTz, where smoothing engaged on that combined orbit+zoom gesture.&#10;All camera navigation also covers single-button orbit, pan and wheel zoom — the setting to use for tremor buffering.&#10;Camera Mode (free flight) is never smoothed: it is already rate-based, so it has no jitter to filter.">
+      <span>Applies to</span>
+      <select id="hud-cam-smooth-scope"></select>
+    </div>
     <label id="hud-fly" class="sel-check" title="Camera Mode — free flight  [C]&#10;Left drag: the press point becomes a bearings origin — hold the cursor above/below it to fly forward/back, left/right of it to turn. The offset sets a continuous speed; return to the origin to stop.&#10;Right drag: look around from where the camera stands.&#10;Both buttons: slide sideways / up / down.  Wheel: fly forward/back.&#10;Clicking still selects, and Shift+drag still region-selects, but Move/Rotate/Size gizmos are suspended until Camera Mode is off.&#10;Not available on the fixed +X/+Y/+Z reference views.">
       <input type="checkbox">Camera Mode (C)
     </label>
@@ -560,6 +598,12 @@ const fogEndInput = hud.querySelector<HTMLInputElement>('#hud-fog-end')!
 const followCheckbox = hud.querySelector<HTMLInputElement>('#hud-follow input')!
 const cameraSelect = hud.querySelector<HTMLSelectElement>('#hud-camera')!
 const flyCheckbox = hud.querySelector<HTMLInputElement>('#hud-fly input')!
+const camSmoothSlider = hud.querySelector<HTMLInputElement>('#hud-cam-smooth')!
+const camSmoothValue = hud.querySelector<HTMLSpanElement>('#hud-cam-smooth-value')!
+const camSmoothOffButton = hud.querySelector<HTMLButtonElement>('#hud-cam-smooth-off')!
+const camSmoothAntzButton = hud.querySelector<HTMLButtonElement>('#hud-cam-smooth-antz')!
+const camSmoothScopeRow = hud.querySelector<HTMLDivElement>('#hud-cam-smooth-scope-row')!
+const camSmoothScopeSelect = hud.querySelector<HTMLSelectElement>('#hud-cam-smooth-scope')!
 const showFpsCheckbox = hud.querySelector<HTMLInputElement>('#hud-show-fps input')!
 const scaleFloorCheckbox = hud.querySelector<HTMLInputElement>('#hud-scale-floor input')!
 const baseScaleSlider = hud.querySelector<HTMLInputElement>('#hud-base-scale')!
@@ -1003,6 +1047,10 @@ function applyRigToCamera() {
   camera.position.set(ex, ey, ez)
   controls.target.set(flyRig.target[0], flyRig.target[1], flyRig.target[2])
   camera.lookAt(controls.target)
+  // Flight is excluded from smoothing and re-derives the rig from the current
+  // eye each tick, so the goal tracks it exactly — a lagging actual would feed
+  // back into the next frame's derivation and curve the flight path.
+  snapCameraGoal()
 }
 
 /** Locked axis views are fixed reference views: zoom only (desktop
@@ -1021,6 +1069,9 @@ function updateCameraUi() {
 /** Toggle free-flight Camera Mode (C, the checkbox, or picking a locked
  *  view). Ports the desktop's set_fly_mode + _on_fly_mode_changed pair. */
 function setCameraMode(on: boolean) {
+  // Flight is excluded from smoothing and re-derives the rig from the current
+  // eye, so land any in-progress glide before it takes over.
+  if (on) reconcileCameraGoal()
   if (!flyRig.flyMode) flyRig.syncFromView(camera.position, controls.target)
   if (!flyRig.setFlyMode(on)) {
     updateCameraUi()
@@ -1055,7 +1106,12 @@ function setCameraMode(on: boolean) {
  *  saving the live viewpoint into the outgoing slot first. */
 function selectCameraView(index: number) {
   const wasFly = flyRig.flyMode
-  if (!wasFly) flyRig.syncFromView(camera.position, controls.target)
+  if (!wasFly) {
+    // The outgoing slot saves where the user aimed, not where a glide has got
+    // to (desktop _sync_active_camera → _reconcile_camera_goal).
+    reconcileCameraGoal()
+    flyRig.syncFromView(camera.position, controls.target)
+  }
   flyRig.selectCamera(index)
   applyRigToCamera()
   controls.update()
@@ -1112,6 +1168,118 @@ function routeFlyPointer(e: PointerEvent): boolean {
 flyCheckbox.addEventListener('change', () => setCameraMode(flyCheckbox.checked))
 cameraSelect.addEventListener('change', () => selectCameraView(Number(cameraSelect.value)))
 
+// --- Camera smoothing (optional ANTz-style glide) -----------------------------
+//
+// The desktop's `_cam_*` is the ACTUAL rendered camera and `_cam_goal_*` is
+// where the gesture aimed; here the actual is `camera.position` +
+// `controls.target`, so the four helpers below are the whole translation
+// layer. render/cameraSmoothing.ts holds the filter and the rules; the
+// OrbitControls half lives in render/smoothOrbitControls.ts.
+
+/** The rendered camera as an orbit rig — null while the eye sits exactly on
+ *  the pivot, which has no angles to ease. */
+function cameraActualRig(): OrbitRig | null {
+  return rigFromView(
+    [camera.position.x, camera.position.y, camera.position.z],
+    [controls.target.x, controls.target.y, controls.target.z],
+  )
+}
+
+/** Point the goal at wherever the rendered camera now is (desktop
+ *  `_snap_camera_goal`): every PROGRAMMATIC move — camera presets, scene
+ *  framing, double-click focus, Follow Selected, flight, the exit from an
+ *  immersive session — is a jump, not a glide, and would otherwise be dragged
+ *  straight back toward the pre-jump goal. */
+function snapCameraGoal() {
+  const actual = cameraActualRig()
+  if (actual) camSmoothing.snap(actual)
+}
+
+/** Bring goal and camera together before something outside the navigation path
+ *  takes over the rig (desktop `_reconcile_camera_goal`): a direct write wins
+ *  if nothing was gliding, otherwise the glide lands on its goal. Saving a
+ *  viewpoint into a camera slot must record where the user aimed, not where a
+ *  half-finished glide happens to have got to. */
+function reconcileCameraGoal() {
+  const actual = cameraActualRig()
+  if (!actual) return
+  camSmoothing.adopt(actual)
+  controls.applyRig(camSmoothing.goal)
+}
+
+/** End a goal-writing gesture (desktop `_settle_camera`): either leave the
+ *  goal for the animation loop to chase, or — when smoothing is off or does
+ *  not cover this gesture — put the camera on it right now, which is what
+ *  makes tau = 0 behave exactly as the code did before this existed. */
+function settleCamera(combo: boolean) {
+  if (camSmoothing.covers(combo, flyRig.flyMode)) return
+  controls.applyRig(camSmoothing.goal)
+}
+
+/** One filter step, called once per animation frame after everything that
+ *  could have moved the goal (desktop `_apply_camera_smoothing`). */
+function applyCameraSmoothing(dtMs: number) {
+  const actual = cameraActualRig()
+  if (!actual) return
+  const next = camSmoothing.step(actual, dtMs)
+  if (next) controls.applyRig(next)
+}
+
+/** Push the slider + scope select into the smoothing state and relabel
+ *  (desktop `_update_camera_smoothing` + `set_camera_smoothing`). */
+function applyCameraSmoothingSettings() {
+  const tau = Number(camSmoothSlider.value) / 100
+  const changed = tau !== camSmoothing.tau
+  camSmoothing.tau = Math.max(0, Math.min(tau, TAU_MAX))
+  camSmoothing.scope = camSmoothScopeSelect.value as SmoothingScope
+  // The desktop's label appends "(ANTz)" at that setting; a 300px panel row
+  // has no width for it, so the suffix lives in the status line the presets
+  // print instead.
+  camSmoothValue.textContent = tau <= 0 ? 'Off' : `${tau.toFixed(2)} s`
+  camSmoothScopeRow.classList.toggle('disabled', tau <= 0)
+  // Turning the amount up or down re-bases the goal on the live camera. Off,
+  // the goal is left behind by every gesture that takes the untouched
+  // OrbitControls path, so switching on again would glide toward a viewpoint
+  // from minutes ago; and turning off has to land an in-progress glide rather
+  // than stranding the camera mid-flight (the desktop's `_finish_camera_glide`
+  // in the same handler).
+  if (changed) snapCameraGoal()
+}
+
+/** A preset moves the slider and lets its own handler do the work, so there is
+ *  exactly one path into the smoothing state (desktop
+ *  `_set_camera_smoothing_tau`). setValue is a no-op when the slider is
+ *  already there, so the call is unconditional rather than silent. */
+function setCameraSmoothingTau(tau: number) {
+  camSmoothSlider.value = String(Math.round(tau * 100))
+  applyCameraSmoothingSettings()
+  status(
+    tau <= 0
+      ? 'Camera smoothing off — the view tracks the mouse exactly.'
+      : `Camera smoothing ${tau.toFixed(2)} s${Math.abs(tau - TAU_ANTZ) < 0.005 ? ' (ANTz)' : ''}.`,
+  )
+}
+
+// Slider units are hundredths of a second of time constant, the desktop's own
+// scale, so a value set here reads straight across to the other app.
+camSmoothSlider.max = String(Math.round(TAU_MAX * 100))
+camSmoothSlider.value = String(Math.round(TAU_OFF * 100))
+for (const [value, label] of [
+  [SCOPE_COMBO, 'Left+Right drag only'],
+  [SCOPE_ALL, 'All camera navigation'],
+] as const) {
+  const opt = document.createElement('option')
+  opt.value = value
+  opt.textContent = label
+  camSmoothScopeSelect.append(opt)
+}
+camSmoothScopeSelect.value = SCOPE_COMBO
+camSmoothScopeRow.classList.add('disabled')
+camSmoothSlider.addEventListener('input', () => applyCameraSmoothingSettings())
+camSmoothScopeSelect.addEventListener('change', () => applyCameraSmoothingSettings())
+camSmoothOffButton.addEventListener('click', () => setCameraSmoothingTau(TAU_OFF))
+camSmoothAntzButton.addEventListener('click', () => setCameraSmoothingTau(TAU_ANTZ))
+
 // In Camera Mode the wheel flies rather than zooms: shortening the arm would
 // creep the eye toward a target that's supposed to ride along in front of it,
 // and would quietly slow every later drag (flight speed scales off arm
@@ -1133,6 +1301,10 @@ renderer.domElement.addEventListener(
   camera,
   controls,
   flyRig,
+  // Where the gesture aimed, as against where the camera has got to — the
+  // whole of camera smoothing is the gap between the two, and neither is in
+  // the DOM.
+  camSmoothing,
   // Deferred: the gizmo is created later in the module; the harness reads it
   // through this getter after boot.
   get gizmo() {
@@ -2102,6 +2274,7 @@ function fitCameraTo(root: THREE.Object3D) {
   if (box.isEmpty()) {
     controls.target.set(0, 0, 0)
     camera.position.set(4, -6, 4)
+    snapCameraGoal()
     return
   }
   const center = box.getCenter(new THREE.Vector3())
@@ -2121,6 +2294,7 @@ function fitCameraTo(root: THREE.Object3D) {
   camera.far = Math.max(1000, distance * 100)
   camera.updateProjectionMatrix()
   controls.target.copy(center)
+  snapCameraGoal() // auto-framing is a jump, not a glide
   controls.update()
 }
 
@@ -2552,6 +2726,7 @@ renderer.domElement.addEventListener('dblclick', (e) => {
   const pos = worldPosOf(nodeId)
   if (!pos) return
   controls.target.copy(pos)
+  snapCameraGoal() // focus is a jump, not a glide (desktop focus_on_node)
   controls.update()
 })
 window.addEventListener('keydown', (e) => {
@@ -2689,7 +2864,6 @@ window.addEventListener('keydown', (e) => {
 // does not steal the drag from the gizmo (simplest default while
 // TransformControls owns the pointer).
 
-const DEG = Math.PI / 180
 const COMBO_ORBIT_DEG_PER_PX = 0.4 // desktop _orbit_camera / _orbit_zoom_camera
 const COMBO_ZOOM_PER_PX = 0.005
 const COMBO_MIN_DISTANCE = 1
@@ -2722,7 +2896,17 @@ function updateManualDragState(e: PointerEvent) {
     // (Camera Mode's own guard is upstream: fly routes around this entirely).
     const pos =
       selection.id !== null && !flyRig.activeCameraLocked() ? worldPosOf(selection.id) : null
-    if (pos) controls.target.copy(pos)
+    if (pos) {
+      // The goal, not the camera: with smoothing on, re-centring the pivot on
+      // the selected object GLIDES. This is precisely where ANTz put its
+      // low-pass (npSetCamTarget → "targeting"), and easing the pivot together
+      // with the aim is the version that doesn't throw the object out of frame
+      // on the way.
+      const actual = cameraActualRig()
+      if (actual) camSmoothing.adopt(actual)
+      camSmoothing.goal.target = [pos.x, pos.y, pos.z]
+      settleCamera(true)
+    }
   }
   if (next === null && manualDrag !== null) controls.enabled = !flyRig.flyMode
   manualDrag = next
@@ -2732,30 +2916,37 @@ function manualDragMove(e: PointerEvent) {
   const dx = e.clientX - manualLast.x
   const dy = e.clientY - manualLast.y
   manualLast = { x: e.clientX, y: e.clientY }
+  // A move that moves nothing is not a gesture. This matters beyond saving the
+  // work: releasing one button of a chord arrives as a pointermove carrying
+  // the new bitmask and no motion (the reason the state machine above hangs
+  // off pointermove at all), and treating that as a plain orbit drag would end
+  // any camera-smoothing glide the combo had just started — at the exact
+  // moment the user let go, which is when the glide is the whole point.
+  if (dx === 0 && dy === 0) return
   // Locked axis views: the combo keeps its zoom half and drops the orbit
   // (desktop _orbit_zoom_camera); a plain orbit drag does nothing at all
   // (desktop _orbit_camera returns outright).
   const locked = flyRig.activeCameraLocked()
   if (locked && manualDrag !== 'combo') return
-  const offset = camera.position.clone().sub(controls.target)
-  const r0 = offset.length()
-  if (r0 < 1e-9) return
-  // Z-up azimuth/elevation/distance, the desktop camera model. Azimuth sign is
-  // the grab-the-object convention (matches both the desktop and what
-  // OrbitControls does for a plain left drag).
-  const az = Math.atan2(offset.y, offset.x) - (locked ? 0 : dx * COMBO_ORBIT_DEG_PER_PX * DEG)
-  let el = Math.asin(THREE.MathUtils.clamp(offset.z / r0, -1, 1))
-  let r = r0
+  // Z-up azimuth/elevation/distance, the desktop camera model. The drag
+  // extends the smoothing GOAL, which with smoothing off is collapsed onto the
+  // camera on the same line below — so this is the same arithmetic on the same
+  // numbers it always was (desktop _orbit_camera / _orbit_zoom_camera).
+  const actual = cameraActualRig()
+  if (!actual) return
+  camSmoothing.adopt(actual)
+  const goal = camSmoothing.goal
+  // Azimuth sign is the grab-the-object convention (matches both the desktop
+  // and what OrbitControls does for a plain left drag).
+  if (!locked) goal.azimuth -= dx * COMBO_ORBIT_DEG_PER_PX
   if (manualDrag === 'combo') {
-    r = Math.max(COMBO_MIN_DISTANCE, r * (1 + dy * COMBO_ZOOM_PER_PX))
+    goal.distance = Math.max(COMBO_MIN_DISTANCE, goal.distance * (1 + dy * COMBO_ZOOM_PER_PX))
   } else {
-    el = THREE.MathUtils.clamp(el + dy * COMBO_ORBIT_DEG_PER_PX * DEG, -89 * DEG, 89 * DEG)
+    goal.elevation = THREE.MathUtils.clamp(goal.elevation + dy * COMBO_ORBIT_DEG_PER_PX, -89, 89)
   }
-  camera.position
-    .set(Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el))
-    .multiplyScalar(r)
-    .add(controls.target)
-  camera.lookAt(controls.target)
+  // combo: the gesture ANTz's own smoothing applied to, so it glides even at
+  // the narrower default scope.
+  settleCamera(manualDrag === 'combo')
 }
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -4032,6 +4223,11 @@ function applyFollowTarget() {
   if (followDelta.lengthSq() === 0) return
   controls.target.add(followDelta)
   camera.position.add(followDelta)
+  // Following re-centres every frame from the node's own animation, so
+  // smoothing it would fight the source rather than a hand tremor — and would
+  // leave the camera permanently trailing a moving node (desktop
+  // _apply_follow_target). A glide in progress is landed by the same rule.
+  snapCameraGoal()
 }
 
 function setFollowSelected(value: boolean) {
@@ -4142,6 +4338,11 @@ renderer.setAnimationLoop(() => {
       applyRigToCamera()
     }
     controls.update()
+    // After every source that could have moved the goal (OrbitControls' own
+    // gestures land inside the update above, the manual combo drag as it
+    // happens, follow and flight just before), and before anything below reads
+    // the camera — the desktop calls this at the same point in paintGL.
+    applyCameraSmoothing(dtMs)
   }
   // The key light lives in eye space on the desktop, so it follows the camera
   // the controls just moved. Both stereo eyes share that camera's orientation,

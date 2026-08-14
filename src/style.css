@@ -393,8 +393,33 @@ canvas {
   opacity: 0.5;
 }
 
+/* Camera smoothing: the scope select is dimmed while the amount is 0 — there
+   is nothing to scope — but stays usable, like Eye Separation above. */
+#hud-cam-smooth-scope-row.disabled {
+  opacity: 0.5;
+}
+
+/* The preset pair sits under the slider in the label column's gutter, so Off
+   and ANTz line up with the slider rather than with its label. A bare <button>
+   renders as an unstyled default-white browser button (the Draw Mode lesson),
+   so these take the same look as B/W and Save PNG. */
+#hud-cam-smooth-presets button {
+  padding: 1px 8px;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-cam-smooth-presets button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
 #hud-stereo-sep,
-#hud-base-scale {
+#hud-base-scale,
+#hud-cam-smooth {
   flex: 1;
   min-width: 0;
   height: 14px;
@@ -406,6 +431,14 @@ canvas {
 #hud-world #hud-stereo-sep-value,
 #hud-world #hud-base-scale-value {
   flex: 0 0 38px;
+  text-align: right;
+  color: #9aa3b5;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "0.33 s" needs a few more pixels than a bare number. */
+#hud-world #hud-cam-smooth-value {
+  flex: 0 0 46px;
   text-align: right;
   color: #9aa3b5;
   font-variant-numeric: tabular-nums;
