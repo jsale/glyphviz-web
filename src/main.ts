@@ -65,6 +65,7 @@ import {
   DEFAULT_TOPO_SCALE,
   GEOMETRY_NAMES,
   Geometry,
+  NODE_TYPE_NAMES,
   NodeType,
   TagColorMode,
   TOPO_NAMES,
@@ -135,6 +136,7 @@ import { eyeForX, StereoRig } from './render/stereo'
 import type { StereoEye } from './render/stereo'
 import { XrRig } from './render/xrSession'
 import { XrLabel } from './render/xrLabel'
+import { XrPanel } from './render/xrPanel'
 import { CameraRig } from './render/cameraMode'
 import { parentTopoScale } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
@@ -317,6 +319,10 @@ const xrRig = new XrRig(renderer, camera, scene, {
   onSecondary() {
     setPlaying(!playing)
   },
+  onTogglePanel() {
+    xrPanel.visible = !xrPanel.visible
+    status(xrPanel.visible ? 'Wrist panel shown.' : 'Wrist panel hidden — press X to bring it back.')
+  },
   onStart() {
     // Cross-eye stereo is a second pair of eyes drawn into one flat canvas;
     // in a headset the compositor owns that job.
@@ -342,6 +348,35 @@ const xrRig = new XrRig(renderer, camera, scene, {
 })
 renderer.xr.addEventListener('sessionstart', () => xrRig.handleSessionStart())
 renderer.xr.addEventListener('sessionend', () => xrRig.handleSessionEnd())
+
+// The wrist panel — the session's stand-in for the DOM HUD, which a headset
+// never sees. It rides the left grip (the rig re-parents its anchor once
+// handedness resolves) and is driven by the other hand's ray.
+const xrPanel = new XrPanel({
+  // The same three commands the Channels panel's own buttons run, so the two
+  // transports cannot drift apart.
+  togglePlay() {
+    channelCommands.togglePlay()
+  },
+  stop() {
+    channelCommands.stop()
+  },
+  seek(fraction) {
+    if (channels.frameCount === 0) return
+    channelCommands.seek(Math.round(fraction * (channels.frameCount - 1)))
+  },
+  stepDrawLimit(factor) {
+    adjustDrawLimit(factor)
+  },
+  stepExample(delta) {
+    stepBuiltInScene(delta)
+  },
+  fit(targetMetres) {
+    xrRig.requestFit(targetMetres)
+  },
+})
+xrRig.panelAnchor.add(xrPanel.group)
+xrRig.setPointerTarget(xrPanel)
 
 // --- HUD -------------------------------------------------------------------
 
@@ -1115,11 +1150,20 @@ renderer.domElement.addEventListener(
   // Immersive mode: nothing about the rig — where the viewer is, how big the
   // world is, where the headset thinks the head is — reaches the DOM.
   xrRig,
+  xrPanel,
   get xrState() {
     return xrRig.state
   },
   get selectionId() {
     return selection.id
+  },
+  // The wrist panel's own readouts, which exist nowhere else while a session
+  // is running: what is drawn, and where the transport stands.
+  get drawState() {
+    return { limit: drawLimit, drawn: drawnCount, total: currentNodes.length }
+  },
+  get channelState() {
+    return { playing, frame: channelFrame, frames: channels.frameCount }
   },
 }
 
@@ -1169,6 +1213,33 @@ function updateXrLabel() {
     return
   }
   xrLabel.show(node.text, pos, xrRig.state.scale)
+}
+
+/**
+ * This frame's readings for the wrist panel. Cheap to call every frame: the
+ * panel compares a signature and repaints its texture only when the picture
+ * actually changes (ui/xrPanelModel.ts), so a still panel costs one string.
+ */
+function updateXrPanel() {
+  const node = selection.id !== null ? nodesById.get(selection.id) : undefined
+  xrPanel.update({
+    sceneName: currentDisplayName || currentFilename,
+    nodeCount: currentNodes.length,
+    drawnCount,
+    drawLimit,
+    selection: node
+      ? {
+          id: node.id,
+          text: node.text,
+          type: NODE_TYPE_NAMES[node.type] ?? 'Glyph',
+        }
+      : null,
+    channels:
+      channels.frameCount > 0
+        ? { frame: channelFrame, frames: channels.frameCount, playing }
+        : null,
+    exampleName: exampleSelect.value,
+  })
 }
 
 function parentOf(node: GvNode): GvNode | null {
@@ -1261,6 +1332,8 @@ let showHidden = false
 // ANTz \ decimation: null = every node draws; a number caps the drawn set to
 // that many rows in file order. Applied at build time (src/render/drawLimit.ts).
 let drawLimit: number | null = null
+/** How many nodes the last build actually drew — the wrist panel's readout. */
+let drawnCount = 0
 // Tag labels are off by default, matching the desktop ("press T to see labels").
 let showTags = false
 let tagsSelectedOnly = false
@@ -1889,6 +1962,19 @@ function loadBuiltIn(name: string) {
   })
 }
 
+/**
+ * Walk the built-in scenes, wrapping — the wrist panel's ◀ ▶, since a headset
+ * cannot reach the example dropdown. An opened file (which is not in the list)
+ * simply starts the walk at the first built-in.
+ */
+function stepBuiltInScene(delta: number) {
+  const names = Object.keys(BUILT_IN_SCENES)
+  if (names.length === 0) return
+  const current = names.indexOf(exampleSelect.value)
+  const next = current < 0 ? 0 : (current + delta + names.length) % names.length
+  loadBuiltIn(names[next])
+}
+
 function rebuildScene(fitCamera: boolean) {
   const prevSelected = new Set(selection.ids)
   const built = buildScene(currentNodes, {
@@ -1970,6 +2056,8 @@ function rebuildScene(fitCamera: boolean) {
   )
 
   const mediaCount = currentMedia?.index.entries.length ?? 0
+  // Kept for the wrist panel, which has no HUD line to read it off.
+  drawnCount = built.drawnCount
   const notes = [
     `${currentNodes.length} node(s)`,
     // Called out rather than left to be inferred from a shrunken "drawn": a
@@ -4095,6 +4183,7 @@ renderer.setAnimationLoop(() => {
     // The tag overlay is skipped (a DOM canvas the headset never sees) and the
     // selected node's label goes into the scene as a billboard instead.
     updateXrLabel()
+    updateXrPanel()
     renderer.render(scene, camera)
   } else if (eyes) {
     const height = window.innerHeight

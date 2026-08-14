@@ -1973,16 +1973,54 @@ something to decide now).
      the lever, and InstancedMesh batching — which would help the desktop web
      app just as much — is a separate project, not something immersive mode
      should drag in unannounced.
-   - PENDING, in the order agreed: an in-VR control panel (Channels transport,
-     draw limit, scene picker — a wrist-anchored quad with ray hit-testing,
-     built in-house like the CSV tokenizer and zip reader rather than taking
-     on three-mesh-ui); passthrough AR (`immersive-ar` on Quest 3, small once
-     the rig exists, and the demo that impresses people); then hand tracking,
-     comfort options (snap turn, vignette) and authoring gestures — Draw Mode
-     with a controller is the natural one, since `drawMode.ts`/`drawPlane.ts`
-     already take a ray. Also untried: real-device testing, for which
-     `adb reverse tcp:5173 tcp:5173` makes the dev server a secure context
-     inside the headset browser with no certificate work.
+   - **v1 CONFIRMED ON HARDWARE** by Jeff on his Quest 3, 2026-08-14: "works
+     like a champ."
+   - **P2, the wrist control panel** (shipped 2026-08-14, immediately after):
+     a quad on the LEFT grip that the other hand points at, standing in for
+     the DOM HUD a session cannot see. `src/ui/xrPanelModel.ts` is the layout
+     and hit-testing (pure, no THREE and no DOM); `src/render/xrPanel.ts`
+     paints it and turns ray hits into actions.
+     - Why a wrist panel: always findable (look at your hand), never occluding
+       the scene being inspected, and needing no summon gesture. It is
+       BILLBOARDED to the head rather than rigidly mounted, since half the
+       poses a wrist turns through would otherwise read it edge-on. Left X
+       puts it away and brings it back — the screengrab-chrome rule of item 6h,
+       in a headset.
+     - What earns a place: things you cannot otherwise do from inside the
+       headset — the Channels transport (stop/play/scrub), the draw limit (the
+       frame-rate lever, `\`'s own factors so the panel and the key agree), the
+       built-in scene walk, and two framings (Room view at the spike's 20 m,
+       Tabletop at 1.5 m, each placed at a distance proportional to its size).
+       Plus the selection readout, which is the inspector reduced to a glance.
+       Everything that EDITS node data stays out: that is the authoring phase,
+       and a wrist panel is a poor place to discover it.
+     - A scene with no Channels shows no transport at all, rather than an inert
+       Play button — there is no tooltip in a headset to explain a dead
+       control.
+     - The panel takes the trigger when the ray is on it and the scene never
+       sees that press (`XrPointerTarget` in xrSession.ts): it is to the ray
+       what the DOM HUD is to the mouse. The pointing hand's laser also stops
+       AT the panel, since a beam that carries on through the button reads as
+       missing it.
+     - Repaints only when a signature of what it displays changes — the
+       billboard label's single-entry cache rule, generalised.
+     - A Mesh, not a Sprite: a mesh's vertices go through the model-view matrix
+       so its size lands in metres exactly as its position does. The Sprite
+       trap noted above is the reason that is worth stating.
+     - Three faults the PICTURE caught after 28 measured checks had passed
+       (the dumped panel texture is the only way to judge this without a
+       headset): the Fit row sat flush with the panel's rounded edge and drew
+       clipped; the header and the scene row printed the same scene name twice;
+       and the transport used ▶/❙❙/■ text glyphs, whose font coverage a headset
+       browser cannot be assumed to have — they are canvas PATHS now, and the
+       scene stepper took ‹ › so a solid triangle never appears twice meaning
+       two different things.
+   - PENDING, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
+     small once the rig exists, and the demo that impresses people) — Jeff
+     deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
+     hand tracking, comfort options (snap turn, vignette) and authoring
+     gestures — Draw Mode with a controller is the natural one, since
+     `drawMode.ts`/`drawPlane.ts` already take a ray.
 10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
     through step 8 — the two remaining desktop features, by conscious
     choice, so their absence is a decision and not a gap):

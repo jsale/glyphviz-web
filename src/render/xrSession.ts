@@ -60,14 +60,34 @@ const HAND_COLORS: Record<XrHand, THREE.Color> = {
 }
 
 export interface XrCallbacks {
-  /** Trigger pulled: the ray is already in world space. */
+  /** Trigger pulled at the scene: the ray is already in world space. */
   onPick(raycaster: THREE.Raycaster, hand: XrHand): void
   /** A/X: what the scene should be framed to, or null for an empty scene. */
   fitTarget(): { center: THREE.Vector3; extent: number } | null
   /** B/Y. */
   onSecondary(): void
+  /** Left X — put the wrist panel away, and bring it back. */
+  onTogglePanel(): void
   onStart(): void
   onEnd(): void
+}
+
+/**
+ * A surface the controller ray can drive — the wrist panel, and nothing else
+ * so far. A hand whose ray is on it does NOT pick the scene: the panel is to
+ * the ray what the DOM HUD is to the mouse, and a press meant for a button
+ * must not also select whatever glyph is behind it.
+ */
+export interface XrPointerTarget {
+  /** Turn to face the viewer, before this frame's hit test reads the pose. */
+  orient(headWorld: THREE.Vector3): void
+  /** World-unit distance to the hit, or null for a miss. */
+  hover(raycaster: THREE.Raycaster): number | null
+  /** Trigger pressed while hovering; true if it landed on something. */
+  press(): boolean
+  drag(raycaster: THREE.Raycaster): void
+  release(): void
+  clearHover(): void
 }
 
 /** Per-hand gamepad reading for one frame. */
@@ -125,6 +145,10 @@ export class XrRig {
   /** Head pose in WORLD space, for anything that aims off the camera
    *  (the key light, the backdrop's distance sizing). */
   readonly headProxy = new THREE.Object3D()
+  /** Where the wrist panel hangs. Re-parented onto the LEFT grip as soon as
+   *  handedness resolves — which is only once a controller connects, so it
+   *  starts on the rig and moves itself. */
+  readonly panelAnchor = new THREE.Group()
   state: XrRigState = identityRig()
 
   private readonly renderer: THREE.WebGLRenderer
@@ -144,6 +168,12 @@ export class XrRig {
   private prevPrimary: Record<XrHand, boolean> = { left: false, right: false }
   private prevSecondary: Record<XrHand, boolean> = { left: false, right: false }
   private pendingFit = false
+  private pendingFitMetres: number | undefined
+  private pointer: XrPointerTarget | null = null
+  /** The hand hovering the pointer target this frame, and the one holding a
+   *  press on it — a drag belongs to the hand that started it. */
+  private pointerHand: XrHand | null = null
+  private pressHand: XrHand | null = null
   /** False until three has written a real viewer pose into the camera — it
    *  does that inside render(), so the first presenting frame has none yet. */
   private posed = false
@@ -166,6 +196,7 @@ export class XrRig {
     this.callbacks = callbacks
     this.group.name = 'xr-rig'
     scene.add(this.group)
+    this.group.add(this.panelAnchor)
 
     renderer.xr.enabled = true
     for (let i = 0; i < 2; i++) {
@@ -181,6 +212,8 @@ export class XrRig {
         const marker = grip.children[0] as THREE.Mesh | undefined
         const material = marker?.material as THREE.MeshBasicMaterial | undefined
         material?.color.copy(color)
+        // The panel rides the left wrist, which is only identifiable now.
+        if (handedness === 'left') grip.add(this.panelAnchor)
       })
       grip.add(this.makeMarker())
       this.group.add(ray, grip)
@@ -230,9 +263,21 @@ export class XrRig {
     void this.renderer.xr.getSession()?.end()
   }
 
-  /** Re-frame the scene in front of the viewer (A/X, and every scene load). */
-  requestFit(): void {
+  /**
+   * Re-frame the scene in front of the viewer (A, the panel's Fit row, and
+   * every scene load). `targetMetres` is how wide the scene should read —
+   * omitted, it takes the spike's 20 m default.
+   */
+  requestFit(targetMetres?: number): void {
     this.pendingFit = true
+    this.pendingFitMetres = targetMetres
+  }
+
+  /** Route the controller ray to a surface (the wrist panel) before the scene. */
+  setPointerTarget(target: XrPointerTarget | null): void {
+    this.pointer = target
+    this.pointerHand = null
+    this.pressHand = null
   }
 
   /**
@@ -354,6 +399,10 @@ export class XrRig {
     }
 
     this.applyState()
+    // Pointer routing runs on the rig just applied, so a hover reads this
+    // frame's geometry, and BEFORE the buttons, which need to know whether the
+    // ray is on the panel before deciding what a trigger means.
+    this.updatePointer(hands)
     this.fireButtons(hands)
   }
 
@@ -385,8 +434,63 @@ export class XrRig {
       extent: target.extent,
       headPos,
       headYaw,
+      targetMetres: this.pendingFitMetres,
+      // A tabletop model belongs within reach, not 15 m away: the placement
+      // distance follows the size it is being placed at, so the same fit reads
+      // as "the scene, arranged in front of me" at either scale.
+      forward: this.pendingFitMetres === undefined ? undefined : this.pendingFitMetres * 0.75,
+      down: this.pendingFitMetres === undefined ? undefined : this.pendingFitMetres * 0.15,
     })
+    this.pendingFitMetres = undefined
     this.applyState()
+  }
+
+  /**
+   * Which hand (if either) is pointing at the wrist panel, and how long its
+   * ray should draw. The ray stops at the panel it is touching — a laser that
+   * carries on through the button being pressed reads as missing it.
+   */
+  private updatePointer(hands: Partial<Record<XrHand, HandInput>>): void {
+    if (!this.pointer) return
+    this.pointer.orient(this.headProxy.position)
+    // A drag belongs to the hand that started it; the other hand cannot steal
+    // the hover out from under it mid-slide.
+    const order: XrHand[] = this.pressHand ? [this.pressHand] : ['right', 'left']
+    let hovered: XrHand | null = null
+    for (const hand of order) {
+      const input = hands[hand]
+      if (!input) continue
+      const distance = hovered === null ? this.pointer.hover(this.rayFor(input)) : null
+      this.setRayLength(input, distance)
+      if (distance !== null) hovered = hand
+    }
+    if (hovered === null && this.pressHand === null) this.pointer.clearHover()
+    this.pointerHand = hovered
+  }
+
+  /**
+   * World-space ray for a hand's target-ray space, shared by the panel hit
+   * test and scene picking.
+   *
+   * LinkPicker derives its click tolerance from a camera's field of view, so
+   * the raycaster carries the scene camera: in immersive mode that fov no
+   * longer describes a real viewport, but it keeps a link's pick width the
+   * same ANGULAR size it has on the desktop, which is what it is for.
+   */
+  private rayFor(input: HandInput): THREE.Raycaster {
+    const m = input.ray.matrixWorld
+    const origin = new THREE.Vector3().setFromMatrixPosition(m)
+    const direction = new THREE.Vector3(0, 0, -1).transformDirection(m)
+    this.raycaster.set(origin, direction)
+    this.raycaster.camera = this.camera
+    return this.raycaster
+  }
+
+  /** Shorten a hand's laser to what it is touching (world units → metres). */
+  private setRayLength(input: HandInput, distance: number | null): void {
+    const line = input.ray.children.find((c) => (c as THREE.Line).isLine) as THREE.Line | undefined
+    if (!line) return
+    line.scale.z = distance === null ? RAY_LENGTH_M : Math.max(0.02, distance / this.state.scale)
   }
 
   /**
@@ -425,11 +529,29 @@ export class XrRig {
       const input = hands[hand]
       if (!input) continue
       const trigger = input.trigger
-      if (this.prevTrigger[hand] < TRIGGER_THRESHOLD && trigger >= TRIGGER_THRESHOLD) {
-        this.pick(input, hand)
-      }
+      const down = trigger >= TRIGGER_THRESHOLD
+      const wasDown = this.prevTrigger[hand] >= TRIGGER_THRESHOLD
       this.prevTrigger[hand] = trigger
-      if (input.primary && !this.prevPrimary[hand]) this.requestFit()
+      if (down && !wasDown) {
+        // The panel takes the press when the ray is on it, and the scene never
+        // sees it — a button click must not also select the glyph behind it.
+        if (this.pointer && this.pointerHand === hand && this.pointer.press()) {
+          this.pressHand = hand
+        } else {
+          this.pick(input, hand)
+        }
+      } else if (down && this.pressHand === hand) {
+        this.pointer?.drag(this.rayFor(input))
+      } else if (!down && this.pressHand === hand) {
+        this.pointer?.release()
+        this.pressHand = null
+      }
+      // A/X: right re-fits, left puts the wrist panel away — the panel is on
+      // the left hand, so its switch belongs to that hand too.
+      if (input.primary && !this.prevPrimary[hand]) {
+        if (hand === 'left') this.callbacks.onTogglePanel()
+        else this.requestFit()
+      }
       this.prevPrimary[hand] = input.primary
       if (input.secondary && !this.prevSecondary[hand]) this.callbacks.onSecondary()
       this.prevSecondary[hand] = input.secondary
@@ -437,16 +559,7 @@ export class XrRig {
   }
 
   private pick(input: HandInput, hand: XrHand): void {
-    const m = input.ray.matrixWorld
-    const origin = new THREE.Vector3().setFromMatrixPosition(m)
-    const direction = new THREE.Vector3(0, 0, -1).transformDirection(m)
-    this.raycaster.set(origin, direction)
-    // LinkPicker derives its click tolerance from a camera's field of view, so
-    // hand it the scene camera: in immersive mode that fov no longer describes
-    // a real viewport, but it keeps a link's pick width the same ANGULAR size
-    // it has on the desktop, which is what the tolerance is for.
-    this.raycaster.camera = this.camera
-    this.callbacks.onPick(this.raycaster, hand)
+    this.callbacks.onPick(this.rayFor(input), hand)
   }
 
   private makeRay(): THREE.Line {
