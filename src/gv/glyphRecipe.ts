@@ -16,8 +16,9 @@
 
 import { roundHalfToEven } from './channels'
 import { blankNode } from './createNode'
+import { LINEAR_PLACEMENT_AXES, ALL_AXES_LINEAR } from './placementAxes'
 import type { GvNode, Rgba } from './types'
-import { Geometry, Topo } from './types'
+import { DEFAULT_TOPO_SCALE, Geometry, Topo, TOPO_SCALE_ANTZ } from './types'
 
 /** How a level's items are laid out. Values are the desktop's own strings. */
 export const Dist = {
@@ -70,6 +71,16 @@ export interface LevelSpec {
   /** This level's own topology — i.e. how ITS children will be placed. */
   topo: number
   ratio: number
+
+  /**
+   * Topology Scale of THIS level's nodes — the size of the coordinate system
+   * their children are placed in (`GvNode.topoScale`). While `topoScaleAuto`
+   * is set the stored number is ignored and `suggestedTopoScale` supplies the
+   * value instead; see `effectiveTopoScale` for why that is the default.
+   */
+  topoScale: number
+  topoScaleAuto: boolean
+
   distMode: DistMode
 
   /** Linear: spacing between items, and which axis they run along. */
@@ -115,6 +126,8 @@ export function levelSpec(overrides: Partial<LevelSpec> = {}): LevelSpec {
     geometry: Geometry.SphereSolid,
     topo: Topo.Sphere,
     ratio: 0.3,
+    topoScale: DEFAULT_TOPO_SCALE,
+    topoScaleAuto: true,
     distMode: Dist.Angular,
     distStep: 2,
     distAxis: 0,
@@ -189,6 +202,47 @@ export function addedLevelSpec(levelIndex: number): LevelSpec {
   })
 }
 
+// ---------------------------------------------------------- Topology Scale fit
+//
+// A recipe describes its child placement in ONE vocabulary — Angular hands the
+// next level translate_x = 0…360 — but the PARENT's topology decides whether
+// translate_x means degrees or world units (LINEAR_PLACEMENT_AXES). Under
+// Sphere/Torus/Cylinder that 0…360 is a full revolution; under
+// Cube/Pin/Plane/None it is 360 WORLD UNITS, which throws the children hundreds
+// of parent-radii away — off screen, with no clue where they went. That
+// mismatch is exactly what `topoScale` exists to reconcile, so rather than make
+// every Composer user discover the field the hard way, a level whose scale the
+// user has not touched picks the value that keeps its own children in frame.
+
+/**
+ * The Topology Scale that keeps `levelIndex`'s children next to it, given how
+ * the NEXT level asks to be distributed.
+ *
+ * `TOPO_SCALE_ANTZ` (1/180) is the answer whenever a 0…360 angular sweep is
+ * about to be read as a distance: it is the convention under which a linear
+ * axis spans the parent's own extent, so the same degree-authored numbers land
+ * on the parent's surface instead of far past it. Everything else — including
+ * any level with no children to place — stays at 1.0, so a design that was
+ * already correct is left alone.
+ */
+export function suggestedTopoScale(recipe: GlyphRecipe, levelIndex: number): number {
+  if (levelIndex + 1 >= recipe.levels.length) return DEFAULT_TOPO_SCALE // leaf
+  if (recipe.levels[levelIndex + 1].distMode !== Dist.Angular) return DEFAULT_TOPO_SCALE
+  const topo = recipe.levels[levelIndex].topo
+  const linearX = (LINEAR_PLACEMENT_AXES[topo] ?? ALL_AXES_LINEAR)[0]
+  return linearX ? TOPO_SCALE_ANTZ : DEFAULT_TOPO_SCALE
+}
+
+/**
+ * The Topology Scale `generateNodes` will actually stamp on `levelIndex` — the
+ * user's number once they have taken the level off auto, the suggestion until
+ * then.
+ */
+export function effectiveTopoScale(recipe: GlyphRecipe, levelIndex: number): number {
+  const spec = recipe.levels[levelIndex]
+  return spec.topoScaleAuto ? suggestedTopoScale(recipe, levelIndex) : spec.topoScale
+}
+
 /**
  * How many nodes `generateNodes` would emit, without emitting them — the sum of
  * the running product of the levels' counts.
@@ -256,6 +310,7 @@ function genLevel(
   if (levelIndex >= recipe.levels.length) return
   const spec = recipe.levels[levelIndex]
   const positions = distribute(spec, levelIndex === 0)
+  const topoScale = effectiveTopoScale(recipe, levelIndex)
 
   for (const [i, position] of positions.entries()) {
     const nodeId = startId + nodes.length
@@ -273,6 +328,7 @@ function genLevel(
     node.translate = { x: position[0], y: position[1], z: position[2] }
     node.rotate = { x: spec.rotateX, y: spec.rotateY, z: spec.rotateZ }
     node.ratio = spec.ratio
+    node.topoScale = topoScale
     nodes.push(node)
 
     genLevel(recipe, levelIndex + 1, nodeId, spec.topo, startId, branchLevel + 1, nodes)
@@ -375,6 +431,8 @@ interface RecipeJsonLevel {
   geometry?: number
   topo?: number
   ratio?: number
+  topo_scale?: number
+  topo_scale_auto?: boolean
   dist_mode?: string
   dist_step?: number
   dist_axis?: number
@@ -404,6 +462,8 @@ export function recipeToJson(recipe: GlyphRecipe): unknown {
         geometry: spec.geometry,
         topo: spec.topo,
         ratio: spec.ratio,
+        topo_scale: spec.topoScale,
+        topo_scale_auto: spec.topoScaleAuto,
         dist_mode: spec.distMode,
         dist_step: spec.distStep,
         dist_axis: spec.distAxis,
@@ -458,6 +518,12 @@ export function recipeFromJson(raw: unknown): GlyphRecipe {
       geometry: sd.geometry ?? Geometry.SphereSolid,
       topo: sd.topo ?? Topo.Sphere,
       ratio: sd.ratio ?? 0.3,
+      // Templates written before Topology Scale existed carry neither key.
+      // They load onto auto, which is what fixes the ones whose children were
+      // flying off; the stored 1.0 is what auto falls back to anyway, so
+      // nothing else moves.
+      topoScale: sd.topo_scale ?? DEFAULT_TOPO_SCALE,
+      topoScaleAuto: sd.topo_scale_auto ?? true,
       distMode,
       distStep: sd.dist_step ?? 2,
       distAxis: sd.dist_axis ?? 0,

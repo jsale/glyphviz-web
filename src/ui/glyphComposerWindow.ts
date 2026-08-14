@@ -34,23 +34,22 @@
 //     paths, but the JSON is byte-compatible in both directions — see
 //     `recipeToJson` / `recipeFromJson`.
 //
-// And one divergence that IS a behaviour choice, called out as such: the
-// preview camera HOLDS its position across re-previews. The desktop's mini
-// viewport re-frames on every one, because `_do_preview` calls
-// `Viewport.set_nodes` and that method resets `_cam_target` / `_cam_distance`
-// and rebuilds `_cameras` — which is right for loading a scene, the job it was
-// written for, but here it fires 350 ms after every keystroke, so an orbited
-// preview snaps back the moment a value is nudged and a scale or spacing change
-// cannot be judged against the view it was made in. Holding the camera is the
-// simplest default that makes Auto-preview usable; a Fit View button puts the
-// desktop's behaviour one click away, and the first preview of a design always
-// frames it.
+// The preview camera HOLDS its position across re-previews, and re-framing is
+// the explicit Reset View button. That began here as a called-out divergence:
+// the desktop's `_do_preview` called `Viewport.set_nodes`, which resets
+// `_cam_target` / `_cam_distance` — right when a scene is opened, wrong 350 ms
+// after every keystroke, since an orbited preview snapped back the moment a
+// value was nudged and a scale or spacing change could not be judged against
+// the view it was made in. Desktop 88091e1 (2026-08-13) adopted the same
+// behaviour and the same button, so the two now agree; the divergence note is
+// kept as history rather than as a difference to reconcile.
 
 import {
   addedLevelSpec,
   defaultRecipe,
   Dist,
   DIST_LABELS,
+  effectiveTopoScale,
   generateNodes,
   NONROOT_DIST_MODES,
   projectedNodeCount,
@@ -58,10 +57,23 @@ import {
   recipeToJson,
   ROOT_DIST_MODES,
 } from '../gv/glyphRecipe'
-import type { DistMode, GlyphRecipe, RecipeColor } from '../gv/glyphRecipe'
-import { GEOMETRY_NAMES, Geometry, TOPO_NAMES } from '../gv/types'
+import type { DistMode, GlyphRecipe, LevelSpec, RecipeColor } from '../gv/glyphRecipe'
+import {
+  DEFAULT_TOPO_SCALE,
+  GEOMETRY_NAMES,
+  Geometry,
+  TOPO_NAMES,
+  TOPO_SCALE_ANTZ,
+} from '../gv/types'
 import { FloatWindow, windowRow } from './floatWindow'
 import { GlyphPreview } from './glyphPreview'
+import {
+  sliderToTopoScale,
+  TOPO_SCALE_MAX,
+  TOPO_SCALE_MIN,
+  TOPO_SCALE_SLIDER_MAX,
+  topoScaleToSlider,
+} from './topoScale'
 
 /** Auto-preview debounce — `_preview_timer.start(350)`. */
 const PREVIEW_DELAY_MS = 350
@@ -113,6 +125,11 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return Object.assign(document.createElement(tag), props)
 }
 
+/** Six decimals, trailing zeros trimmed — the desktop spin box's own display. */
+function fmt(value: number): string {
+  return Number(value.toFixed(6)).toString()
+}
+
 function hex(color: RecipeColor): string {
   const part = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')
   return `#${part(color[0])}${part(color[1])}${part(color[2])}`
@@ -142,6 +159,11 @@ export class GlyphComposerWindow {
   private loading = false
   /** The three scale spinboxes of the form on screen — see Lock X/Y/Z. */
   private scaleFields: HTMLInputElement[] = []
+  /** The Topo Scale row's four controls, rebuilt with every form. */
+  private topoScaleBox: HTMLInputElement | null = null
+  private topoScaleSlider: HTMLInputElement | null = null
+  private topoScaleAuto: HTMLInputElement | null = null
+  private topoScaleNote: HTMLDivElement | null = null
 
   constructor(host: GlyphComposerHost) {
     this.host = host
@@ -261,13 +283,16 @@ export class GlyphComposerWindow {
       title: 'Re-draw the preview from the current parameters.',
     })
     previewNow.addEventListener('click', () => this.doPreview())
-    const fitView = el('button', {
+    const resetView = el('button', {
       type: 'button',
-      textContent: 'Fit View',
-      title: 'Re-frame the preview camera on the whole glyph.',
+      textContent: 'Reset View',
+      title:
+        'Re-frame the preview camera on the whole glyph.\n' +
+        'Otherwise the camera stays exactly where you left it, so you can zoom\n' +
+        'in on a detail and keep editing without being pulled back.',
     })
-    fitView.addEventListener('click', () => this.preview.refit())
-    previewButtons.append(previewNow, fitView)
+    resetView.addEventListener('click', () => this.preview.refit())
+    previewButtons.append(previewNow, resetView)
     footer.appendChild(previewButtons)
 
     const insertButton = el('button', {
@@ -419,8 +444,13 @@ export class GlyphComposerWindow {
     this.form.appendChild(
       windowRow(
         'Topology',
+        // Routed apart from the other combos: changing the topology changes
+        // what this node's children's translate values MEAN — degrees under
+        // Sphere, world units under Cube — so a level still on Auto has to
+        // re-fit BEFORE the debounced preview redraws, not 350 ms after it.
         this.idSelect(TOPO_ITEMS, spec.topo, (value) => {
           spec.topo = value
+          this.reapplyAutoTopoScale()
         }),
         'Topology of THIS node — determines how its children are placed.',
       ),
@@ -434,6 +464,7 @@ export class GlyphComposerWindow {
         'Torus tube ratio / other topology-specific size.',
       ),
     )
+    this.buildTopoScaleRows(spec)
 
     // --- Placement ---
     this.form.appendChild(el('div', { className: 'composer-heading', textContent: 'Placement' }))
@@ -662,6 +693,167 @@ export class GlyphComposerWindow {
     this.loading = false
   }
 
+  // -------------------------------------------------------- Topology Scale row
+
+  /**
+   * The "Topo Scale" row — number box + log slider + 1:1 / ANTz presets — and
+   * its Auto checkbox, sitting directly under Topology because they are the
+   * same subject: Topology says how this node lays its children out, Topo
+   * Scale says how big that layout's coordinate system is. The desktop's
+   * `_build_topo_scale_rows`, and the Properties panel's own row here.
+   *
+   * Sharing `topoScale.ts`'s range and slider mapping with that panel is
+   * deliberate on both sides: the same drag has to mean the same thing in both
+   * places, since a glyph composed here is edited there afterwards.
+   *
+   * Every control writes STRAIGHT into the LevelSpec. Nothing reads the box
+   * back — it shows six decimals, and a read-back would quietly round the ANTz
+   * preset from 1/180 to 0.005556 on the next preview tick.
+   */
+  private buildTopoScaleRows(spec: LevelSpec): void {
+    const tip =
+      'Size of the coordinate system this node places its children in.\n' +
+      'Multiplies only the translate axes its Topology reads as a DISTANCE —\n' +
+      'angular axes (longitude/latitude, orbit angle) are never touched, so no\n' +
+      'value can distort a circular layout.\n\n' +
+      '1.0 = a translate unit is a world unit.\n' +
+      `${TOPO_SCALE_ANTZ.toFixed(6)} = ANTz (360 units across a cube facet).`
+
+    const box = el('input', { type: 'number' })
+    box.step = 'any'
+    box.min = String(TOPO_SCALE_MIN)
+    box.max = String(TOPO_SCALE_MAX)
+    box.title = tip
+    box.addEventListener('change', () => {
+      const raw = Number(box.value)
+      if (!Number.isFinite(raw)) {
+        this.refreshTopoScaleRow()
+        return
+      }
+      // A typed value is the user taking the level off Auto — the control they
+      // reached for IS the decision, so don't make them find the checkbox.
+      this.setTopoScale(Math.min(Math.max(raw, TOPO_SCALE_MIN), TOPO_SCALE_MAX))
+    })
+
+    const slider = el('input', { type: 'range', className: 'ins-toposcale-slider' })
+    slider.min = '0'
+    slider.max = String(TOPO_SCALE_SLIDER_MAX)
+    slider.step = '1'
+    slider.title = tip
+    // 'input' rather than 'change': a drag should show as it happens, and the
+    // preview it schedules is debounced anyway.
+    slider.addEventListener('input', () =>
+      this.setTopoScale(sliderToTopoScale(Number(slider.value))),
+    )
+
+    const preset = (label: string, value: number, title: string) => {
+      const button = el('button', { type: 'button', className: 'ins-preset', textContent: label })
+      button.title = title
+      // The EXACT constant rather than a trip through the six-decimal box.
+      button.addEventListener('click', () => this.setTopoScale(value))
+      return button
+    }
+
+    const stack = el('div', { className: 'ins-toposcale' })
+    const line = el('div', { className: 'ins-toposcale-line' })
+    line.append(
+      box,
+      preset(
+        '1:1',
+        DEFAULT_TOPO_SCALE,
+        '1.0 — one translate unit is one world unit.\n' +
+          "GlyphViz's own convention, and what a node with no topo_scale\n" +
+          'column loads as.',
+      ),
+      preset(
+        'ANTz',
+        TOPO_SCALE_ANTZ,
+        `ANTz convention (${TOPO_SCALE_ANTZ.toFixed(6)} = 1/180): a linear axis\n` +
+          "spans the parent's own extent, so 360 units reaches across a cube\n" +
+          'facet. Use this when children authored in degrees are being read as\n' +
+          'world units and have flown off into the distance.',
+      ),
+    )
+    stack.append(line, slider)
+    this.form.appendChild(windowRow('Topo Scale', stack, tip))
+
+    const auto = el('input', { type: 'checkbox', checked: spec.topoScaleAuto })
+    const autoRow = el('label', {
+      className: 'sel-check',
+      title:
+        "Pick the scale that keeps this node's children in frame, from the way\n" +
+        'the next level asks to be distributed: an Angular ring hands them\n' +
+        '0…360, which a Sphere or Torus reads as a full revolution but a Cube,\n' +
+        'Pin, Plane or None reads as 360 WORLD UNITS — far off screen.\n' +
+        'Touching the value or a preset above turns Auto off and the number\n' +
+        'becomes yours.',
+    })
+    autoRow.append(auto, document.createTextNode('Auto'))
+    auto.addEventListener('change', () => {
+      if (this.loading) return
+      const current = this.recipe.levels[this.currentLevel]
+      // Leaving Auto keeps what was on screen, so the value doesn't jump the
+      // instant the user takes the wheel.
+      if (!auto.checked) current.topoScale = effectiveTopoScale(this.recipe, this.currentLevel)
+      current.topoScaleAuto = auto.checked
+      this.refreshTopoScaleRow()
+      this.onChange()
+    })
+    this.form.appendChild(autoRow)
+
+    // One line, and allowed to be clipped rather than to widen the form: it is
+    // a reminder of what the row is currently doing, and the checkbox's own
+    // tooltip carries the full explanation.
+    const note = el('div', { className: 'composer-note' })
+    this.form.appendChild(note)
+
+    this.topoScaleBox = box
+    this.topoScaleSlider = slider
+    this.topoScaleAuto = auto
+    this.topoScaleNote = note
+    this.refreshTopoScaleRow()
+  }
+
+  /**
+   * Push the level's effective scale into the box and slider, and refresh the
+   * note. Called on form build, whenever Auto is toggled, and after any edit
+   * that could move the suggestion (the Topology combo).
+   */
+  private refreshTopoScaleRow(): void {
+    const box = this.topoScaleBox
+    const slider = this.topoScaleSlider
+    const note = this.topoScaleNote
+    if (!box || !slider || !note) return
+    const spec = this.recipe.levels[this.currentLevel]
+    const value = effectiveTopoScale(this.recipe, this.currentLevel)
+    box.value = fmt(value)
+    slider.value = String(topoScaleToSlider(value))
+    note.textContent = !spec.topoScaleAuto
+      ? 'Manual — re-check Auto to re-fit it.'
+      : value === DEFAULT_TOPO_SCALE
+        ? '1:1 — this topology reads the child sweep as angles.'
+        : 'Fitted to ANTz — child sweep would read as a distance.'
+  }
+
+  /** Store an explicit value, taking the level off Auto, and re-preview. */
+  private setTopoScale(value: number): void {
+    if (this.loading) return
+    const spec = this.recipe.levels[this.currentLevel]
+    spec.topoScale = value
+    spec.topoScaleAuto = false
+    if (this.topoScaleAuto) this.topoScaleAuto.checked = false
+    this.refreshTopoScaleRow()
+    this.onChange()
+  }
+
+  /**
+   * A level on Auto has no stored value of its own, so its displayed number
+   * has to be recomputed after any edit that moves the suggestion.
+   */
+  private reapplyAutoTopoScale(): void {
+    if (this.recipe.levels[this.currentLevel]?.topoScaleAuto) this.refreshTopoScaleRow()
+  }
+
   /**
    * A numeric spinbox writing straight into the spec through `apply`.
    * `relabel` also refreshes the level list row (Count appears in its label);
@@ -782,9 +974,11 @@ export class GlyphComposerWindow {
 
   /**
    * Draw the recipe. `auto` marks the debounced call, which is the one that
-   * fires without being asked for — see AUTO_PREVIEW_LIMIT.
+   * fires without being asked for — see AUTO_PREVIEW_LIMIT. `resetCamera`
+   * re-frames instead of holding the camera, which only a freshly loaded
+   * template asks for (Reset View goes straight to the preview).
    */
-  private doPreview(auto = false): void {
+  private doPreview(auto = false, resetCamera = false): void {
     if (!this.window.isOpen) return
 
     // A recipe grows multiplicatively with depth, so one more level turns
@@ -802,7 +996,11 @@ export class GlyphComposerWindow {
     const nodes = generateNodes(this.recipe, { startId: 1 })
     // keepCamera: the Composer re-previews on every nudge, and a camera that
     // reset each time would make a scale or spacing change impossible to judge.
-    this.preview.setNodes(nodes, true)
+    // Composing is an edit-and-look loop; being yanked back to a distant
+    // overview on every keystroke makes close-up work impossible. Re-framing is
+    // an explicit act — the Reset View button, a freshly loaded template, and
+    // the first preview of all.
+    this.preview.setNodes(nodes, !resetCamera)
     this.info.textContent = `${nodes.length.toLocaleString()} node(s) across ${
       this.recipe.levels.length
     } level(s)`
@@ -838,7 +1036,9 @@ export class GlyphComposerWindow {
       this.nameInput.value = recipe.name
       this.refreshLevelList()
       this.buildForm(0)
-      this.doPreview()
+      // A different glyph entirely — frame it, rather than keeping a camera
+      // aimed at the one it replaced (desktop `_reset_preview_camera`).
+      this.doPreview(false, true)
       this.host.status(
         `Glyph Composer: loaded template "${recipe.name}" (${recipe.levels.length} level(s)).`,
       )

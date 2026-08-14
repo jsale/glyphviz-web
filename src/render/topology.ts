@@ -14,6 +14,7 @@
 // topo offset and its quaternion is child_local.
 
 import * as THREE from 'three'
+import { ALL_AXES_LINEAR, LINEAR_PLACEMENT_AXES } from '../gv/placementAxes'
 import type { GvNode } from '../gv/types'
 import { DEFAULT_TOPO_SCALE, NodeType, Topo } from '../gv/types'
 /** Rod topology spans 2 · ROD_HEIGHT_FACTOR · B (glyphviz_core geometry_data). */
@@ -21,79 +22,13 @@ import { ROD_HEIGHT_FACTOR } from './glyphGeometry'
 
 const DEG = Math.PI / 180
 
-// ---------------------------------------------------------------------------
-// Which of a child's translate_x/y/z each topology reads as a DISTANCE, and
-// which it reads as an angle (or as a parameter already proportional to the
-// parent's base radius, which is a distance that already tracks the parent's
-// size and so needs no further scaling).
-//
-// The parent's `topoScale` multiplies exactly the true axes below, and nothing
-// else. That is the whole implementation of the feature: every case in
-// topoOffset stays untouched, because scaling an axis before the math is
-// algebraically identical to scaling the distance term the math derives from
-// it — `radial = B + tz` becomes `B + k·tz`, `dist·n + tx·u` becomes
-// `dist·n + k·tx·u`, and so on. Keeping it to a pre-multiply is also what
-// guarantees the property the field exists for: an angular axis is never
-// touched, so no value of topoScale can disturb a circular layout.
-//
-// Per-topology reasoning for the false entries (desktop
-// topology.LINEAR_PLACEMENT_AXES, verbatim):
-//   Sphere/Point/Zsphere — tx/ty are longitude/latitude degrees.
-//   Torus/Ztorus         — tx/ty are orbital and tube angles.
-//   Cylinder/Zcylinder   — tx is the angle around the axis.
-//   Rod                  — ty is the angle around the axis; tx maps [0,180]
-//                          onto the rod's full rendered LENGTH, so it is
-//                          already expressed as a fraction of the parent's
-//                          size (ANTz's own normalization — the very
-//                          convention TOPO_SCALE_ANTZ generalizes).
-//   Zrod                 — same math as Zcylinder, so tx is the angle.
-//   Spiral               — tx is the helix angle AND drives the helical rise
-//                          as a fraction of B; both size-relative.
-// Anything absent (None, Plane, Video, Plot, Surface, and any unknown id,
-// which falls back to Cartesian placement) reads all three as distances.
-// ---------------------------------------------------------------------------
-
-/** [x, y, z] — true where the axis is a distance the parent's topoScale scales. */
-export type LinearAxes = readonly [boolean, boolean, boolean]
-
-const ALL_AXES_LINEAR: LinearAxes = [true, true, true]
-const NO_AXES_LINEAR: LinearAxes = [false, false, false]
-
-export const LINEAR_PLACEMENT_AXES: Readonly<Record<number, LinearAxes>> = {
-  [Topo.Cube]: [true, true, true], //       face u, face v, height off the face
-  [Topo.Sphere]: [false, false, true], //   lon, lat, altitude
-  [Topo.Torus]: [false, false, true], //    orbital angle, tube angle, tube offset
-  [Topo.Cylinder]: [false, true, true], //  angle, height, radial
-  [Topo.Pin]: [true, true, true], //        height, and two lateral offsets
-  [Topo.Rod]: [false, false, true], //      length fraction, angle, radial
-  [Topo.Point]: [false, false, true], //    lon, lat, distance from centre
-  [Topo.Plane]: [true, true, true],
-  [Topo.Zcube]: [true, true, true],
-  [Topo.Zsphere]: [false, false, true],
-  [Topo.Ztorus]: [false, false, true],
-  [Topo.Zcylinder]: [false, true, true],
-  [Topo.Zrod]: [false, true, true], //      same math as Zcylinder
-  [Topo.Spiral]: [false, true, true], //    helix angle, rise offset, radial
-  [Topo.Video]: [true, true, true],
-  [Topo.Plot]: [true, true, true],
-  [Topo.Surface]: [true, true, true],
-}
-
-/**
- * Which of a child's translate axes this parent reads as a distance — i.e.
- * which ones its topoScale multiplies.
- *
- * A World Grid parent returns all-false: grid children are exempt from
- * topoScale entirely, because the grid's rendered footprint is sized from the
- * same extents window their coordinates are read in, and scaling one without
- * the other would slide the frame out from under its children. A root (no
- * parent) is exempt too — its translate IS its world position, never a
- * topology offset.
- */
-export function linearPlacementAxes(parent: GvNode | null): LinearAxes {
-  if (parent === null || parent.type === NodeType.WorldGrid) return NO_AXES_LINEAR
-  return LINEAR_PLACEMENT_AXES[parent.topo] ?? ALL_AXES_LINEAR
-}
+// Which of a child's translate_x/y/z each topology reads as a DISTANCE lives in
+// gv/placementAxes.ts, with the per-topology reasoning — the Glyph Composer's
+// recipe model reads the same table to fit a level's Topology Scale, and that
+// model is THREE-free. Re-exported here because this is where the placement
+// math that consumes it lives, and where every existing import site points.
+export { LINEAR_PLACEMENT_AXES, linearPlacementAxes } from '../gv/placementAxes'
+export type { LinearAxes } from '../gv/placementAxes'
 
 /**
  * The parent's topoScale as it applies to a child, or 1.0 where the parent is

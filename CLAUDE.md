@@ -1195,6 +1195,81 @@ something to decide now).
         a real gizmo drag reading back as +180 under the ANTz scale with
         the other two axes pinned, a radial drag on a Sphere parent moving
         altitude alone, and a ratio edit raising no hint.
+   x. Glyph Composer: Topology Scale + the preview camera (shipped
+      2026-08-14, Jeff's request — a port of desktop `88091e1`, the two
+      frustrations he hit composing glyphs).
+      - TOPOLOGY SCALE. The Composer speaks ONE placement vocabulary — an
+        Angular level always hands the next one translate_x = 0…360 — but the
+        PARENT's topology decides whether that is degrees or world units.
+        Under Sphere/Torus/Cylinder it is a revolution; under
+        Cube/Pin/Plane/None it is 360 WORLD UNITS, which put the children
+        ~300× the parent's radius away, off screen with no clue where they
+        went. `topoScale` (6w) existed to reconcile exactly that, and nothing
+        in the Composer reached it.
+        - `LevelSpec` now carries `topoScale` + `topoScaleAuto`, stamped onto
+          generated nodes by `generateNodes`. `suggestedTopoScale` returns
+          TOPO_SCALE_ANTZ precisely when a 0…360 sweep is about to be read as
+          a distance (the CHILD level is Angular and `LINEAR_PLACEMENT_AXES`
+          marks that axis linear), and 1.0 otherwise — so a design that was
+          already correct is never touched. Measured in Chrome on the default
+          recipe under a Cube trunk: children at 300 world units become 1.94,
+          a 154× pull-in, and a Sphere trunk is left at 1.0.
+        - The per-level form gets a Topo Scale row directly under Ratio,
+          mirroring the Properties panel's (number box + log slider + 1:1 /
+          ANTz presets) plus an Auto checkbox, on by default. Touching the
+          value or a preset takes the level off Auto, because the control you
+          reached for IS the decision. A one-line note under the row says
+          which of the three states it is in.
+        - Nothing READS the box back — every control writes straight into the
+          LevelSpec — because the box shows six decimals and a read-back would
+          quietly round the ANTz preset from 1/180 to 0.005556 on the next
+          preview tick. Verified in the browser: the inserted node carries
+          0.005555555555555556.
+        - `LINEAR_PLACEMENT_AXES` moved from `render/topology.ts` to
+          `gv/placementAxes.ts` (re-exported, so no import site changed): the
+          recipe model reads the same table, and it is documented as pure
+          logic with no GL in it. The desktop makes the same split — the table
+          lives in the Qt-free `glyphviz_core/topology.py`, read by both the
+          recipe model and the viewport.
+        - THE GENERATOR gets the fit for free, and it matters there: its pool
+          is named ANGULAR_SAFE_TOPOS but contains Pin, which reads
+          translate_x as HEIGHT, so an angular level under a Pin parent was a
+          360-unit vertical smear. Pin is the only cause on either side. It
+          DID change previously generated art (the desktop measured 31% of a
+          200-design sample, pulling in 7.5×–117×) and Jeff asked for it
+          knowing that. No rng draw moved: re-dumping the vendored fixture
+          changed `topo_scale` and NOTHING else across all 5,236 nodes, so a
+          seed still names the same design, drawn at a size you can see.
+        - Parity: `dump_glyph_recipes.py` now walks EVERY topology id as the
+          parent of an angular level (a check on `LINEAR_PLACEMENT_AXES`
+          itself, not on a copy of it), plus manual values, a manual 1.0
+          overruling the fit, linear children asking for no fit, and a
+          four-level alternating chain; both dumps carry `topo_scale` and both
+          fixtures were regenerated. Verified to FAIL two ways — 13 cases
+          without the fit, 25 if every axis is treated as linear, which is the
+          half that pins the angular entries.
+      - PREVIEW CAMERA. This app already held the camera across re-previews
+        and had a Fit View button (a divergence called out when the Composer
+        shipped, 2026-07-28); desktop `88091e1` adopted the same behaviour and
+        the same button, so the two now agree and the note is history rather
+        than a difference. What was left to port is small: the button takes
+        the desktop's NAME, **Reset View**, and its wording; and loading a
+        template now RE-FRAMES, since it is a different glyph entirely rather
+        than one to keep an old camera aimed at. The desktop's other half —
+        its `set_nodes` 50-unit framing floor leaving a composed glyph a speck
+        — has no counterpart, `frameCamera` having always framed off the real
+        extent.
+      - Driven in Chrome, 28 measured checks: the row's layout, order and
+        that it does not overflow the form; the presets rendering as styled
+        buttons rather than raw browser ones (the Draw Mode lesson from 6u);
+        every state of the fit and its note; the 300 → 1.94 measurement above
+        and its reverse through the 1:1 preset; a typed 0.25 stored verbatim;
+        and the camera proved by PIXELS — orbit the preview, edit a parameter
+        back to the same design, and the frame is byte-identical to the
+        orbited view rather than to the framed one, with Reset View returning
+        it exactly. Plus an end-to-end generator diff: seed 2147483646 at five
+        levels inserts 469 nodes with 42 fitted Pins, the vendored desktop
+        fixture's own numbers. Console clean.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -1805,6 +1880,8 @@ something to decide now).
       `Channel_Parameters_Example`, whose CSV that commit regenerated.
     - ~~The 0.2 render scale floor is opt-in, default OFF~~ (desktop
       `6d82d68`) — **shipped 2026-08-13, see roadmap 6v.**
+    - ~~Glyph Composer Topology Scale + preview camera~~ (desktop `88091e1`,
+      landed after this survey) — **shipped 2026-08-14, see roadmap 6x.**
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
       already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
       the desktop had none for — but the desktop's crop-not-stretch rule

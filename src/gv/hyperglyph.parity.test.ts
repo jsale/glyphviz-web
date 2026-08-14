@@ -47,6 +47,7 @@ interface FixtureNode {
   rotate_rate_x: number
   rotate_rate_y: number
   rotate_rate_z: number
+  topo_scale: number
 }
 
 interface FixtureCase {
@@ -103,6 +104,10 @@ function checkNode(got: GvNode, want: FixtureNode, where: string): void {
     ['rotateRate.x', got.rotateRate.x, want.rotate_rate_x],
     ['rotateRate.y', got.rotateRate.y, want.rotate_rate_y],
     ['rotateRate.z', got.rotateRate.z, want.rotate_rate_z],
+    // The Topology Scale auto-fit, which in a generated design lands on the
+    // Pin levels and nowhere else — the one thing desktop 88091e1 changed
+    // about what a seed produces.
+    ['topoScale', got.topoScale, want.topo_scale],
   ]
   for (const [field, a, b] of approx) {
     expect(a, `${where} ${field}`).toBeCloseTo(b, FLOAT_TOLERANCE)

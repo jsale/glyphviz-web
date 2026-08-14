@@ -13,6 +13,7 @@ import {
   defaultRecipe,
   Dist,
   DIST_LABELS,
+  effectiveTopoScale,
   generateNodes,
   levelSpec,
   NONROOT_DIST_MODES,
@@ -20,8 +21,11 @@ import {
   recipeFromJson,
   recipeToJson,
   ROOT_DIST_MODES,
+  suggestedTopoScale,
 } from './glyphRecipe'
-import { Geometry, Topo } from './types'
+import type { DistMode, GlyphRecipe } from './glyphRecipe'
+import { ALL_AXES_LINEAR, LINEAR_PLACEMENT_AXES } from './placementAxes'
+import { DEFAULT_TOPO_SCALE, Geometry, Topo, TOPO_NAMES, TOPO_SCALE_ANTZ } from './types'
 
 describe('defaultRecipe', () => {
   it('is the desktop dialog\'s two-level opening glyph', () => {
@@ -124,6 +128,66 @@ describe('projectedNodeCount', () => {
   })
 })
 
+describe('Topology Scale auto-fit', () => {
+  /** A trunk of `topo` whose children are distributed `mode`. */
+  const twoLevels = (topo: number, mode: DistMode = Dist.Angular): GlyphRecipe => ({
+    name: 'Fit',
+    levels: [
+      levelSpec({ count: 1, topo, distMode: Dist.Linear }),
+      levelSpec({ count: 6, topo: Topo.None, distMode: mode }),
+    ],
+  })
+
+  it('fits every topology that reads the child sweep as a distance', () => {
+    // Table-driven off LINEAR_PLACEMENT_AXES rather than a hand-written list,
+    // so the rule cannot drift from the table it is supposed to be reading.
+    for (const key of Object.keys(TOPO_NAMES).map(Number)) {
+      // None (0) is absent from the table on purpose — an id with no entry is
+      // plain Cartesian, so all three axes are distances.
+      const linearX = (LINEAR_PLACEMENT_AXES[key] ?? ALL_AXES_LINEAR)[0]
+      expect(suggestedTopoScale(twoLevels(key), 0), `topo ${key}`).toBe(
+        linearX ? TOPO_SCALE_ANTZ : DEFAULT_TOPO_SCALE,
+      )
+    }
+  })
+
+  it('leaves a level alone when its children are not authored in degrees', () => {
+    // Cube reads translate_x as a distance, but a Linear level's numbers are
+    // already distances — there is nothing to reconcile.
+    expect(suggestedTopoScale(twoLevels(Topo.Cube, Dist.Linear), 0)).toBe(DEFAULT_TOPO_SCALE)
+  })
+
+  it('leaves a leaf level at 1.0 — it has no children to place', () => {
+    expect(suggestedTopoScale(twoLevels(Topo.Cube), 1)).toBe(DEFAULT_TOPO_SCALE)
+  })
+
+  it('uses the stored number once the level is off Auto', () => {
+    const recipe = twoLevels(Topo.Cube)
+    expect(effectiveTopoScale(recipe, 0)).toBe(TOPO_SCALE_ANTZ)
+    recipe.levels[0].topoScaleAuto = false
+    recipe.levels[0].topoScale = 0.25
+    expect(effectiveTopoScale(recipe, 0)).toBe(0.25)
+    // Including a manual 1.0, which is the user overruling the fit.
+    recipe.levels[0].topoScale = DEFAULT_TOPO_SCALE
+    expect(effectiveTopoScale(recipe, 0)).toBe(DEFAULT_TOPO_SCALE)
+  })
+
+  it('stamps the effective scale on every node of the level', () => {
+    const nodes = generateNodes(twoLevels(Topo.Pin))
+    expect(nodes[0].topoScale).toBe(TOPO_SCALE_ANTZ)
+    expect(nodes.slice(1).every((n) => n.topoScale === DEFAULT_TOPO_SCALE)).toBe(true)
+  })
+
+  it('keeps an angular ring where it was under a Sphere parent', () => {
+    // The property the whole feature exists to preserve: a design that was
+    // already correct must not move. Sphere reads translate_x as longitude, so
+    // nothing is fitted and the children keep their 0…360 sweep.
+    const nodes = generateNodes(twoLevels(Topo.Sphere))
+    expect(nodes.every((n) => n.topoScale === DEFAULT_TOPO_SCALE)).toBe(true)
+    expect(nodes.slice(1).map((n) => n.translate.x)).toEqual([0, 60, 120, 180, 240, 300])
+  })
+})
+
 describe('template JSON', () => {
   it('round-trips a recipe unchanged', () => {
     const recipe = defaultRecipe()
@@ -150,6 +214,24 @@ describe('template JSON', () => {
     expect(recipe.name).toBe('My Glyph')
     expect(recipe.levels[0].count).toBe(3)
     expect(recipe.levels[0]).toEqual(levelSpec({ count: 3 }))
+  })
+
+  it('loads a pre-Topology-Scale template onto the auto-fit', () => {
+    // A template written before the field existed carries neither key. It has
+    // to come back on Auto — that is what fixes the designs whose children
+    // were flying off — and the stored 1.0 is what Auto falls back to anyway,
+    // so nothing that was already correct moves.
+    const spec = recipeFromJson({ levels: [{ count: 2, topo: Topo.Cube }] }).levels[0]
+    expect(spec.topoScaleAuto).toBe(true)
+    expect(spec.topoScale).toBe(DEFAULT_TOPO_SCALE)
+  })
+
+  it('round-trips an exact ANTz value, not the box\'s six decimals', () => {
+    const recipe: GlyphRecipe = {
+      name: 'Exact',
+      levels: [levelSpec({ topoScale: TOPO_SCALE_ANTZ, topoScaleAuto: false })],
+    }
+    expect(recipeFromJson(recipeToJson(recipe)).levels[0].topoScale).toBe(TOPO_SCALE_ANTZ)
   })
 
   it('ignores keys it does not know', () => {

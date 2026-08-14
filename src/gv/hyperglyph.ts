@@ -35,6 +35,32 @@ import { Geometry, Topo } from './types'
  * clumps into the parent instead of reading as structure (Jeff flagged that
  * 2026-07-01). Both families are candidates to bring back with placement logic
  * of their own, not as generic angular branches.
+ *
+ * Pin was, until 2026-08-14, the one entry here that was not actually
+ * angular-safe: it reads a child's translate_x as HEIGHT
+ * (LINEAR_PLACEMENT_AXES), so the 0…360 sweep an angular level hands it became
+ * a 360-unit vertical smear rather than a ring — the same mismatch `topoScale`
+ * exists to reconcile. The LevelSpecs below leave `topoScaleAuto` at its
+ * default (true), so glyphRecipe fits each level's Topology Scale to the
+ * distribution its children ask for.
+ *
+ * Be precise about what that buys: Pin places children along ONE axis whatever
+ * the scale, so the fit SHORTENS the line, it does not turn it into a ring.
+ * What it does is keep the subtree inside the parent's own extent, which is the
+ * difference between a legible creature and dust scattered across 400 units.
+ * The dramatic wins are where Pin sits at a DEEP level — those hold the most
+ * nodes — e.g. seed 5 at depth 4 (Torus/Spiral/Pin/Pin) goes from a few
+ * unreadable specks to a dense torus.
+ *
+ * This DID change previously-generated art. On the desktop's 200-design sample
+ * it moved 62 of them (31%), and Pin is the ONLY cause: all 67 re-fitted levels
+ * were Pin levels, at every depth, pulling in by 7.5× to 117× (median 23×).
+ * Jeff asked for it knowing that (desktop 2026-08-13, web 2026-08-14). Note the
+ * consequence for the design lineage — an older recipe JSON has no topo_scale
+ * keys, so it reloads onto the fit and regenerates as the corrected design
+ * rather than the smeared one. No rng draw moved, so ids, counts, colours and
+ * every coordinate are untouched: a seed still names the same design, drawn at
+ * a size you can see.
  */
 export const ANGULAR_SAFE_TOPOS: readonly number[] = [
   Topo.Sphere,

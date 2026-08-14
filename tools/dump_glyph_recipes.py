@@ -26,6 +26,13 @@ that harness cannot reach:
   - the dialog's own `default_recipe()`, the two-level glyph it opens on
   - insertion parameters (start_id / parent_id / base_branch_level), the second
     call Insert into Scene makes
+  - the Topology Scale AUTO-FIT (desktop 88091e1): a level whose children are
+    distributed angularly gets TOPO_SCALE_ANTZ stamped on it when its own
+    topology reads translate_x as a distance, and 1.0 when it reads it as an
+    angle. That decision is table-driven off topology.LINEAR_PLACEMENT_AXES, so
+    the cases below walk EVERY topology id as a parent of an angular level —
+    a disagreement about one entry of that table is a design that flies apart
+    in one app and not the other.
 
 It also round-trips every recipe through `recipe_to_dict` so the web side can
 diff its template JSON against the desktop's byte for byte — that shared file
@@ -52,6 +59,7 @@ from glyphviz_core.glyph_recipe import (                                 # noqa:
     DIST_ANGULAR, DIST_CIRCULAR, DIST_GRID, DIST_LINEAR, DIST_RANDOM,
     GlyphRecipe, LevelSpec, default_recipe, generate_nodes, recipe_to_dict,
 )
+from glyphviz_core.topology import TOPO_NAMES, TOPO_NONE                 # noqa: E402
 
 # Field-for-field, the columns generate_nodes actually writes.
 FIELDS = [
@@ -60,7 +68,7 @@ FIELDS = [
     "rotate_x", "rotate_y", "rotate_z",
     "scale_x", "scale_y", "scale_z",
     "color_r", "color_g", "color_b", "color_a",
-    "geometry", "hide", "topo", "ratio", "rotation_mode",
+    "geometry", "hide", "topo", "ratio", "rotation_mode", "topo_scale",
 ]
 
 
@@ -179,6 +187,83 @@ def build_cases():
                   scale_x=0.1, scale_y=0.1, scale_z=0.1,
                   color_start=(255, 255, 0, 255), color_end=(255, 0, 255, 0)),
     ]), start_id=1000, parent_id=7, base_branch_level=1))
+
+    # ---- Topology Scale ------------------------------------------------
+    #
+    # Every topology id as the parent of an ANGULAR level: the ones whose
+    # translate_x is a distance must come back at TOPO_SCALE_ANTZ, the ones
+    # whose translate_x is an angle at 1.0. Walking TOPO_NAMES rather than a
+    # hand-written list is what makes this a check on LINEAR_PLACEMENT_AXES
+    # itself rather than on a copy of it.
+    for topo in sorted(TOPO_NAMES):
+        cases.append(case(
+            f"auto_topo_scale_parent_{topo}",
+            GlyphRecipe(name=f"Auto {topo}", levels=[
+                LevelSpec(count=1, geometry=1, topo=topo, ratio=0.3,
+                          dist_mode=DIST_LINEAR,
+                          color_start=(200, 200, 200, 255)),
+                LevelSpec(count=6, geometry=1, topo=TOPO_NONE,
+                          dist_mode=DIST_ANGULAR, dist_tz=1.0,
+                          scale_x=0.3, scale_y=0.3, scale_z=0.3,
+                          color_start=(120, 180, 240, 255)),
+            ]),
+        ))
+
+    # A LINEAR child level asks for no fit whatever the parent's topology —
+    # its numbers were never authored in degrees.
+    cases.append(case("auto_topo_scale_linear_children", GlyphRecipe(
+        name="Linear children", levels=[
+            LevelSpec(count=1, geometry=1, topo=1, dist_mode=DIST_LINEAR,
+                      color_start=(200, 200, 200, 255)),
+            LevelSpec(count=4, geometry=1, topo=TOPO_NONE,
+                      dist_mode=DIST_LINEAR, dist_step=1.5,
+                      color_start=(120, 180, 240, 255)),
+        ])))
+
+    # Auto OFF: the stored number is used verbatim, including a value the
+    # 6-decimal spin box would round (1/180 exactly) and one outside the
+    # suggestion's two answers.
+    cases.append(case("manual_topo_scale", GlyphRecipe(
+        name="Manual", levels=[
+            LevelSpec(count=1, geometry=1, topo=1, dist_mode=DIST_LINEAR,
+                      topo_scale=1.0 / 180.0, topo_scale_auto=False,
+                      color_start=(200, 200, 200, 255)),
+            LevelSpec(count=5, geometry=1, topo=4, dist_mode=DIST_ANGULAR,
+                      topo_scale=0.125, topo_scale_auto=False,
+                      color_start=(120, 180, 240, 255)),
+        ])))
+
+    # A manual 1.0 under a Cube parent — the user overruling the fit, which
+    # must NOT be quietly re-applied.
+    cases.append(case("manual_overrides_fit", GlyphRecipe(
+        name="Overruled", levels=[
+            LevelSpec(count=1, geometry=1, topo=1, dist_mode=DIST_LINEAR,
+                      topo_scale=1.0, topo_scale_auto=False,
+                      color_start=(200, 200, 200, 255)),
+            LevelSpec(count=3, geometry=1, topo=TOPO_NONE,
+                      dist_mode=DIST_ANGULAR,
+                      color_start=(120, 180, 240, 255)),
+        ])))
+
+    # Four levels, alternating angular/linear children under alternating
+    # topologies: each level's fit is decided by the level BELOW it, and the
+    # deepest is a leaf with no children to place at all.
+    cases.append(case("auto_topo_scale_deep", GlyphRecipe(
+        name="Deep fit", levels=[
+            LevelSpec(count=1, geometry=1, topo=1, dist_mode=DIST_LINEAR,
+                      color_start=(240, 240, 240, 255)),
+            LevelSpec(count=3, geometry=1, topo=2, dist_mode=DIST_ANGULAR,
+                      scale_x=0.5, scale_y=0.5, scale_z=0.5,
+                      color_start=(200, 40, 40, 255)),
+            LevelSpec(count=2, geometry=1, topo=5, dist_mode=DIST_LINEAR,
+                      dist_step=0.8, dist_axis=2,
+                      scale_x=0.3, scale_y=0.3, scale_z=0.3,
+                      color_start=(40, 200, 40, 255)),
+            LevelSpec(count=4, geometry=1, topo=TOPO_NONE,
+                      dist_mode=DIST_ANGULAR, dist_tz=0.5,
+                      scale_x=0.15, scale_y=0.15, scale_z=0.15,
+                      color_start=(40, 40, 200, 255)),
+        ])))
 
     return cases
 

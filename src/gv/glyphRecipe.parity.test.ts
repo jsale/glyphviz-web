@@ -44,6 +44,7 @@ interface FixtureNode {
   topo: number
   ratio: number
   rotation_mode: number
+  topo_scale: number
 }
 
 interface FixtureCase {
@@ -86,6 +87,10 @@ function checkNode(actual: GvNode, expected: FixtureNode, where: string): void {
   expect(actual.scale.y, `${where} scale_y`).toBeCloseTo(expected.scale_y, 9)
   expect(actual.scale.z, `${where} scale_z`).toBeCloseTo(expected.scale_z, 9)
   expect(Math.abs(actual.ratio - expected.ratio), `${where} ratio`).toBeLessThan(TOL)
+  // The Topology Scale the level was generated at — the auto-fit's whole
+  // output, and the one column here that no widget lets a user type on either
+  // side while Auto is on.
+  expect(Math.abs(actual.topoScale - expected.topo_scale), `${where} topo_scale`).toBeLessThan(TOL)
 }
 
 describe('glyph recipe parity with desktop generate_nodes', () => {

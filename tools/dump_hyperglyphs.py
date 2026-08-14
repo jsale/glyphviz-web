@@ -76,6 +76,11 @@ FIELDS = [
     "scale_x", "scale_y", "scale_z",
     "color_r", "color_g", "color_b", "color_a",
     "geometry", "hide", "topo", "ratio", "rotation_mode", "color_index",
+    # Stamped by generate_nodes since desktop 88091e1: an angular level under a
+    # Pin parent is fitted to TOPO_SCALE_ANTZ, which is what stops it smearing
+    # 360 world units up the pin's axis. No rng draw moved, so every other
+    # column here is unchanged from the previous fixture.
+    "topo_scale",
     "rotate_rate_x", "rotate_rate_y", "rotate_rate_z",
 ]
 

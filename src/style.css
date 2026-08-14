@@ -1214,3 +1214,33 @@ canvas {
 .composer-color input[type='number'] {
   flex: 0 0 54px;
 }
+
+/* Topo Scale: the same stack the Properties panel uses (.ins-toposcale*), so
+   the two rows read alike, plus the preset buttons' own look — a bare <button>
+   in here renders as a default browser control, which is exactly how the Draw
+   Mode button slipped through once. */
+.composer-form .ins-toposcale-line button {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+.composer-form .ins-toposcale-line button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* One line under a control, saying what it is currently doing. Clipped rather
+   than allowed to widen the form — the control's tooltip carries the detail. */
+.composer-note {
+  margin: 0 0 4px 72px;
+  color: #8b93a5;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
