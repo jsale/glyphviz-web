@@ -91,8 +91,15 @@ export class SceneLighting {
     scene.add(this.key)
   }
 
-  /** Re-aim the key light along eye-space (1, 2, 1) for this frame's camera. */
-  update(camera: THREE.Camera): void {
+  /**
+   * Re-aim the key light along eye-space (1, 2, 1) for this frame's camera.
+   *
+   * Takes any Object3D carrying the eye's position and orientation, not a
+   * Camera: in an immersive session the scene camera's own transform is the
+   * head pose in XR space, so the aim comes from a world-space proxy the rig
+   * keeps (xrSession.ts) rather than from the camera itself.
+   */
+  update(camera: THREE.Object3D): void {
     // Three reads a directional light's direction as (light − target) in world
     // space, so both ends move with the camera and only their difference — the
     // eye-space direction rotated into the world — carries any meaning.

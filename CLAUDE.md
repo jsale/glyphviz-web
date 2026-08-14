@@ -1858,9 +1858,131 @@ something to decide now).
      keeps cos(aim) ≥ 1−1e-9, handles detach/reattach, axis distances came
      out 159/50/861 across three scenes, stereo flight and look both move,
      console clean throughout.
-9. WebXR (headset stereo): still deliberately deferred until basic parity
-   exists. The free-view cross-eye pair shipped as 6n and is a different
-   thing — one canvas, no device, no session lifecycle.
+9. WebXR — immersive mode, v1 (shipped 2026-08-14, Jeff's request once the
+   backlog emptied). An **Enter VR** button in the Scene panel's world group
+   walks into the scene with a headset: fly it, point at a node and select it.
+   The plan agreed that day was P0 (session + rig) + P1 (navigate and inspect)
+   as the first shippable thing, with the in-VR control panel, passthrough AR
+   and authoring gestures as later phases (see the Pending list at the end of
+   this item).
+   - WHY HERE and not the desktop: a headset browser opens the deployed URL —
+     no APK, no sideload, no Link cable — and every feature this app already
+     has is in the scene graph a session draws. The desktop's OpenXR spike
+     (`../glyphviz/glyphviz_xr/`) can only run PC-tethered, and is a spike
+     rather than a maintained feature. What it IS good for is the interaction
+     spec: Jeff has flown scenes with those controls, so `controller_nav.py`'s
+     mapping and constants are ported behaviour-for-behaviour.
+   - THE ONE ARCHITECTURAL DECISION: move the RIG, not the world.
+     `src/render/xrNav.ts` (pure maths, no THREE and no DOM, like
+     cameraMode.ts) defines
+     `rig = T(nav) · R_z(yaw) · R_x(+90°) · S(scale)` with the camera and
+     controllers parented to it. The spike does the opposite — it pushes
+     `Translate · RotateX(-90) · Scale` onto the modelview and carries
+     locomotion in `rig_inverse` — which is right for immediate-mode GL and
+     wrong here: every world-space buffer this app keeps (halo vertices, link
+     endpoints, surface quads, Draw Mode's grid inversion) is computed in
+     scene coordinates, so re-basing the scene would put them in a different
+     space than the maths that writes them. Moving the rig instead left
+     buildScene, picking and every overlay untouched.
+     - `R_x(+90°)` maps WebXR's Y-up reference space onto GlyphViz's Z-up
+       world. Because three composes the headset pose through the rig's world
+       matrix, the rig's SCALE scales IPD and head motion by the same factor —
+       so `scale` reads as "how big the world is" rather than as a cheat, with
+       honest stereo depth at any size. It is WORLD UNITS PER METRE, the
+       reciprocal of the desktop's `--scale` (`auto_scale_for_scene` returns
+       `target / extent` and applies it to the world); same picture, inverse
+       number, and worth knowing before someone "fixes" one to match.
+     - Every gesture ends in one solve, `solveNav(worldPoint, xrPoint, …)` —
+       "hold this world point still under this hand/head while something else
+       changes". That is what makes turning pivot about the HEAD and a pinch
+       scale about the point between the hands.
+   - CONTROLS, the spike's exactly: left stick flies at 3 m/s relative to
+     where the head is really looking (plane-locked, so looking down while
+     flying forward never sinks you), right stick turns at 90°/s and rises,
+     squeeze grabs the world and drags it, trigger picks, A/X re-fits, B/Y
+     plays/pauses Channels. Flight is suppressed while a hand grabs, as there.
+     - Web ADDITIONS: a thumbstick dead zone measured from its edge (OpenXR
+       had already deadzoned the sticks before `ControllerNav` saw them; a raw
+       WebXR gamepad axis has not), and the TWO-HANDED pinch — scale and yaw
+       about the midpoint — because it is the gesture every headset user
+       reaches for first and it is how you get from the 20 m default placement
+       to a tabletop model and back without a menu.
+     - DIVERGENCE: turning pivots about the head. The desktop accumulates
+       `nav_yaw` and rotates the world about the tracking origin, which swings
+       a viewer standing away from it sideways through the scene. Strictly
+       better and it costs one solve.
+     - Placement defaults are the spike's CLI: 20 m target size, 15 m in
+       front, 0.35 m below eye level, re-derived from the live head pose so
+       the scene lands in front of the viewer whichever way they are facing.
+   - PICKING is the app's own `pickNodeId(raycaster, root)` with a controller
+     ray instead of a mouse ray — links, grid occlusion and animated-hide all
+     behave as they do with a mouse, because nothing about that path had to
+     change. `raycaster.camera` is handed the scene camera so LinkPicker's
+     pick width keeps the same ANGULAR size it has on the desktop.
+   - LABELS: the tag overlay is a 2D canvas stacked over the WebGL one, so a
+     session never sees it. `src/render/xrLabel.ts` draws the SELECTED node's
+     label as a billboard instead, a port of the spike's `text_billboard.py`
+     (64px Arial, the dark shadow at +2px, pale yellow face, a 0.6 m quad, and
+     its single-entry cache — the texture is redrawn only when the text
+     changes). Unconditional, as the spike's is: the scene-wide Show Tag
+     Labels toggle lives on a T key and a checkbox, neither of which a headset
+     can reach.
+     - The trap, found by looking at the picture rather than the numbers: a
+       Sprite takes its SIZE from the model matrix but offsets it in EYE
+       space, so under a scaled camera rig the quad is measured in metres
+       while its position stays in world units. Multiplying the rig scale into
+       both drew a label an entire scene wide — and every scene-graph
+       assertion about it passed.
+   - THE HEAD POSE comes off `renderer.xr.getCamera()`, never the app camera.
+     Both carry the viewer pose in XR space during a session, but the app
+     camera is also written by ordinary desktop code — `fitCameraTo` reframes
+     it on every scene load — and a fit computed from one of those writes put
+     the scene 191 m away at a desktop framing's angle. Found by driving it;
+     no unit test would have. `rememberDesktopCamera()` then takes that
+     framing as the pose to restore on exit, since the headset is about to
+     overwrite the camera it was written into.
+   - INTERLOCKS: cross-eye stereo switches off (the compositor owns that job
+     now), OrbitControls and Camera Mode stand aside, Follow Selected is
+     inert, the transform gizmo detaches (TransformControls drags from a
+     screen-space pointer, and a headset has none) while the armed mode stays
+     sticky per the 6h rule, Save PNG says it is unavailable rather than
+     saving the mirror, and fat-line pixel widths come from the XR
+     framebuffer's per-eye half rather than the page's size. Exiting restores
+     the camera pose, near/far and parent.
+   - NO PARITY HARNESS, deliberately: the spike has no authoritative maths to
+     diff against — what guarantees the headset shows the RIGHT scene is the
+     draw-matrix and placement parity already in place. `xrNav.test.ts` (22
+     tests) pins the rig maths; the rest is driven.
+   - DRIVEN IN CHROME against an emulated Quest 3 (the `iwer` package's
+     runtime, installed into the page before the app's support probe runs):
+     34 measured checks over two scenes. Entry places the scene 15.01 m ahead;
+     flight measures 3.0 m/s and holds altitude to 0; turning measures 92°/s
+     and moves the world under the head by 3e-14 units; a grab pins its point
+     to 2e-16 m; hands apart halve the units-per-metre; a trigger ray picks
+     the node aimed at, with the app's ray matching the intended one to 1e-13;
+     a miss clears the selection; a scene loaded mid-session re-frames itself;
+     Channels play from B/Y and animate nodes in the headset; every interlock
+     and the whole exit path. Console clean. (The one pre-existing warning in
+     that console, `THREE.Material: parameter 'map' has value of undefined`
+     from glyphGeometry's untextured materials, is not XR's and was left
+     alone.)
+   - PERFORMANCE is the real ceiling and is untested on device: this app draws
+     roughly one call per glyph, and a Quest renders two eyes at 72–90 Hz. v1
+     is honest for scenes in the low thousands of nodes (SineWave 231,
+     Topology 109, Global_Terrorism 2,470); past that the `\` draw limit is
+     the lever, and InstancedMesh batching — which would help the desktop web
+     app just as much — is a separate project, not something immersive mode
+     should drag in unannounced.
+   - PENDING, in the order agreed: an in-VR control panel (Channels transport,
+     draw limit, scene picker — a wrist-anchored quad with ray hit-testing,
+     built in-house like the CSV tokenizer and zip reader rather than taking
+     on three-mesh-ui); passthrough AR (`immersive-ar` on Quest 3, small once
+     the rig exists, and the demo that impresses people); then hand tracking,
+     comfort options (snap turn, vignette) and authoring gestures — Draw Mode
+     with a controller is the natural one, since `drawMode.ts`/`drawPlane.ts`
+     already take a ray. Also untried: real-device testing, for which
+     `adb reverse tcp:5173 tcp:5173` makes the dev server a secure context
+     inside the headset browser with no certificate work.
 10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
     through step 8 — the two remaining desktop features, by conscious
     choice, so their absence is a decision and not a gap):
@@ -1882,6 +2004,14 @@ something to decide now).
       `6d82d68`) — **shipped 2026-08-13, see roadmap 6v.**
     - ~~Glyph Composer Topology Scale + preview camera~~ (desktop `88091e1`,
       landed after this survey) — **shipped 2026-08-14, see roadmap 6x.**
+    - **Camera smoothing** (desktop, 2026-08-14) — optional ANTz-style
+      navigation inertia: one time constant easing azimuth/elevation/distance/
+      target coherently, `tau = 0` (off) by default, a Properties-panel slider
+      with Off/ANTz presets and an "Applies to" scope, Camera Mode excluded
+      outright. Jeff confirmed 2026-08-14 that he wants this and the other
+      recent desktop features ported "asap", after the XR work. Read the
+      desktop's own notes before starting: it is a REVISIT of ANTz's
+      mechanism, not a copy of it, and the reasons it diverges are the design.
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
       already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
       the desktop had none for — but the desktop's crop-not-stretch rule

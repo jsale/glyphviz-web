@@ -133,6 +133,8 @@ import { applySceneFog, installLinearFog } from './render/fog'
 import { invertLocalRotation } from './render/rotationInverse'
 import { eyeForX, StereoRig } from './render/stereo'
 import type { StereoEye } from './render/stereo'
+import { XrRig } from './render/xrSession'
+import { XrLabel } from './render/xrLabel'
 import { CameraRig } from './render/cameraMode'
 import { parentTopoScale } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
@@ -281,6 +283,66 @@ controls.enableDamping = false
 const backdrop = new Backdrop()
 scene.add(backdrop.group)
 
+// --- Immersive mode (WebXR) --------------------------------------------------
+
+// The one label an immersive session can see: the ordinary tag overlay paints
+// on a 2D canvas stacked over the WebGL one, which is DOM and therefore not in
+// the headset. Hangs off the SCENE, like the selection halos, so it outlives
+// every rebuild.
+const xrLabel = new XrLabel()
+scene.add(xrLabel.sprite)
+
+// The rig takes the camera while a session presents; the scene graph is never
+// re-based (render/xrNav.ts says why). Its callbacks run only inside a live
+// session, so the later-declared state they read is always initialised by then.
+const xrRig = new XrRig(renderer, camera, scene, {
+  onPick(raycaster) {
+    if (!currentRoot) return
+    const nodeId = pickNodeId(raycaster, currentRoot)
+    // A ray that hits nothing clears the selection, exactly as a click on
+    // empty space does with the mouse.
+    setSelection(nodeId)
+    status(nodeId === null ? 'Nothing under the ray.' : `Selected node ${nodeId}.`)
+  },
+  fitTarget() {
+    if (!currentRoot) return null
+    const box = new THREE.Box3().setFromObject(currentRoot)
+    if (box.isEmpty()) return null
+    const size = box.getSize(new THREE.Vector3())
+    return {
+      center: box.getCenter(new THREE.Vector3()),
+      extent: Math.max(size.x, size.y, size.z),
+    }
+  },
+  onSecondary() {
+    setPlaying(!playing)
+  },
+  onStart() {
+    // Cross-eye stereo is a second pair of eyes drawn into one flat canvas;
+    // in a headset the compositor owns that job.
+    setStereo(false)
+    controls.enabled = false
+    updateGizmoAttachment()
+    labels.clear()
+    applyLineResolution()
+    xrButton.textContent = 'Exit VR'
+    status(
+      'Immersive mode — left stick: fly, right stick: turn/rise, squeeze: grab ' +
+        '(both hands to resize), trigger: select, A/X: re-fit, B/Y: play Channels.',
+    )
+  },
+  onEnd() {
+    controls.enabled = !flyRig.flyMode
+    updateGizmoAttachment()
+    xrLabel.hide()
+    applyLineResolution()
+    xrButton.textContent = 'Enter VR'
+    status('Left immersive mode.')
+  },
+})
+renderer.xr.addEventListener('sessionstart', () => xrRig.handleSessionStart())
+renderer.xr.addEventListener('sessionend', () => xrRig.handleSessionEnd())
+
 // --- HUD -------------------------------------------------------------------
 
 // Panels live in a left column (Scene, Selection) and a right one
@@ -416,6 +478,10 @@ hud.innerHTML = `
       <input id="hud-stereo-sep" type="range" min="5" max="150" step="1" value="30">
       <span id="hud-stereo-sep-value">3.0%</span>
     </div>
+    <div class="hud-create-row" id="hud-xr-row" hidden title="Walk into the scene with a VR headset.&#10;Left stick: fly where you are looking. Right stick: turn and rise.&#10;Squeeze a grip to grab the world and drag it; squeeze BOTH to resize and turn it.&#10;Trigger: select the node under the ray. A/X: re-fit the scene in front of you. B/Y: play or pause Channels.&#10;The panels stay on the monitor — in the headset the selected node's label is drawn in the scene.">
+      <button id="hud-xr">Enter VR</button>
+      <span id="hud-xr-note"></span>
+    </div>
   </div>
   <div id="hud-hint">or drop a scene folder, .zip or CSV anywhere</div>
 `
@@ -468,6 +534,27 @@ const stereoCheckbox = hud.querySelector<HTMLInputElement>('#hud-stereo input')!
 const stereoSepRow = hud.querySelector<HTMLDivElement>('#hud-stereo-sep-row')!
 const stereoSepSlider = hud.querySelector<HTMLInputElement>('#hud-stereo-sep')!
 const stereoSepValue = hud.querySelector<HTMLSpanElement>('#hud-stereo-sep-value')!
+const xrRow = hud.querySelector<HTMLDivElement>('#hud-xr-row')!
+const xrButton = hud.querySelector<HTMLButtonElement>('#hud-xr')!
+const xrNote = hud.querySelector<HTMLSpanElement>('#hud-xr-note')!
+
+// The row appears only where an immersive session can actually start, which is
+// a headset browser (or a desktop one with a runtime/emulator attached) over
+// HTTPS — never on a plain http:// page, where navigator.xr does not exist.
+void XrRig.isSupported().then((supported) => {
+  xrRow.hidden = !supported
+})
+xrButton.addEventListener('click', () => {
+  if (xrRig.presenting) {
+    xrRig.exit()
+    return
+  }
+  xrNote.textContent = ''
+  xrRig.enter().catch((err: unknown) => {
+    xrNote.textContent = 'session refused'
+    status(`Could not start VR: ${String(err)}`)
+  })
+})
 
 // Selected while an opened file/folder scene is showing, so the combo never
 // claims a built-in that isn't on screen.
@@ -745,6 +832,12 @@ let pngRequested = false
 
 function requestScreenshot() {
   if (pngRequested) return
+  if (xrRig.presenting) {
+    // The canvas is showing the session's mirror, not the scene as the page
+    // would draw it, and the drawing buffer belongs to the XR framebuffer.
+    status('Save PNG is not available in VR — leave immersive mode first.')
+    return
+  }
   pngRequested = true
   status('Saving PNG…')
 }
@@ -798,6 +891,18 @@ function stereoEyesNow(): [StereoEye, StereoEye] | null {
  * the odd pixel; the left one stands for both.
  */
 function applyLineResolution() {
+  // In a headset the pixels that matter are one eye's half of the XR
+  // framebuffer, not the page's — the same per-viewport rule stereo follows,
+  // already in device pixels. (A runtime three drives through a projection
+  // layer reports no baseLayer; the page size is then the best guess going.)
+  const layer = renderer.xr.isPresenting
+    ? renderer.xr.getSession()?.renderState.baseLayer
+    : undefined
+  if (layer) {
+    currentLinks?.setResolution(layer.framebufferWidth / 2, layer.framebufferHeight)
+    currentOverlays?.setResolution(layer.framebufferWidth / 2, layer.framebufferHeight)
+    return
+  }
   const width = stereoEyesNow()?.[0].width ?? window.innerWidth
   const pixelWidth = width * window.devicePixelRatio
   const pixelHeight = window.innerHeight * window.devicePixelRatio
@@ -1007,6 +1112,15 @@ renderer.domElement.addEventListener(
   get frames() {
     return currentFrames
   },
+  // Immersive mode: nothing about the rig — where the viewer is, how big the
+  // world is, where the headset thinks the head is — reaches the DOM.
+  xrRig,
+  get xrState() {
+    return xrRig.state
+  },
+  get selectionId() {
+    return selection.id
+  },
 }
 
 const statusBar = document.createElement('div')
@@ -1036,6 +1150,25 @@ function worldPosOf(nodeId: number): THREE.Vector3 | null {
   // getWorldPosition refreshes only the ancestor chain (no full-tree pass).
   const frame = currentFrames?.get(nodeId)
   return frame ? frame.getWorldPosition(new THREE.Vector3()) : null
+}
+
+/**
+ * The one label an immersive session draws: the selected node's own text,
+ * billboarded at its position (desktop `text_billboard.draw_label`).
+ *
+ * Unconditional, as the spike's is — the scene-wide Show Tag Labels toggle
+ * lives on a T key and a checkbox, neither of which a headset can reach, and
+ * one label for the node you just picked is feedback rather than clutter.
+ */
+function updateXrLabel() {
+  const id = selection.id
+  const node = id !== null ? nodesById.get(id) : undefined
+  const pos = id !== null ? worldPosOf(id) : null
+  if (!node || !pos) {
+    xrLabel.hide()
+    return
+  }
+  xrLabel.show(node.text, pos, xrRig.state.scale)
 }
 
 function parentOf(node: GvNode): GvNode | null {
@@ -1862,6 +1995,13 @@ function rebuildScene(fitCamera: boolean) {
   if (fitCamera) {
     setSelection(null)
     fitCameraTo(currentRoot)
+    // A new scene is a different size and sits somewhere else entirely, so an
+    // immersive session re-frames it in front of the viewer too (the desktop
+    // spike auto-scales on load for the same reason) — and takes the framing
+    // just written as the pose to come back to, since the headset is about to
+    // overwrite the camera it was written into.
+    xrRig.rememberDesktopCamera()
+    xrRig.requestFit()
     resetCameraViews()
   } else {
     // Ids deleted or filtered out of the rebuilt scene simply drop.
@@ -2661,9 +2801,12 @@ function updateGizmoAttachment() {
     gizmoMode === null ||
     // Camera Mode and Draw Mode own every drag button, so manipulation is
     // suspended until they are off — the armed mode stays sticky, the handles
-    // just go away (and come back with it).
+    // just go away (and come back with it). Immersive mode is the same rule
+    // for a different reason: TransformControls drags from a screen-space
+    // pointer, and a headset has no pointer to drag from.
     flyRig.flyMode ||
     drawMode ||
+    xrRig.presenting ||
     !primary ||
     !frame ||
     primary.type === NodeType.WorldGrid ||
@@ -3893,23 +4036,35 @@ renderer.setAnimationLoop(() => {
   const nodesMoved = tickAnimation(dtMs) || gizmo.dragging
   if (nodesMoved) nodeTable.refreshVisible()
 
-  // After the animation tick, like the desktop's paintGL: the followed node has
-  // already moved this frame, so the pivot lands on where it actually is.
-  applyFollowTarget()
-  // Camera Mode: integrate the held-offset rate flight on the same dt the
-  // rate fields use — that is what keeps flying while the mouse sits still —
-  // and push the rig into the camera OrbitControls is standing aside from.
-  if (flyRig.flyMode) {
-    flyRig.applyFlyDrag(dtMs)
-    applyRigToCamera()
+  // Immersive mode drives the camera from the headset, so every desktop camera
+  // path stands aside for it — following would fight the rig for the same
+  // position, and OrbitControls has no pointer to read.
+  const presenting = xrRig.presenting
+  if (presenting) {
+    xrRig.update(dtMs)
+  } else {
+    // After the animation tick, like the desktop's paintGL: the followed node
+    // has already moved this frame, so the pivot lands on where it actually is.
+    applyFollowTarget()
+    // Camera Mode: integrate the held-offset rate flight on the same dt the
+    // rate fields use — that is what keeps flying while the mouse sits still —
+    // and push the rig into the camera OrbitControls is standing aside from.
+    if (flyRig.flyMode) {
+      flyRig.applyFlyDrag(dtMs)
+      applyRigToCamera()
+    }
+    controls.update()
   }
-  controls.update()
   // The key light lives in eye space on the desktop, so it follows the camera
   // the controls just moved. Both stereo eyes share that camera's orientation,
   // so one aim serves both — the light is directional and a lateral shift of
   // the eye does not turn it.
-  const distance = orbitDistance()
-  lighting.update(camera)
+  // In a session the app camera's own transform is the head pose in XR space,
+  // so anything that aims off the camera reads the rig's world-space proxy
+  // instead — the key light lives in eye space (lighting.ts) and would
+  // otherwise be aimed by a pose measured in the wrong coordinate system.
+  const distance = presenting ? xrRig.viewDistance : orbitDistance()
+  lighting.update(presenting ? xrRig.headProxy : camera)
   backdrop.update(distance)
   // Edges, plot lines and surface meshes chase the nodes they connect (gizmo
   // drags mutate frames between rebuilds), so refresh them every frame like
@@ -3933,9 +4088,15 @@ renderer.setAnimationLoop(() => {
   }
   // Labels are painted after each render pass, so the world matrices they
   // project are the ones just drawn (gizmo drags move frames between rebuilds).
-  const eyes = stereo.eyes(window.innerWidth, distance)
+  const eyes = presenting ? null : stereo.eyes(window.innerWidth, distance)
   renderer.info.reset()
-  if (eyes) {
+  if (presenting) {
+    // One render call draws both eyes — three walks the session's views itself.
+    // The tag overlay is skipped (a DOM canvas the headset never sees) and the
+    // selected node's label goes into the scene as a billboard instead.
+    updateXrLabel()
+    renderer.render(scene, camera)
+  } else if (eyes) {
     const height = window.innerHeight
     // Scissor per half so each pass clears only its own side of the canvas —
     // WebGL's clear obeys the scissor box, which is what lets the two eyes
