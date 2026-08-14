@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { applyPerFaceUV, fitPlanarUV, zSphereGeometry, zTubeGeometry } from './uvGeometry'
-import { createGlyphObject } from './glyphGeometry'
-import { Geometry } from '../gv/types'
+import { applyPerFaceUV, fitPlanarUV, zPinGeometry, zSphereGeometry, zTubeGeometry } from './uvGeometry'
+import { PIN_HEIGHT, PIN_RADIUS, createGlyphObject } from './glyphGeometry'
+import { topoOffset } from './topology'
+import { Geometry, Topo } from '../gv/types'
 
 /** UV of the vertex nearest a world position, for checking the mapping. */
 function uvNearest(geo: THREE.BufferGeometry, x: number, y: number, z: number): [number, number] {
@@ -79,9 +80,7 @@ describe('triangle winding', () => {
     expect(
       outwardWoundFraction(zTubeGeometry(1, 1, 2, { capBottom: true, capTop: true })),
     ).toBe(1)
-    // The pin's needle is a frustum, and its head is a small sphere.
-    expect(outwardWoundFraction(zTubeGeometry(0.03, 0.12, 1.1))).toBe(1)
-    expect(outwardWoundFraction(zSphereGeometry(0.12, 16, 8))).toBe(1)
+    expect(outwardWoundFraction(zPinGeometry(PIN_HEIGHT, PIN_RADIUS))).toBe(1)
   })
 
   it('agrees with Three’s own primitives, so the check itself is sound', () => {
@@ -150,10 +149,10 @@ describe('zSphereGeometry', () => {
     }
   })
 
-  it('scales to the requested radius (pin head is r 0.12)', () => {
-    const head = zSphereGeometry(0.12, 16, 8)
-    head.computeBoundingSphere()
-    expect(head.boundingSphere!.radius).toBeCloseTo(0.12, 6)
+  it('scales to the requested radius', () => {
+    const small = zSphereGeometry(0.12, 16, 8)
+    small.computeBoundingSphere()
+    expect(small.boundingSphere!.radius).toBeCloseTo(0.12, 6)
   })
 })
 
@@ -220,6 +219,139 @@ describe('zTubeGeometry', () => {
       if (normal.getZ(i) === 1 && normal.getX(i) === 0 && normal.getY(i) === 0) upFacingFlat++
     }
     expect(upFacingFlat).toBe(0)
+  })
+})
+
+describe('zPinGeometry', () => {
+  // ANTz's DrawPinDL shape (desktop 979b9db). What this replaces was a sphere
+  // floating above an uncapped frustum, open at both ends and hanging BELOW
+  // the node origin, so every assertion here is one of the two defects.
+  const pin = zPinGeometry(PIN_HEIGHT, PIN_RADIUS)
+  const TOP = PIN_HEIGHT + PIN_RADIUS
+  /** Buffer attributes are Float32, so hand-computed doubles agree to ~1e-7. */
+  const F32 = 1e-6
+  const each = (fn: (p: THREE.Vector3, n: THREE.Vector3, i: number) => void) => {
+    const pos = pin.getAttribute('position')
+    const normal = pin.getAttribute('normal')
+    for (let i = 0; i < pos.count; i++) {
+      fn(
+        new THREE.Vector3().fromBufferAttribute(pos, i),
+        new THREE.Vector3().fromBufferAttribute(normal, i),
+        i,
+      )
+    }
+  }
+  /** Is this point within the closed solid (cone below the rim, dome above)? */
+  const inside = (p: THREE.Vector3, slack: number) => {
+    const rad = Math.hypot(p.x, p.y)
+    if (p.z < -slack) return false
+    if (p.z <= PIN_HEIGHT) return rad <= (PIN_RADIUS * p.z) / PIN_HEIGHT + slack
+    return Math.hypot(rad, p.z - PIN_HEIGHT) <= PIN_RADIUS + slack
+  }
+
+  it('stands on its apex at the node origin, shaft along +Z', () => {
+    // The load-bearing half of the rebuild: Topo.Pin places children at
+    // B + translate_x on +Z, so the shaft has to BE the +Z half of the glyph.
+    let minZ = Infinity
+    let maxZ = -Infinity
+    each((p) => {
+      minZ = Math.min(minZ, p.z)
+      maxZ = Math.max(maxZ, p.z)
+    })
+    expect(minZ).toBeCloseTo(0, 6)
+    expect(maxZ).toBeCloseTo(TOP, 6)
+  })
+
+  it('agrees with where Topo.Pin puts its children', () => {
+    // The cross-module check: the glyph and the placement math are two halves
+    // of one convention, and drifted apart for as long as the pin hung below
+    // its origin. tx = 0 is the dome's centre; tx = −B is the tip.
+    const place = (tx: number) =>
+      topoOffset({ parentTopo: Topo.Pin, tx, ty: 0, tz: 0, parentRatio: 0.1, subspace: 0, baseScale: 1 })
+    expect(place(0).z).toBeCloseTo(PIN_HEIGHT, 9)
+    expect(place(-1).z).toBeCloseTo(0, 9)
+  })
+
+  it('comes to a true point: nothing at the bottom but the apex itself', () => {
+    // gluCylinder draws a lateral surface and never end caps, so the old
+    // needle stopped at radius 0.03 and was left open — a hole you could see
+    // straight up into the glyph through.
+    each((p) => {
+      if (p.z < F32) expect(Math.hypot(p.x, p.y)).toBeCloseTo(0, 6)
+    })
+  })
+
+  it('closes the cone with the dome’s own rim, so the join is watertight', () => {
+    // The old ball's south pole was level with the rim, leaving the rim itself
+    // an open annulus around a point. Here they are the same circle.
+    let rimCount = 0
+    each((p) => {
+      if (Math.abs(p.z - PIN_HEIGHT) < F32) {
+        expect(Math.hypot(p.x, p.y)).toBeCloseTo(PIN_RADIUS, 6)
+        rimCount++
+      }
+    })
+    // Twice round: the crease carries the cone's normal and the dome's.
+    expect(rimCount).toBe(2 * (32 + 1))
+  })
+
+  it('creases at the rim instead of averaging one normal across the join', () => {
+    const normals = new Set<string>()
+    each((p, n) => {
+      if (Math.abs(p.z - PIN_HEIGHT) < F32 && Math.abs(p.y) < F32 && p.x > 0) {
+        normals.add(`${n.x.toFixed(6)},${n.z.toFixed(6)}`)
+      }
+    })
+    const slope = Math.hypot(PIN_HEIGHT, PIN_RADIUS)
+    expect([...normals].sort()).toEqual(
+      [
+        `${(PIN_HEIGHT / slope).toFixed(6)},${(-PIN_RADIUS / slope).toFixed(6)}`, // cone: out and DOWN
+        `${(1).toFixed(6)},${(0).toFixed(6)}`, // dome: straight out
+      ].sort(),
+    )
+  })
+
+  it('draws only the upper hemisphere — every vertex is on the real surface', () => {
+    // A full ball would put vertices inside the cone's z range at radii the
+    // cone never reaches there, and they could never be seen from outside.
+    each((p) => {
+      const rad = Math.hypot(p.x, p.y)
+      const onCone = p.z <= PIN_HEIGHT + F32 && Math.abs(rad - (PIN_RADIUS * p.z) / PIN_HEIGHT) < F32
+      const onDome =
+        p.z >= PIN_HEIGHT - F32 && Math.abs(Math.hypot(rad, p.z - PIN_HEIGHT) - PIN_RADIUS) < F32
+      expect(onCone || onDome, `vertex ${p.toArray()} is off the pin surface`).toBe(true)
+    })
+  })
+
+  it('faces every normal out of the solid', () => {
+    const eps = 1e-4
+    each((p, n) => {
+      expect(n.length()).toBeCloseTo(1, 6)
+      if (p.z < F32) return // the apex: every direction is an edge
+      expect(inside(p.clone().addScaledVector(n, eps), -eps * 0.1)).toBe(false)
+      expect(inside(p.clone().addScaledVector(n, -eps), eps * 0.1)).toBe(true)
+    })
+  })
+
+  it('runs one continuous v from the tip to the pole, u round the axis', () => {
+    // Two separately-mapped primitives could not do this: an image drawn on
+    // the pin runs unbroken across the cone/dome junction.
+    const uv = pin.getAttribute('uv')
+    each((p, _n, i) => {
+      expect(uv.getY(i)).toBeCloseTo(p.z / TOP, 6)
+    })
+    expect(uvRange(pin)).toEqual({ minU: 0, maxU: 1, minV: 0, maxV: 1 })
+    // …and the same longitude convention as the sphere and cylinder.
+    expect(uvNearest(pin, -PIN_RADIUS, 0, PIN_HEIGHT)[0]).toBeCloseTo(0, 6) // −X
+    expect(uvNearest(pin, PIN_RADIUS, 0, PIN_HEIGHT)[0]).toBeCloseTo(0.5, 6) // +X
+    expect(uvNearest(pin, 0, PIN_RADIUS, PIN_HEIGHT)[0]).toBeCloseTo(0.75, 6) // +Y
+  })
+
+  it('emits no faces for the zero-height crease band', () => {
+    // 32 slices: the cone contributes one triangle per slice (its lower ring
+    // is a point) and each of the 8 dome bands two, less the pole band's one.
+    const index = pin.getIndex()!
+    expect(index.count / 3).toBe(32 * (1 + 2 * 8 - 1))
   })
 })
 

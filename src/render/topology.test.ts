@@ -54,8 +54,11 @@ describe('topoOffset', () => {
     expectVec(offset(Topo.Cylinder, 90, 0.5, 0), [0, 1, 0.5])
   })
 
-  it('Pin: stacks along +Z from the pin top', () => {
+  it('Pin: stacks along +Z, from the head’s centre at tx 0', () => {
     expectVec(offset(Topo.Pin, 0.5, 0, 0), [0, 0, 1.5])
+    // The glyph stands with its tip on the origin and its head centred at B
+    // (glyphGeometry PIN_HEIGHT), so −B ≤ tx ≤ 0 walks a child down the shaft.
+    expectVec(offset(Topo.Pin, -1, 0, 0), [0, 0, 0])
   })
 
   it('Rod: normalized length, angle in ty, radial in tz', () => {

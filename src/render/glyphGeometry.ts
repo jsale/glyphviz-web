@@ -7,7 +7,7 @@
 
 import * as THREE from 'three'
 import { Geometry } from '../gv/types'
-import { applyPerFaceUV, fitPlanarUV, zSphereGeometry, zTubeGeometry } from './uvGeometry'
+import { applyPerFaceUV, fitPlanarUV, zPinGeometry, zSphereGeometry, zTubeGeometry } from './uvGeometry'
 
 // Desktop proportion constants (glyphviz_core/geometry_data.py).
 export const GRID_HALF_EXTENT = 1 / Math.SQRT2 // square corners reach radius 1
@@ -22,6 +22,23 @@ const CYLINDER_HEIGHT = 2.0
  */
 export const ROD_RADIUS_FACTOR = 0.25
 export const ROD_HEIGHT_FACTOR = 5.0
+/**
+ * Pushpin glyph — a cone ten times as tall as its base is wide, apex at the
+ * local ORIGIN and shaft rising along +Z, closed at the top by a dome of the
+ * cone's own base radius (so the dome adds a further 10% and the total height
+ * is 110% of the shaft). Both numbers are ANTz's, from DrawPinDL
+ * (npgeometry.c:493) rescaled by 1/5 to this module's "fits within radius ~1"
+ * convention, by way of desktop `geometry_data.PIN_HEIGHT/PIN_RADIUS`.
+ *
+ * Apex-at-the-origin is load-bearing, not styling: Topo.Pin places children at
+ * `B + translate_x` along +Z (topology.ts), so they ride the shaft only if the
+ * shaft is the +Z half of the glyph. PIN_HEIGHT = 1.0 = the default base scale
+ * then puts a child with translate_x = 0 exactly at the dome's centre and one
+ * at −B on the tip, which is where ANTz's own pin children sit. The shape this
+ * replaces hung below the origin, so children floated clear of the whole glyph.
+ */
+export const PIN_HEIGHT = 1.0
+export const PIN_RADIUS = 0.1 * PIN_HEIGHT
 
 export interface GlyphStyle {
   color: THREE.Color
@@ -115,6 +132,8 @@ const SOLID_BUILDERS: Record<number, GeoBuilder> = {
       capBottom: true,
       capTop: true,
     }),
+  // Tip on the origin, dome centred at z = PIN_HEIGHT, top at 1.1.
+  [Geometry.PinSolid]: () => zPinGeometry(PIN_HEIGHT, PIN_RADIUS),
   [Geometry.GridSolid]: () => new THREE.PlaneGeometry(2 * GRID_HALF_EXTENT, 2 * GRID_HALF_EXTENT),
   [Geometry.Circle]: () => new THREE.CircleGeometry(1, 24),
   // ShapeGeometry emits raw vertex coordinates as UVs, which tile a ±1 glyph
@@ -142,22 +161,12 @@ const WIRE_BUILDERS: Record<number, GeoBuilder> = {
   [Geometry.IcosahedronWire]: SOLID_BUILDERS[Geometry.IcosahedronSolid],
   [Geometry.CylinderWire]: () =>
     zTubeGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, { slices: 16 }),
-}
-
-// Pin (16/17): ball head above a tapering needle, both along local Z —
-// head sphere r 0.12 centered at z 0.22; needle from r 0.12 at z 0.1 down
-// to r 0.03 at z −1.0 (glyphviz_gl _draw_pin).
-function pinSolidGeometries(): [THREE.BufferGeometry, THREE.BufferGeometry] {
-  if (!solidCache.has('pin:head')) {
-    const head = zSphereGeometry(0.12, 16, 8)
-    head.translate(0, 0, 0.22)
-    // Wide end (r 0.12) at the top, tapering to r 0.03 at z −1.0.
-    const needle = zTubeGeometry(0.03, 0.12, 1.1, { slices: 16 })
-    needle.translate(0, 0, -0.45)
-    solidCache.set('pin:head', head)
-    solidCache.set('pin:needle', needle)
-  }
-  return [solidCache.get('pin:head')!, solidCache.get('pin:needle')!]
+  // The desktop traces its wire pin as meridians and latitude rings rather
+  // than as every triangle edge; here it takes the same WireframeGeometry
+  // treatment as every other wire glyph, off the one solid it is built from —
+  // which is the point the desktop makes by deriving both from one meridian:
+  // the wire pin cannot drift into being a different shape.
+  [Geometry.PinWire]: () => zPinGeometry(PIN_HEIGHT, PIN_RADIUS, { slices: 16, domeStacks: 4 }),
 }
 
 const solidCache = new Map<string, THREE.BufferGeometry>()
@@ -307,20 +316,6 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
     )
   }
 
-  if (geometryId === Geometry.PinSolid || geometryId === Geometry.PinWire) {
-    const wire = geometryId === Geometry.PinWire
-    const group = new THREE.Group()
-    for (const part of pinSolidGeometries()) {
-      if (wire) {
-        const geo = cached(wireCache, `pinwire:${part.uuid}`, () => new THREE.WireframeGeometry(part))
-        group.add(new THREE.LineSegments(geo, wireMaterial(style)))
-      } else {
-        group.add(new THREE.Mesh(part, solidMaterial(style, false)))
-      }
-    }
-    return group
-  }
-
   if (geometryId === Geometry.GridWire) {
     const geo = cached(wireCache, 'gridLattice', gridLatticeGeometry)
     return new THREE.LineSegments(geo, wireMaterial(style))
@@ -403,12 +398,6 @@ export function createPickProxy(
   } else if (solidId === Geometry.Point) {
     const geo = cached(solidCache, 'pointPick', () => new THREE.SphereGeometry(POINT_PICK_RADIUS, 8, 6))
     proxy = new THREE.Mesh(geo, PICK_MATERIAL)
-  } else if (solidId === Geometry.PinSolid) {
-    const group = new THREE.Group()
-    for (const part of pinSolidGeometries()) {
-      group.add(new THREE.Mesh(part, PICK_MATERIAL))
-    }
-    proxy = group
   } else if (solidId === Geometry.TorusSolid) {
     // Pick tube uses the default ratio-agnostic torus; per-node accuracy
     // isn't worth a per-ratio proxy geometry.

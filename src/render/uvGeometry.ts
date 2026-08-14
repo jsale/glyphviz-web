@@ -177,6 +177,118 @@ export function zTubeGeometry(
   return buildGeometry(positions, normals, uvs, indices)
 }
 
+export interface PinOptions {
+  slices?: number
+  /** Rings from the rim up to the pole on the dome. */
+  domeStacks?: number
+}
+
+/**
+ * ANTz's pushpin: a tall cone standing on its apex at the local ORIGIN, shaft
+ * rising along +Z, capped by a dome of the cone's own base radius.
+ *
+ * Built here rather than from two primitives because that is what closes it.
+ * The shape this replaces was a `zSphereGeometry` head floating above an
+ * uncapped `zTubeGeometry` frustum — two see-through holes, inherited from the
+ * desktop's `_draw_pin`, which unlike `_draw_cone`/`_draw_cylinder` beside it
+ * never paid for the gluDisks a `gluCylinder` needs (desktop 979b9db). Here the
+ * cone tapers to a genuine apex, so the bottom needs no cap at all, and the
+ * dome's rim IS the cone's base circle — same radius, same z — so the junction
+ * is watertight with no disc between them.
+ *
+ * Only the UPPER hemisphere is built: with the ball's equator flush on the rim,
+ * the lower half would be sealed inside the cone where nothing can ever see it.
+ * The rim therefore appears TWICE, at one position with two normals — the
+ * cone's and the dome's — because the surface genuinely creases there
+ * (5.7° at the 10:1 default) and one averaged normal would smear the join.
+ *
+ * UVs keep the module's convention around the axis (u eastward from −X, so the
+ * same image wraps a pin the way it wraps a sphere), and run v = 0 at the tip
+ * to 1 at the pole — ONE continuous run across cone and dome, which is the
+ * other thing two separately-mapped primitives could not give.
+ */
+export function zPinGeometry(
+  height = 1,
+  radius = 0.1,
+  options: PinOptions = {},
+): THREE.BufferGeometry {
+  const slices = options.slices ?? 32
+  const domeStacks = options.domeStacks ?? 8
+
+  // A ring of the meridian: (radius, z) and the surface normal there as
+  // (radial, z) — spun about the axis to give each vertex its own.
+  interface Ring {
+    r: number
+    z: number
+    nr: number
+    nz: number
+  }
+
+  // Outward normal of a cone whose apex is at the origin: the surface widens
+  // as it rises, so it faces out AND DOWN. Constant over the whole lateral
+  // surface, apex included.
+  const slope = Math.hypot(height, radius) || 1
+  const coneNr = height / slope
+  const coneNz = -radius / slope
+
+  const rings: Ring[] = [
+    { r: 0, z: 0, nr: coneNr, nz: coneNz }, // the apex, on the node's origin
+    { r: radius, z: height, nr: coneNr, nz: coneNz }, // the rim, cone side
+    { r: radius, z: height, nr: 1, nz: 0 }, // the rim again, dome side
+  ]
+  for (let j = 1; j <= domeStacks; j++) {
+    if (j === domeStacks) {
+      // The pole, written out rather than left to cos(π/2)'s 6e-17: an
+      // almost-zero radius is not zero, and the band below it would then emit
+      // a second, degenerate triangle per slice instead of collapsing.
+      rings.push({ r: 0, z: height + radius, nr: 0, nz: 1 })
+      break
+    }
+    const phi = (Math.PI / 2) * (j / domeStacks)
+    const cp = Math.cos(phi)
+    const sp = Math.sin(phi)
+    rings.push({ r: radius * cp, z: height + radius * sp, nr: cp, nz: sp })
+  }
+
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+  const top = height + radius
+
+  for (const ring of rings) {
+    for (let i = 0; i <= slices; i++) {
+      const u = i / slices
+      const lon = (u - 0.5) * TAU
+      const cos = Math.cos(lon)
+      const sin = Math.sin(lon)
+      positions.push(ring.r * cos, ring.r * sin, ring.z)
+      normals.push(ring.nr * cos, ring.nr * sin, ring.nz)
+      uvs.push(u, ring.z / top)
+    }
+  }
+
+  const stride = slices + 1
+  for (let k = 0; k < rings.length - 1; k++) {
+    const lower = rings[k]
+    const upper = rings[k + 1]
+    // The crease pair occupies one band of zero height; it carries normals,
+    // never faces.
+    if (lower.r === upper.r && lower.z === upper.z) continue
+    for (let i = 0; i < slices; i++) {
+      const a = k * stride + i
+      const b = a + stride
+      // Same winding as zSphereGeometry — longitude advances before latitude,
+      // giving outward-CCW faces — and the same collapse rule at a
+      // zero-radius ring, where one of the two triangles is degenerate.
+      if (lower.r > 0) indices.push(a, a + 1, b)
+      if (upper.r > 0) indices.push(b, a + 1, b + 1)
+    }
+  }
+
+  return buildGeometry(positions, normals, uvs, indices)
+}
+
 /**
  * Give every flat face of a solid the whole texture, 0–1.
  *
