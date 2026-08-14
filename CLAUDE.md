@@ -2241,15 +2241,52 @@ something to decide now).
       `createRootNode` / `createChildNode` (`src/gv/createNode.ts`), both
       paste branches (`src/gv/clipboard.ts`, whose `nextRootX` is the same
       allocator) and mesh import. Read `placement.py` and its test first.
-    - Three further desktop commits landed the same day and are unsurveyed
-      here: `979b9db` (the Pin glyph rebuilt to ANTz's DrawPinDL — closed at
-      both ends, apex ON the node origin, which MOVES every existing Pin and
-      is what makes `_pin_offset`'s `base_radius + tx` agree with the drawn
-      glyph, so `glyphGeometry.ts` + the pin's placement both need it),
-      `2d36a05` (Hyperglyph Generator ▸ Save Recipe…, writing the Composer's
-      own template JSON — both windows already exist here) and `7ed0b55`
-      (File ▸ Save Selection As…, a standalone scene with world placement
-      baked into the detached roots).
+    - **Pin glyph rebuilt to ANTz's DrawPinDL** (desktop `979b9db`) — **this is
+      the agreed NEXT port** (Jeff, 2026-08-14, on ending the placement
+      session), to be followed by a final commit AND a push, which this repo
+      otherwise never does unprompted.
+      - The desktop's Pin was a sphere floating above an OPEN-ended frustum,
+        giving two see-through holes — not a rendering trade-off but an
+        omission: `gluCylinder` draws a lateral surface only, and `_draw_pin`,
+        unlike `_draw_cone`/`_draw_cylinder` beside it, never added the
+        `gluDisk`s. It is now `DrawPinDL` (npgeometry.c:493) at 1/5 scale: a
+        10:1 cone with a genuine apex, capped by a dome whose rim IS the cone's
+        base circle — same radius, same z, so the join is watertight. Only the
+        UPPER hemisphere is drawn (the equator is flush on the rim, so the
+        lower half would be sealed inside the cone and no base disk is needed
+        either): 108 triangles against 208, 48% fewer, for a strictly more
+        closed solid. The rim carries TWO normals, the cone's and the dome's,
+        because the surface genuinely creases 5.7° there.
+      - The pin now stands with its APEX ON THE NODE ORIGIN, shaft along +Z,
+        instead of hanging below it — which is what makes `_pin_offset`'s
+        `base_radius + tx` agree with the drawn glyph (translate_x = 0 puts a
+        child at the head's centre, −base_radius at the tip, so the range walks
+        the shaft; children used to float above the whole glyph). Consequence
+        to expect and check: **every existing Pin rises about one glyph
+        height** — the desktop checked Multi_Hike_Race, where the hikers now
+        stand on their trail point rather than straddling it. Two built-in
+        scenes here draw pins.
+      - Scope here is `pinSolidGeometries` in `src/render/glyphGeometry.ts`
+        (currently the old shape: r 0.12 head at z 0.22 over a 1.1-long open
+        needle hanging to z −1.0). The commit does NOT touch `topology.py`, so
+        `topology.ts`'s Topo.Pin placement should need no change — VERIFY that
+        rather than assume it, since the whole point of the commit is the two
+        halves agreeing. Build it by hand, not from a Three primitive: that is
+        what allows the closure, the crease, and one continuous UV run (v = 0
+        at the tip to 1 at the pole), and `uvGeometry.test.ts`'s winding check
+        applies to both round surfaces.
+      - Read first: `979b9db`'s `glyphviz_gl/geometry.py` + the
+        PIN_HEIGHT/PIN_RADIUS constants it added to `geometry_data.py`, its
+        `tests/test_pin_geometry.py` (GL-free via the stub recorder; its
+        cross-module test pins the origin convention against `_pin_offset` so
+        the two halves cannot drift apart again), and the commit's edit to
+        `../glyphviz/glyphviz-skill/references/topologies.md`, which this
+        project treats as authoritative for placement math.
+    - Two further desktop commits landed the same day and are unsurveyed
+      here: `2d36a05` (Hyperglyph Generator ▸ Save Recipe…, writing the
+      Composer's own template JSON — both windows already exist here) and
+      `7ed0b55` (File ▸ Save Selection As…, a standalone scene with world
+      placement baked into the detached roots).
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
       already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
       the desktop had none for — but the desktop's crop-not-stretch rule
