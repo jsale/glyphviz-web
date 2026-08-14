@@ -2156,6 +2156,37 @@ something to decide now).
       mechanism rather than a copy of it, and the reasons it diverges are the
       design — that is why the port follows the desktop's coherent-rig version
       and not ANTz's own.
+    - **New-object placement: wrap the lattice, expose the step and Z**
+      (desktop `c2d8f13`) — **this is the agreed NEXT port** (Jeff,
+      2026-08-14, on ending the camera-smoothing session). ANTz stepped
+      translate_x and WRAPPED the row (`npNodeNew`: −15 per sibling, bumping
+      translate_y every 24 children — one 360 lap); GlyphViz stepped x
+      forever, so a long run of N / Shift+N ran off in a line and a circular
+      parent's 25th child landed on top of its first. The commit adopts the
+      wrap and makes ANTz's two hardcoded numbers adjustable: a Placement Step
+      (default 5.0, which changes the ROOT step from 10 → 5 so both gestures
+      share one lattice) and a Placement Z with SEPARATE root (0.0) and child
+      (5.0) boxes, because the axis means height above the world plane for a
+      root and offset off the parent for a child. The lattice is Qt-free in
+      `glyphviz_core/placement.py` and reached two ways a test pins against
+      each other over 200 steps — children by ordinal (`wrapped_grid_offset`),
+      roots relative to the previous object (`step_from`), since a root has no
+      ordinal. Root placement keys on the last root CREATED rather than
+      `max(translate_x)` (a wrap breaks that) and skips World Grids; links no
+      longer consume a child slot; translate_y deliberately does NOT wrap.
+      Five call sites share the helpers, and all five exist here too:
+      `createRootNode` / `createChildNode` (`src/gv/createNode.ts`), both
+      paste branches (`src/gv/clipboard.ts`, whose `nextRootX` is the same
+      allocator) and mesh import. Read `placement.py` and its test first.
+    - Three further desktop commits landed the same day and are unsurveyed
+      here: `979b9db` (the Pin glyph rebuilt to ANTz's DrawPinDL — closed at
+      both ends, apex ON the node origin, which MOVES every existing Pin and
+      is what makes `_pin_offset`'s `base_radius + tx` agree with the drawn
+      glyph, so `glyphGeometry.ts` + the pin's placement both need it),
+      `2d36a05` (Hyperglyph Generator ▸ Save Recipe…, writing the Composer's
+      own template JSON — both windows already exist here) and `7ed0b55`
+      (File ▸ Save Selection As…, a standalone scene with world placement
+      baked into the detached roots).
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
       already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
       the desktop had none for — but the desktop's crop-not-stretch rule
