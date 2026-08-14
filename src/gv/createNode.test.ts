@@ -37,21 +37,48 @@ describe('createRootNode', () => {
     expect(n.rotationMode).toBe(RotationMode.EulerXYZ)
   })
 
-  it('steps +10 along X past the furthest root glyph', () => {
+  it('steps one placement step on from the last root created', () => {
     const nodes = [
       stub({ id: 1, translate: { x: 0, y: 0, z: 0 } }),
       stub({ id: 2, translate: { x: 30, y: 0, z: 0 } }),
     ]
-    expect(createRootNode(nodes).translate.x).toBe(40)
+    expect(createRootNode(nodes).translate).toEqual({ x: 35, y: 0, z: 0 })
   })
 
-  it('ignores World/Camera nodes and child-level nodes when stepping', () => {
+  it('keys on the last root CREATED, not the furthest along X', () => {
+    // After a row wraps, the largest translate_x is back in the previous row —
+    // stepping from it would fold the array onto itself.
+    const nodes = [
+      stub({ id: 1, translate: { x: 355, y: 0, z: 0 } }),
+      stub({ id: 2, translate: { x: 0, y: 5, z: 0 } }),
+    ]
+    expect(createRootNode(nodes).translate).toEqual({ x: 5, y: 5, z: 0 })
+  })
+
+  it('wraps to a new row at a full lap', () => {
+    const nodes = [stub({ id: 1, translate: { x: 355, y: 0, z: 0 } })]
+    expect(createRootNode(nodes).translate).toEqual({ x: 0, y: 5, z: 0 })
+  })
+
+  it('ignores World/Camera/World Grid rows and child-level nodes when stepping', () => {
+    // A grid is the surface the array sits on, not a member of it.
     const nodes = [
       stub({ id: 1, type: NodeType.World, translate: { x: 500, y: 0, z: 0 } }),
       stub({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
       stub({ id: 3, parentId: 2, branchLevel: 1, translate: { x: 900, y: 0, z: 0 } }),
+      stub({ id: 4, type: NodeType.WorldGrid, translate: { x: 700, y: 0, z: 0 } }),
     ]
-    expect(createRootNode(nodes).translate.x).toBe(20)
+    expect(createRootNode(nodes).translate).toEqual({ x: 15, y: 0, z: 0 })
+  })
+
+  it('takes the caller-supplied placement step and root Z', () => {
+    const nodes = [stub({ id: 1, translate: { x: 240, y: 0, z: 0 } })]
+    const placement = { step: 120, rootZ: -3, childZ: 5 }
+    expect(createRootNode(nodes, NEW_OBJECT_DEFAULTS, placement).translate).toEqual({
+      x: 0,
+      y: 120,
+      z: -3,
+    })
   })
 
   it('does not share mutable state with the defaults object', () => {
@@ -72,7 +99,7 @@ describe('createChildNode', () => {
     expect(child.translate).toEqual({ x: 0, y: 0, z: 5 })
   })
 
-  it('spreads later children +5 along X per existing sibling', () => {
+  it('spreads later children one step along X per existing sibling', () => {
     const parent = stub({ id: 1 })
     const nodes = [
       parent,
@@ -82,6 +109,38 @@ describe('createChildNode', () => {
     const child = createChildNode(nodes, parent)
     expect(child.id).toBe(4)
     expect(child.translate).toEqual({ x: 10, y: 0, z: 5 })
+  })
+
+  it('wraps a full lap of siblings onto a new row instead of overlapping', () => {
+    // The whole point on a circular parent: the 73rd child at step 5 would land
+    // on top of the first, so it starts a new ring above it.
+    const parent = stub({ id: 1 })
+    const nodes = [parent]
+    for (let i = 0; i < 72; i++) nodes.push(stub({ id: i + 2, parentId: 1, branchLevel: 1 }))
+    expect(createChildNode(nodes, parent).translate).toEqual({ x: 0, y: 5, z: 5 })
+  })
+
+  it('does not let a link consume a placement slot', () => {
+    // A link renders between its two ends and ignores translate, so counting it
+    // would leave a hole in the array.
+    const parent = stub({ id: 1 })
+    const nodes = [
+      parent,
+      stub({ id: 2, type: NodeType.Link, parentId: 1, branchLevel: 1 }),
+      stub({ id: 3, parentId: 1, branchLevel: 1 }),
+    ]
+    expect(createChildNode(nodes, parent).translate).toEqual({ x: 5, y: 0, z: 5 })
+  })
+
+  it('takes the caller-supplied placement step and child Z', () => {
+    const parent = stub({ id: 1 })
+    const nodes = [parent, stub({ id: 2, parentId: 1, branchLevel: 1 })]
+    const child = createChildNode(nodes, parent, NEW_OBJECT_DEFAULTS, {
+      step: 120,
+      rootZ: 0,
+      childZ: -2.5,
+    })
+    expect(child.translate).toEqual({ x: 120, y: 0, z: -2.5 })
   })
 
   it('applies the caller-supplied defaults', () => {

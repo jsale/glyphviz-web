@@ -1379,6 +1379,70 @@ something to decide now).
         Camera Mode flying and stopping dead with smoothing on; and the setting
         surviving a scene load. Plus a stereo pass: the pair glides with the
         arm length unchanged to 1e-3 and a clean console.
+   z. New-object placement: wrap the lattice, expose the step and Z (shipped
+      2026-08-14, Jeff's request — a port of desktop `c2d8f13`). Repeated
+      N / Shift+N / New Node / New Child ran translate_x on forever, so a long
+      run went off in a line and — the real bug — a circular parent's 73rd child
+      at the historical spacing of 5 landed exactly on top of its first, 360°
+      being one lap. ANTz never had that problem: `npNodeNew` stepped x and
+      WRAPPED the row, bumping translate_y every 24 children (24 × 15 = one
+      lap). This adopts the wrap and makes ANTz's two hardcoded numbers
+      adjustable.
+      - `src/gv/placement.ts` is the desktop's Qt-free `placement.py`, pure and
+        DOM-free so it tests in plain node, and reached TWO ways because the two
+        callers know different things: `wrappedGridOffset(index, step)` places a
+        child by ORDINAL (its parent knows how many it has), `stepFrom(x, y,
+        step)` places a root RELATIVE to the last one created (a root has no
+        ordinal). `placement.test.ts` is `tests/test_placement.py` case for
+        case, including the 200-step run that pins the two entry points against
+        each other — they have to walk ONE lattice or a run of N and a run of
+        Shift+N would drift apart.
+      - Only x wraps. translate_y keeps climbing, a deliberate divergence from
+        ANTz, which folded both axes back into −180…180 and so eventually reused
+        slots; a long run here grows a taller grid instead.
+      - Placement Step (default 5.0, the historical CHILD spacing) therefore
+        changes the ROOT step 10 → 5, so both gestures share one lattice. Typing
+        15 gives ANTz's own. `columnsPerRow` is the number that makes the
+        setting legible — "wraps at 360" means nothing until you know it is 72
+        objects — so the tooltip and the status line both report it live, the
+        desktop's `_update_step_tip` / `_on_new_step_changed`.
+      - Placement Z is TWO boxes, root (0.0) and child (5.0), because the axis
+        MEANS different things at the two levels: height above the world plane
+        for a root, offset off the parent for a child — which is why a child at
+        0 would sit inside a topology-None parent while a root at 5 would hover
+        off the grid. On a Sphere/Torus/Cylinder parent the child number lifts
+        it radially off the surface instead. Labelled `root` / `child` inline
+        (new `.hud-sublabel`, which must not claim the row's 64px label column):
+        the desktop labels its pair too, and unlike the neighbouring Jitter pair
+        the two are not guessable from order.
+      - Two rules that keep the lattice honest, both the desktop's: root
+        placement keys on the last root CREATED (highest id) rather than the
+        largest translate_x, which a wrap breaks — after wrapping, the largest x
+        is back in the previous row and the array would fold onto itself; and
+        World Grids are skipped, a grid being the surface the array sits ON.
+        Links never consume a child slot, since they render between their two
+        ends and ignore translate, so counting one would leave a hole.
+      - All five desktop call sites exist here and share the helpers: N, Shift+N
+        (`createRootNode` / `createChildNode`), both paste branches
+        (`pasteSubtree`, which grew the same `placement` parameter) and mesh
+        import. `nextRootX` is retired for `nextRootPos`, joined by
+        `nextChildPos` — the desktop's `_next_root_pos` / `_next_child_pos`.
+      - The three existing tests that had baked in the old +10 root step are the
+        behaviour this replaces, and now state the new rule.
+      - Driven in Chrome, 25 measured checks: the rows' size, order and that
+        nothing overflows the 276px panel; the live tooltip (72 at step 5, 24 at
+        ANTz's 15) and both status messages; children stepping and wrapping at
+        step 120; a changed child Z reaching the next child without disturbing
+        the X/Y lattice; the Shift+N KEY walking the same lattice as the button;
+        roots stepping and wrapping at 150; the two Z boxes staying independent;
+        a World Grid taking no slot; and both paste branches taking the Z of
+        their destination level. Plus the payoff, measured through the real
+        scene graph: 80 children at step 5 on a Sphere parent read
+        (350,0) (355,0) **(0,5)** (5,5) across the wrap, child 73 sits one 5°
+        step of arc from child 1 where it used to sit ON it (distance 0), and
+        the closest pair of all 80 is 0.7822 — which is the equator spacing
+        0.7851 × cos 5°, i.e. plain longitude spacing on the second ring rather
+        than crowding. Console clean.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -2156,9 +2220,8 @@ something to decide now).
       mechanism rather than a copy of it, and the reasons it diverges are the
       design — that is why the port follows the desktop's coherent-rig version
       and not ANTz's own.
-    - **New-object placement: wrap the lattice, expose the step and Z**
-      (desktop `c2d8f13`) — **this is the agreed NEXT port** (Jeff,
-      2026-08-14, on ending the camera-smoothing session). ANTz stepped
+    - ~~**New-object placement: wrap the lattice, expose the step and Z**~~
+      (desktop `c2d8f13`) — **shipped 2026-08-14, see roadmap 6z.** ANTz stepped
       translate_x and WRAPPED the row (`npNodeNew`: −15 per sibling, bumping
       translate_y every 24 children — one 360 lap); GlyphViz stepped x
       forever, so a long run of N / Shift+N ran off in a line and a circular

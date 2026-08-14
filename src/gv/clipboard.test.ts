@@ -120,13 +120,23 @@ describe('pasteSubtree onto a target', () => {
 })
 
 describe('pasteSubtree with no target', () => {
-  it('becomes a root-level object at the next free root X', () => {
+  it('becomes a root-level object one placement step on from the last root', () => {
     const nodes = scene()
     const { pasted } = pasteSubtree(nodes, copySubtree(nodes, 3)!, null)
     expect(pasted[0].parentId).toBe(0)
     expect(pasted[0].branchLevel).toBe(0)
-    expect(pasted[0].translate).toEqual({ x: 30, y: 0, z: 0 }) // last root is at 20
+    expect(pasted[0].translate).toEqual({ x: 25, y: 0, z: 0 }) // last root created is at 20
     expect(pasted[1].branchLevel).toBe(1) // the child came down a level too
+  })
+
+  it('takes the ROOT placement Z, and the child branch takes the CHILD one', () => {
+    // The whole reason they are two numbers: a paste must not pick up the
+    // height of the level it is not landing at.
+    const nodes = scene()
+    const clip = copySubtree(nodes, 3)!
+    const placement = { step: 5, rootZ: 9, childZ: 4 }
+    expect(pasteSubtree(nodes, clip, null, placement).pasted[0].translate.z).toBe(9)
+    expect(pasteSubtree(nodes, clip, byId(nodes, 1), placement).pasted[0].translate.z).toBe(4)
   })
 
   it('pastes into a different scene, renumbering from that scene', () => {

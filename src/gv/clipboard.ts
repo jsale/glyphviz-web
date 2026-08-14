@@ -20,8 +20,10 @@
 // extras there as well), and no scene in the corpus authors the column — a node
 // without one is tagged by its own fresh id, which is unique by construction.
 
-import { nextNodeId, nextRootX } from './createNode'
+import { nextChildPos, nextNodeId, nextRootPos } from './createNode'
 import { linkChildId } from './links'
+import type { PlacementSettings } from './placement'
+import { DEFAULT_PLACEMENT } from './placement'
 import { descendantIds } from './treeOps'
 import type { GvNode, Vec3 } from './types'
 import { NodeType } from './types'
@@ -78,11 +80,12 @@ export function copySubtree(nodes: readonly GvNode[], rootId: number): Clipboard
  * A fresh copy of the clipboard subtree, parented onto `target`:
  *
  * - a target -> the subtree becomes a CHILD of it, positioned exactly like a
- *   new child node (siblingCount·5, 0, 5). Re-selecting the original's parent
- *   and pasting is therefore how you get a plain sibling — a sibling is just
- *   another child of the same parent.
- * - no target -> a new root-level object (branch level 0, parent 0) at the next
- *   free root X, wherever the original lived.
+ *   new child node (the next free slot in the wrapped placement lattice, at the
+ *   child Placement Z). Re-selecting the original's parent and pasting is
+ *   therefore how you get a plain sibling — a sibling is just another child of
+ *   the same parent.
+ * - no target -> a new root-level object (branch level 0, parent 0) one
+ *   Placement Step on from the last root created, wherever the original lived.
  *
  * Ids are reassigned from `max(existing) + 1` in clipboard order — the same
  * allocation rule new nodes use — and branch levels shift by the root's delta,
@@ -98,6 +101,7 @@ export function pasteSubtree(
   nodes: readonly GvNode[],
   clipboard: Clipboard,
   target: GvNode | null,
+  placement: PlacementSettings = DEFAULT_PLACEMENT,
 ): PasteResult {
   const root = clipboard.nodes.find((n) => n.id === clipboard.rootId)
   if (!root) return { pasted: [], droppedLinks: 0 }
@@ -112,15 +116,13 @@ export function pasteSubtree(
   if (target) {
     newParentId = target.id
     newBranchLevel = target.branchLevel + 1
-    let siblings = 0
-    for (const n of nodes) {
-      if (n.parentId === target.id) siblings++
-    }
-    newTranslate = { x: siblings * 5, y: 0, z: 5 }
+    const { x, y } = nextChildPos(nodes, target, placement)
+    newTranslate = { x, y, z: placement.childZ }
   } else {
     newParentId = 0
     newBranchLevel = 0
-    newTranslate = { x: nextRootX(nodes), y: 0, z: 0 }
+    const { x, y } = nextRootPos(nodes, placement)
+    newTranslate = { x, y, z: placement.rootZ }
   }
   const levelDelta = newBranchLevel - root.branchLevel
 

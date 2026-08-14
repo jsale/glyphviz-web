@@ -311,6 +311,14 @@ canvas {
   color: #9aa3b5;
 }
 
+/* Names one input inside a row that holds several (Placement Z's root/child
+   pair), rather than the row itself — so it must not claim the 64px label
+   column above. */
+.hud-create-row span.hud-sublabel {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
 .hud-create-row select,
 .hud-create-row input[type='text'],
 .hud-create-row input[type='number'] {

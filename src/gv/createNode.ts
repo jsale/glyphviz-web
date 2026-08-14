@@ -1,13 +1,15 @@
 // Node creation for N / Shift+N and the Create panel. Behavior ported
 // (not code) from the desktop app's _create_root_node/_create_child_node
-// (glyphviz_gl/main_window.py, verified against source 2026-07-24):
+// (glyphviz_gl/main_window.py, verified against source 2026-07-24, and
+// re-verified 2026-08-14 for the wrapped placement lattice):
 // - id allocation: max(existing ids) + 1 — never 0, since parent_id=0 is
 //   the universal root sentinel.
-// - New roots step +10 along X past the last root-level glyph so repeated
-//   presses don't overlap.
-// - New children spread at translate (siblingCount·5, 0, 5) under the
-//   parent's topology, for the same reason.
+// - New roots step one Placement Step on from the LAST root created.
+// - New children take the next free slot in the same lattice, by ordinal.
+// Both wrap to a new translate_y row at 360 — see `./placement`.
 
+import type { PlacementSettings, PlacementXY } from './placement'
+import { DEFAULT_PLACEMENT, stepFrom, wrappedGridOffset } from './placement'
 import type { GvNode, Rgba, Vec3 } from './types'
 import {
   DEFAULT_TOPO_SCALE,
@@ -44,8 +46,13 @@ export const NEW_OBJECT_DEFAULTS: NewObjectDefaults = {
   color: { r: 200, g: 200, b: 200, a: 255 },
 }
 
-/** Node types excluded from "last root glyph" placement (desktop node.py). */
-const NON_VISUAL = new Set<number>([NodeType.World, NodeType.Camera])
+/**
+ * Node types excluded from "last root glyph" placement: the desktop's
+ * NON_VISUAL_TYPES (World, Camera) plus World Grid — a grid is the surface the
+ * array of objects sits ON, not a member of it, so a new object steps on from
+ * the last real object rather than from the grid.
+ */
+const NOT_IN_ROOT_ARRAY = new Set<number>([NodeType.World, NodeType.Camera, NodeType.WorldGrid])
 
 export function nextNodeId(nodes: readonly GvNode[]): number {
   let max = 0
@@ -100,25 +107,57 @@ export function blankNode(id: number, d: NewObjectDefaults): GvNode {
 }
 
 /**
- * translate_x for the next root-level node: +10 past the last root glyph, or 0
- * for a scene with none. Desktop `_next_root_x`, shared there — and here — by
- * node creation and the no-target case of paste.
+ * The (translate_x, translate_y) for the next root-level node: one Placement
+ * Step on from the LAST root created, wrapping to a new row at 360, or the
+ * origin for a scene with none. Desktop `_next_root_pos`, shared there — and
+ * here — by node creation, the no-target case of paste, and mesh import.
+ *
+ * Keyed on the last root created (highest id) rather than the largest
+ * translate_x, because after a row wraps the largest x is back in the previous
+ * row and the array would fold onto itself.
  */
-export function nextRootX(nodes: readonly GvNode[]): number {
-  let maxX = Number.NEGATIVE_INFINITY
+export function nextRootPos(
+  nodes: readonly GvNode[],
+  placement: PlacementSettings = DEFAULT_PLACEMENT,
+): PlacementXY {
+  let last: GvNode | undefined
   for (const n of nodes) {
-    if (!NON_VISUAL.has(n.type) && n.branchLevel === 0) maxX = Math.max(maxX, n.translate.x)
+    if (NOT_IN_ROOT_ARRAY.has(n.type) || n.branchLevel !== 0) continue
+    if (!last || n.id > last.id) last = n
   }
-  return Number.isFinite(maxX) ? maxX + 10 : 0
+  if (!last) return { x: 0, y: 0 }
+  return stepFrom(last.translate.x, last.translate.y, placement.step)
 }
 
-/** New root-level node, stepping +10 along X from the last root glyph. */
+/**
+ * The (translate_x, translate_y) for the next child of `parent`: the next free
+ * slot in the wrapped step lattice. Desktop `_next_child_pos`, shared there —
+ * and here — by New Child and the one-target case of paste.
+ *
+ * Links (type 7) parented to the node don't count: they render between their
+ * two ends and ignore translate, so counting them would leave a hole.
+ */
+export function nextChildPos(
+  nodes: readonly GvNode[],
+  parent: GvNode,
+  placement: PlacementSettings = DEFAULT_PLACEMENT,
+): PlacementXY {
+  let placed = 0
+  for (const n of nodes) {
+    if (n.parentId === parent.id && n.type !== NodeType.Link) placed++
+  }
+  return wrappedGridOffset(placed, placement.step)
+}
+
+/** New root-level node, one Placement Step on from the last root created. */
 export function createRootNode(
   nodes: readonly GvNode[],
   defaults: NewObjectDefaults = NEW_OBJECT_DEFAULTS,
+  placement: PlacementSettings = DEFAULT_PLACEMENT,
 ): GvNode {
   const node = blankNode(nextNodeId(nodes), defaults)
-  node.translate.x = nextRootX(nodes)
+  const { x, y } = nextRootPos(nodes, placement)
+  node.translate = { x, y, z: placement.rootZ }
   return node
 }
 
@@ -168,22 +207,21 @@ export function createWorldGrid(nodes: readonly GvNode[]): GvNode {
 }
 
 /**
- * New child under `parent`, distributed along translate_x so repeated
- * presses don't overlap (desktop counts ALL existing children, visual or
- * not, so the two apps stay in step).
+ * New child under `parent`, taking the next free slot in the wrapped step
+ * lattice so repeated presses neither overlap nor run off in a line — on a
+ * circular parent (Sphere, Torus, Cylinder…) the child that completes a lap
+ * starts a new ring above the first instead of landing on top of it.
  */
 export function createChildNode(
   nodes: readonly GvNode[],
   parent: GvNode,
   defaults: NewObjectDefaults = NEW_OBJECT_DEFAULTS,
+  placement: PlacementSettings = DEFAULT_PLACEMENT,
 ): GvNode {
   const node = blankNode(nextNodeId(nodes), defaults)
   node.parentId = parent.id
   node.branchLevel = parent.branchLevel + 1
-  let siblings = 0
-  for (const n of nodes) {
-    if (n.parentId === parent.id) siblings++
-  }
-  node.translate = { x: siblings * 5, y: 0, z: 5 }
+  const { x, y } = nextChildPos(nodes, parent, placement)
+  node.translate = { x, y, z: placement.childZ }
   return node
 }

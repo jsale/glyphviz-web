@@ -15,6 +15,8 @@ import {
 } from './gv/createNode'
 import type { NewObjectDefaults } from './gv/createNode'
 import { placeStamp, shouldStamp } from './gv/drawMode'
+import { columnsPerRow, DEFAULT_PLACEMENT, PLACEMENT_WRAP } from './gv/placement'
+import type { PlacementSettings } from './gv/placement'
 import { generateNodes, recipeFromJson } from './gv/glyphRecipe'
 import type { GlyphRecipe } from './gv/glyphRecipe'
 import { buildHyperglyphNodes } from './gv/hyperglyph'
@@ -437,8 +439,8 @@ hud.innerHTML = `
   </div>
   <div id="hud-create">
     <div class="hud-create-buttons">
-      <button id="hud-new-node" title="New object at the world origin, stepping +10 in X per press. If a child-level node is selected, adds a child instead.">New Node (N)</button>
-      <button id="hud-new-child" title="New child under the selected node; repeated presses spread children along X." disabled>New Child (Shift+N)</button>
+      <button id="hud-new-node" title="New object using the defaults below, at the world origin.&#10;Each press steps X by the Placement Step, wrapping to a new Y row at 360, at the Placement Z (root) height.&#10;If a child-level node is selected, adds a child instead.">New Node (N)</button>
+      <button id="hud-new-child" title="New child under the selected node.&#10;Siblings step along X by the Placement Step and wrap to a new Y row at 360, so a full lap around a Sphere/Torus parent starts a new ring instead of overlapping; Placement Z (child) sets how far each one stands off its parent." disabled>New Child (Shift+N)</button>
     </div>
     <div class="hud-create-buttons">
       <button id="hud-new-grid" title="New World Grid at the world origin: the whole-earth window (lon −180…180, lat −90…90) at 1:1 world units.&#10;G selects and cycles grids; New Child, paste and Draw Mode add glyphs onto it.">New World Grid</button>
@@ -458,6 +460,17 @@ hud.innerHTML = `
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
     <div class="hud-create-row"><span>Scale</span><input id="hud-new-scale" type="number" min="0.001" step="0.1" value="1"></div>
     <div class="hud-create-row"><span>Color</span><input id="hud-new-color" type="color" value="#c8c8c8"></div>
+    <div class="hud-create-row" id="hud-placement-step-row">
+      <span>Placement Step</span>
+      <input id="hud-placement-step" type="number" min="0" max="10000" step="1" value="5">
+    </div>
+    <div class="hud-create-row" title="translate_z given to a new object.&#10;Root: its height above the world plane — 0 sits on the plane.&#10;Child: what it means is the parent topology's business — on Sphere/Torus/Cylinder it lifts the child off the surface radially, on Cartesian parents it is a plain Z offset. The default 5 is what keeps the first child from sitting inside a topology-None parent; 0 places it exactly on the surface.">
+      <span>Placement Z</span>
+      <span class="hud-sublabel">root</span>
+      <input id="hud-placement-root-z" type="number" min="-100000" max="100000" step="1" value="0" title="translate_z for a new ROOT-level object (N with nothing or a root selected, New Node, paste with no selection, an imported mesh).">
+      <span class="hud-sublabel">child</span>
+      <input id="hud-placement-child-z" type="number" min="-100000" max="100000" step="1" value="5" title="translate_z for a new CHILD (Shift+N, New Child, paste onto a selection).">
+    </div>
     <button id="hud-draw-mode" title="Draw Mode — paint objects onto a World Grid with the mouse  [D]&#10;Left click stamps one brush where the cursor meets the grid's plane; click-drag stamps a trail, one per Stamp Spacing pixels of travel. Draw Z is each stamp's elevation above the plane.&#10;Draws onto the selected grid, else the scene's first; entering the mode in a gridless scene creates one. Flat grids only.&#10;Right-drag still orbits, the wheel still zooms, Shift+drag still region-selects and Ctrl+click still adds to the selection — only plain click-select is suspended. Esc or D exits.">Draw Mode (D)</button>
     <div class="hud-create-row" id="hud-draw-stamp-row" title="What one click stamps: a single object built from the New Object Defaults above, or a whole Glyph Composer hyperglyph.&#10;Load a saved template (.json), or send one over with the Glyph Composer's Use as Draw Brush button. Loaded brushes stay in the list, so strokes can alternate.">
       <span>Stamp</span>
@@ -580,6 +593,10 @@ const newGeoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-geo')!
 const newTopoSelect = hud.querySelector<HTMLSelectElement>('#hud-new-topo')!
 const newScaleInput = hud.querySelector<HTMLInputElement>('#hud-new-scale')!
 const newColorInput = hud.querySelector<HTMLInputElement>('#hud-new-color')!
+const placementStepRow = hud.querySelector<HTMLDivElement>('#hud-placement-step-row')!
+const placementStepInput = hud.querySelector<HTMLInputElement>('#hud-placement-step')!
+const placementRootZInput = hud.querySelector<HTMLInputElement>('#hud-placement-root-z')!
+const placementChildZInput = hud.querySelector<HTMLInputElement>('#hud-placement-child-z')!
 const importMeshInput = hud.querySelector<HTMLInputElement>('#hud-import-mesh input')!
 const hyperglyphButton = hud.querySelector<HTMLButtonElement>('#hud-hyperglyph')!
 const composerButton = hud.querySelector<HTMLButtonElement>('#hud-composer')!
@@ -3347,10 +3364,63 @@ function readNewObjectDefaults(): NewObjectDefaults {
   }
 }
 
+/**
+ * The Create panel's placement settings — how far apart auto-placed new objects
+ * sit and what translate_z they take. Desktop `_placement_step` /
+ * `_placement_z`; the lattice they feed is `gv/placement.ts`.
+ */
+function readPlacement(): PlacementSettings {
+  const num = (input: HTMLInputElement, fallback: number) => {
+    const v = Number(input.value)
+    return Number.isFinite(v) ? v : fallback
+  }
+  return {
+    step: Math.abs(num(placementStepInput, DEFAULT_PLACEMENT.step)),
+    rootZ: num(placementRootZInput, DEFAULT_PLACEMENT.rootZ),
+    childZ: num(placementChildZInput, DEFAULT_PLACEMENT.childZ),
+  }
+}
+
+/** The desktop's `%g` on a step: no trailing zeros, no exponent in this range. */
+const fmtStep = (v: number) => String(Number(v.toFixed(6)))
+
+/**
+ * Keep the Placement Step tooltip showing what the CURRENT step actually buys —
+ * the row width is a consequence of the number typed, and "wraps at 360" means
+ * nothing until you know it is 72 objects (desktop `_update_step_tip`).
+ */
+function updatePlacementStepTip(): void {
+  const step = readPlacement().step
+  const row =
+    step > 0
+      ? `At ${fmtStep(step)}, a row holds ${columnsPerRow(step)} object(s) before wrapping.`
+      : '0 stacks every new object at the same spot.'
+  placementStepRow.title =
+    'How far apart consecutive auto-placed objects sit (N / Shift+N / New Node / New Child / paste).\n' +
+    `translate_x steps by this much; when it would reach ${PLACEMENT_WRAP}, it restarts at 0 and ` +
+    'translate_y takes the step instead — so objects array into a grid on a Cartesian parent, and ' +
+    'start a new ring instead of overlapping on a Sphere/Torus/Cylinder parent.\n' +
+    `${row}\nANTz used a fixed 15.`
+}
+
+placementStepInput.addEventListener('input', () => {
+  updatePlacementStepTip()
+  const step = readPlacement().step
+  status(
+    step > 0
+      ? `Placement Step ${fmtStep(step)} — ${columnsPerRow(step)} object(s) per row, then translate_y ` +
+          'steps to the next row.'
+      : 'Placement Step 0 — new objects will stack at the parent’s origin.',
+  )
+})
+updatePlacementStepTip()
+
 function addChildOfSelection() {
   const parent = selection.id !== null ? nodesById.get(selection.id) : undefined
   if (!parent) return
-  currentNodes.push(createChildNode(currentNodes, parent, readNewObjectDefaults()))
+  currentNodes.push(
+    createChildNode(currentNodes, parent, readNewObjectDefaults(), readPlacement()),
+  )
   rebuildScene(false) // parent stays selected so repeated presses spread children
 }
 
@@ -3361,7 +3431,7 @@ function addNode() {
     addChildOfSelection()
     return
   }
-  const node = createRootNode(currentNodes, readNewObjectDefaults())
+  const node = createRootNode(currentNodes, readNewObjectDefaults(), readPlacement())
   currentNodes.push(node)
   rebuildScene(false)
   setSelection(node.id)
@@ -3658,7 +3728,12 @@ function pasteClipboard() {
   if (selection.size > 1) {
     return status('Select exactly one node (or none) as the paste target.')
   }
-  const { pasted, droppedLinks } = pasteSubtree(currentNodes, clipboard, selectedNode())
+  const { pasted, droppedLinks } = pasteSubtree(
+    currentNodes,
+    clipboard,
+    selectedNode(),
+    readPlacement(),
+  )
   if (pasted.length === 0) return status('Nothing to paste.')
   currentNodes.push(...pasted)
   rebuildScene(false)
@@ -3835,7 +3910,11 @@ async function importMeshFiles(files: Array<{ file: File; source: string }>) {
       target.meshId = asset.id
       continue
     }
-    const node = createRootNode(currentNodes, { ...MESH_NODE_DEFAULTS, meshId: asset.id })
+    const node = createRootNode(
+      currentNodes,
+      { ...MESH_NODE_DEFAULTS, meshId: asset.id },
+      readPlacement(),
+    )
     currentNodes.push(node)
     created.push(node.id)
   }
