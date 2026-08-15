@@ -2441,9 +2441,24 @@ something to decide now).
       after building the Hyperglyph Tree Designer; the link-as-any-geometry
       renderer came with them as the prerequisite that makes a Designer tree
       draw as limbs rather than hairlines.
-    - **File ▸ Save Selection As…** (desktop `7ed0b55`) — a standalone scene
-      written from the current selection, with world placement baked into the
-      detached roots. Still unported; unsurveyed here.
+    - **NEXT SESSION, Jeff 2026-08-15**, the two scene-file features this app
+      still lacks — take them in this order, both unsurveyed here:
+      - **File ▸ Merge** (desktop `1bf847d`, Ctrl+M): merge a second node CSV
+        into the loaded scene. Qt-free in `glyphviz_core/scene_merge.py`
+        (`merge_nodes` + `recompute_branch_levels`, with a `MergeResult`
+        report), tested by `tests/test_scene_merge.py`. Web-side it has to
+        meet this app's own file layer — a merge is a second `bundle.ts`
+        scene, so companion tag files, `media/` and the Channels companions
+        are all questions the desktop's single-CSV merge does not face.
+      - **File ▸ Save Selection As…** (desktop `7ed0b55`): a standalone scene
+        written from the current selection, world placement baked into the
+        detached roots. Qt-free in `glyphviz_core/selection_export.py`
+        (`build_selection`, whose report counts descendants/ancestors/links
+        added and links dropped), tested by `test_selection_export.py` +
+        `test_selection_export_gui.py`. The selection rules it walks are ones
+        this app already has (subtree closure, links with both ends inside —
+        see `clipboard.ts`), and saving is a download here, as every other
+        save is.
     - **Hyperglyph Tree Designer** (desktop `418569c`) — a self-contained
       browser page in `hyperglyph_lab/`, shipped twice (there and under
       `glyphviz-docs/docs/hyperglyph_lab/`, pinned byte-identical by a test).
