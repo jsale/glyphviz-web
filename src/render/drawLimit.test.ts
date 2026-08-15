@@ -56,12 +56,19 @@ function roots(count: number, overrides: Partial<GvNode> = {}): GvNode[] {
   )
 }
 
-/** Every node id that ended up with an Object3D in the built graph. */
+/**
+ * Every node id that ended up with a FRAME in the built graph. Frames are the
+ * `gv:<id>` objects the recursion creates; a stretched link glyph also carries
+ * a nodeId (that is how a click on it resolves) but hangs off the link overlay
+ * in world space, so it is not one.
+ */
 function frameIds(nodes: GvNode[], drawLimit: number | null): number[] {
   const built = buildScene(nodes, { drawLimit })
   const ids: number[] = []
   built.root.traverse((o) => {
-    if (typeof o.userData.nodeId === 'number') ids.push(o.userData.nodeId)
+    if (o.name.startsWith('gv:') && typeof o.userData.nodeId === 'number') {
+      ids.push(o.userData.nodeId)
+    }
   })
   return ids.sort((a, b) => a - b)
 }

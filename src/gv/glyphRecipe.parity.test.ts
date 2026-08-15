@@ -13,11 +13,14 @@
 // The Composer hands the entire LevelSpec to the user, so the cases here are
 // deliberately the ones that harness cannot reach: Circular / Grid / Random
 // placement, ragged grids, solid vs gradient colour (different code paths, one
-// truncating and one rounding half-to-even), a count of 1, and four levels of
-// nesting. See the dump tool's docstring for the full list.
+// truncating and one rounding half-to-even), a count of 1, four levels of
+// nesting, and a level that LINKS its objects to their parents — whose edges
+// interleave with its nodes, so the id order is as much of the contract as the
+// values are. See the dump tool's docstring for the full list.
 
 import { describe, expect, it } from 'vitest'
 import { generateNodes, recipeFromJson, recipeToJson } from './glyphRecipe'
+import { linkChildId } from './links'
 import type { GvNode } from './types'
 import fixtureRaw from './fixtures/glyph_recipes.json?raw'
 
@@ -45,6 +48,8 @@ interface FixtureNode {
   ratio: number
   rotation_mode: number
   topo_scale: number
+  /** Link rows only: the B-end, which both apps keep in `extras`. */
+  child_id?: number
 }
 
 interface FixtureCase {
@@ -91,6 +96,11 @@ function checkNode(actual: GvNode, expected: FixtureNode, where: string): void {
   // output, and the one column here that no widget lets a user type on either
   // side while Auto is on.
   expect(Math.abs(actual.topoScale - expected.topo_scale), `${where} topo_scale`).toBeLessThan(TOL)
+
+  // A linked level emits its edges INTERLEAVED with its nodes (child then its
+  // own edge, then that child's subtree), so a drift in emission order shows up
+  // here as a link pointing at the wrong B-end rather than as a count mismatch.
+  expect(linkChildId(actual) || undefined, `${where} child_id`).toBe(expected.child_id)
 }
 
 describe('glyph recipe parity with desktop generate_nodes', () => {

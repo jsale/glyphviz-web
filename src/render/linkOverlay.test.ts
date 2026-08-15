@@ -71,6 +71,15 @@ function prismBatches(root: THREE.Object3D): THREE.Mesh[] {
   return overlayOf(root).children.filter((o): o is THREE.Mesh => o.name === 'link-prisms')
 }
 
+function glyphLinks(root: THREE.Object3D): THREE.Object3D[] {
+  return overlayOf(root).children.filter((o) => o.name === 'link-glyph')
+}
+
+/** Column `i` of a matrix as a vector — the glyph's own (scaled) axis. */
+function axisOf(m: THREE.Matrix4, i: number): THREE.Vector3 {
+  return new THREE.Vector3().setFromMatrixColumn(m, i)
+}
+
 /** Segment endpoints [a, b] of segment `i` in a batched line object. */
 function segmentAt(batch: LineSegments2, i: number): [number[], number[]] {
   const start = batch.geometry.attributes.instanceStart as THREE.InterleavedBufferAttribute
@@ -200,6 +209,82 @@ describe('link edges', () => {
     expect(proxies).toBeGreaterThan(0)
   })
 
+  it('draws any other geometry as that glyph stretched between the two ends', () => {
+    // A 10-unit edge along +X. The glyph's local −1…1 z span maps onto it, so
+    // its z axis is 5 long and points down the edge, its cross-axes are the
+    // link's ratio, and it sits at the midpoint (linkGeometry.ts).
+    const { root, links, warnings } = buildScene([
+      makeNode({ id: 1, translate: { x: 0, y: 0, z: 0 } }),
+      makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+      makeLink(3, 1, 2, { geometry: Geometry.CylinderSolid, ratio: 0.25 }),
+    ])
+    expect(warnings).toEqual([])
+    expect(links.count).toBe(1)
+    expect(lineBatches(root)).toHaveLength(0)
+    expect(prismBatches(root)).toHaveLength(0)
+    const glyph = glyphLinks(root)[0]
+    expect(glyph).toBeDefined()
+    root.updateMatrixWorld(true)
+    const m = glyph.matrixWorld
+    expectVec(new THREE.Vector3().setFromMatrixPosition(m).toArray(), [5, 0, 0])
+    expectVec(axisOf(m, 2).toArray(), [5, 0, 0]) // half the edge, along it
+    expect(axisOf(m, 0).length()).toBeCloseTo(0.25, 10)
+    expect(axisOf(m, 1).length()).toBeCloseTo(0.25, 10)
+  })
+
+  it('stands a Pin link on its A-end instead of straddling the edge', () => {
+    // The pin's local z runs 0…1.1 (its apex is at the origin), so the whole
+    // shape lies between the endpoints rather than centred on the midpoint —
+    // the desktop's one refinement over ANTz, which left it hanging past B.
+    const { root } = buildScene([
+      makeNode({ id: 1 }),
+      makeNode({ id: 2, translate: { x: 0, y: 0, z: 11 } }),
+      makeLink(3, 1, 2, { geometry: Geometry.PinSolid, ratio: 0.5 }),
+    ])
+    root.updateMatrixWorld(true)
+    const m = glyphLinks(root)[0].matrixWorld
+    const origin = new THREE.Vector3().setFromMatrixPosition(m)
+    expectVec(origin.toArray(), [0, 0, 0]) // local z = 0 lands ON the A-end
+    // local z = 1.1 lands on the B-end.
+    expectVec(origin.clone().addScaledVector(axisOf(m, 2), 1.1).toArray(), [0, 0, 11])
+  })
+
+  it('tracks endpoint moves and hides a collapsed edge', () => {
+    const nodeB = makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } })
+    const { root, links, frames } = buildScene([
+      makeNode({ id: 1 }),
+      nodeB,
+      makeLink(3, 1, 2, { geometry: Geometry.CubeSolid }),
+    ])
+    const glyph = glyphLinks(root)[0]
+    nodeB.translate.x = 0
+    applyFrameTransform(frames.get(2)!, nodeB, null)
+    root.updateMatrixWorld(true)
+    links.update()
+    // Coincident ends: no axis to orient along, so nothing is drawn (the
+    // matrix is null on both sides) rather than a degenerate one.
+    expect(glyph.visible).toBe(false)
+    nodeB.translate.x = 4
+    applyFrameTransform(frames.get(2)!, nodeB, null)
+    root.updateMatrixWorld(true)
+    links.update()
+    expect(glyph.visible).toBe(true)
+    expectVec(new THREE.Vector3().setFromMatrixPosition(glyph.matrixWorld).toArray(), [2, 0, 0])
+  })
+
+  it('keeps Line, Prism and Point links line-drawn (the back-compat surface)', () => {
+    const { root } = buildScene([
+      makeNode({ id: 1 }),
+      makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+      makeLink(3, 1, 2, { geometry: Geometry.Line }),
+      makeLink(4, 1, 2, { geometry: Geometry.TexturedPrism }),
+      makeLink(5, 1, 2, { geometry: Geometry.Point }),
+    ])
+    expect(glyphLinks(root)).toHaveLength(0)
+    expect(lineBatches(root)).toHaveLength(1) // Line + Point share a batch
+    expect(prismBatches(root)).toHaveLength(1)
+  })
+
   it('renders the link example scene: 6 ring lines + 6 spoke prisms, no warnings', () => {
     const parsed = parseGvNodeCsv(linkExampleCsv)
     expect(parsed.errors).toEqual([])
@@ -295,6 +380,21 @@ describe('link picking', () => {
       makeLink(3, 1, 2, { geometry: Geometry.TexturedPrism }),
     ])
     expect(pickAtWorld(root, pickCamera(), [0, 0, 0])).toBe(3)
+  })
+
+  it('picks a glyph link across its whole body, not just its centre line', () => {
+    // A fat cylinder link: the click is 3.5 units off the axis, well outside
+    // the 5px centre-line tolerance a thin link would have, and lands on the
+    // solid the desktop's pick pass draws for exactly this reason.
+    const { root } = buildForPicking([
+      makeNode({ id: 1, translate: { x: -10, y: 0, z: 0 } }),
+      makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+      makeLink(3, 1, 2, { geometry: Geometry.CylinderSolid, ratio: 4 }),
+    ])
+    expect(pickAtWorld(root, pickCamera(), [0, 3.5, 0])).toBe(3)
+    // Past its silhouette, nothing (the ratio-4 centre line is 80px, so this
+    // has to be well clear of that too).
+    expect(pickAtWorld(root, pickCamera(), [0, 9, 0])).toBeNull()
   })
 
   it('never picks a hidden link', () => {

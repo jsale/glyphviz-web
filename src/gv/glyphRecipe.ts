@@ -18,7 +18,7 @@ import { roundHalfToEven } from './channels'
 import { blankNode } from './createNode'
 import { LINEAR_PLACEMENT_AXES, ALL_AXES_LINEAR } from './placementAxes'
 import type { GvNode, Rgba } from './types'
-import { DEFAULT_TOPO_SCALE, Geometry, Topo, TOPO_SCALE_ANTZ } from './types'
+import { DEFAULT_TOPO_SCALE, Geometry, NodeType, Topo, TOPO_SCALE_ANTZ } from './types'
 
 /** How a level's items are laid out. Values are the desktop's own strings. */
 export const Dist = {
@@ -112,6 +112,36 @@ export interface LevelSpec {
   colorStart: RecipeColor
   /** null = one solid colour for the level; else a gradient across its items. */
   colorEnd: RecipeColor | null
+
+  /**
+   * LINK TO PARENT (non-root levels). When this is not null, every node at the
+   * level ALSO gets a companion Link (type 7) whose A-end is its parent and
+   * whose B-end is itself, rendered as this geometry stretched between the two
+   * (render/linkGeometry.ts — any id works; Line/Prism/Point stay line-drawn).
+   *
+   * This is what turns a glyph from a stack of touching shells into a jointed
+   * structure: separate the child from its parent (`distTz`) and the link
+   * becomes the visible limb between them. It is also how a Hyperglyph Tree
+   * Designer template describes its branches.
+   *
+   * null — the default, and what every template written before links existed
+   * loads as — emits no link nodes, so old recipes generate byte-identically.
+   * Ignored on level 0: a root's parent is whatever the glyph is inserted
+   * under (a World Grid, the scene origin), not part of the glyph.
+   */
+  linkGeo: number | null
+  /**
+   * Thickness on both cross-axes, in world units — the type-7 convention, NOT
+   * multiplied by the node's scale.
+   */
+  linkRatio: number
+  /**
+   * null = each link inherits its child node's own (gradient-resolved) colour;
+   * otherwise these two run a gradient across the siblings exactly as
+   * `colorStart`/`colorEnd` do.
+   */
+  linkColorStart: RecipeColor | null
+  linkColorEnd: RecipeColor | null
 }
 
 export interface GlyphRecipe {
@@ -146,6 +176,10 @@ export function levelSpec(overrides: Partial<LevelSpec> = {}): LevelSpec {
     rotateZ: 0,
     colorStart: [180, 100, 200, 255],
     colorEnd: null,
+    linkGeo: null,
+    linkRatio: 0.15,
+    linkColorStart: null,
+    linkColorEnd: null,
     ...overrides,
   }
 }
@@ -256,13 +290,26 @@ export function effectiveTopoScale(recipe: GlyphRecipe, levelIndex: number): num
 export function projectedNodeCount(recipe: GlyphRecipe, limit = Number.MAX_SAFE_INTEGER): number {
   let total = 0
   let perParent = 1
-  for (const spec of recipe.levels) {
+  for (const [index, spec] of recipe.levels.entries()) {
     perParent *= Math.max(spec.count, 1)
     total += perParent
+    // A non-root level with links doubles its own contribution — one type-7
+    // edge per node (desktop `recipe_node_count`).
+    if (index > 0 && spec.linkGeo !== null) total += perParent
     if (total >= limit) return limit
   }
   return total
 }
+
+/**
+ * Above this, a recipe is still perfectly valid — the JSON is a few hundred
+ * bytes whatever the tree expands to — but it stops being comfortable to EDIT
+ * in the Glyph Composer, whose auto-preview regenerates and re-bakes the whole
+ * tree 350 ms after every keystroke. That is what a caller offering to hand a
+ * recipe to the Composer should warn about; it is an editing-ergonomics
+ * threshold, not a correctness limit. Desktop `COMPOSER_EDIT_NODE_WARN`.
+ */
+export const COMPOSER_EDIT_NODE_WARN = 2000
 
 export interface GenerateOptions {
   /** First id handed out; ids then run consecutively in emission order. */
@@ -330,6 +377,32 @@ function genLevel(
     node.ratio = spec.ratio
     node.topoScale = topoScale
     nodes.push(node)
+
+    if (levelIndex > 0 && spec.linkGeo !== null) {
+      // Companion edge parent→this node, emitted right after its B-end so ids
+      // stay sequential and the pair reads together in the node table. That
+      // child-then-edge order is what lets Insert (which only offsets startId)
+      // and Draw Mode stamping stay coherent with no remapping.
+      //
+      // A link's own translate/rotate/scale are inert — it IS the edge — so
+      // they stay at their blank-node defaults.
+      const linkColor =
+        spec.linkColorStart === null
+          ? color
+          : lerpColor(spec.linkColorStart, spec.linkColorEnd, t)
+      const link = blankNode(startId + nodes.length, {
+        geometry: spec.linkGeo,
+        topo: Topo.None,
+        scale: { x: 1, y: 1, z: 1 },
+        color: linkColor,
+      })
+      link.type = NodeType.Link
+      link.parentId = parentId
+      link.branchLevel = branchLevel
+      link.ratio = spec.linkRatio
+      link.extras = { child_id: String(nodeId) }
+      nodes.push(link)
+    }
 
     genLevel(recipe, levelIndex + 1, nodeId, spec.topo, startId, branchLevel + 1, nodes)
   }
@@ -415,6 +488,70 @@ function lerpColor(start: RecipeColor, end: RecipeColor | null, t: number): Rgba
   return { r, g, b, a }
 }
 
+// ------------------------------------------------------- live-pose capture
+
+/**
+ * Fold `deg` into the Composer's rotation range (−360…360).
+ *
+ * Rate animation integrates rotate_x/y/z without wraparound (gv/rates.ts), so
+ * a glyph left spinning reaches thousands of degrees — the same orientation,
+ * but a number the Composer's rotation field would clamp to 360 the moment the
+ * level is selected, quietly losing exactly the state being captured. Values
+ * already in range are returned untouched rather than folded to 0…360, so a
+ * static recipe round-trips byte-identically instead of having every authored
+ * −20 rewritten as 340.
+ */
+export function composerSafeAngle(deg: number): number {
+  if (deg >= -360 && deg <= 360) return deg
+  // Python's `%` (and the desktop's), which always returns the divisor's sign.
+  return ((deg % 360) + 360) % 360
+}
+
+/**
+ * A copy of `recipe` whose per-level rotations come from the CURRENT
+ * orientation of `nodes` — the live node objects a preview has been
+ * integrating rate fields into — rather than from the values the recipe was
+ * authored with. `nodes` must be a `generateNodes` result for this recipe (the
+ * level a node belongs to is read off its branchLevel relative to the first,
+ * so any baseBranchLevel offset works).
+ *
+ * A recipe stores one rotation per LEVEL, and idle motion gives every NODE its
+ * own axis and speed (hyperglyph.ts `applyIdleMotion`), so siblings drift
+ * apart and no single value can describe them all. The capture is therefore
+ * exact for a level holding one node — always true of level 0, the trunk — and
+ * takes the FIRST node encountered at each deeper level as its representative.
+ * First-node over an average of the siblings, deliberately: it is an
+ * orientation that genuinely occurred on screen and stays stable as the spread
+ * grows, where a circular mean of nodes scattered right around the circle is
+ * both meaningless and liable to flip on tiny changes.
+ *
+ * Only rotation is captured, because only rotation drifts: idle motion sets
+ * rotate rates alone, and translate/scale have no LevelSpec field that could
+ * hold a per-node result anyway (position comes from the dist parameters).
+ */
+export function snapshotLevelRotations(
+  recipe: GlyphRecipe,
+  nodes: readonly GvNode[],
+): GlyphRecipe {
+  const levels = recipe.levels.map((spec) => ({ ...spec }))
+  if (levels.length > 0 && nodes.length > 0) {
+    const base = nodes[0].branchLevel
+    const seen = new Set<number>()
+    for (const node of nodes) {
+      // A link's own rotate is inert and always 0 — letting one stand in for
+      // its level would erase the authored rotation.
+      if (node.type === NodeType.Link) continue
+      const index = node.branchLevel - base
+      if (index < 0 || index >= levels.length || seen.has(index)) continue
+      seen.add(index)
+      levels[index].rotateX = composerSafeAngle(node.rotate.x)
+      levels[index].rotateY = composerSafeAngle(node.rotate.y)
+      levels[index].rotateZ = composerSafeAngle(node.rotate.z)
+    }
+  }
+  return { name: recipe.name, levels }
+}
+
 // ---------------------------------------------------------------- templates
 //
 // A saved template is the desktop's `recipe_to_dict` JSON exactly — snake_case
@@ -451,6 +588,10 @@ interface RecipeJsonLevel {
   rotate_z?: number
   color_start?: number[]
   color_end?: number[] | null
+  link_geo?: number | null
+  link_ratio?: number
+  link_color_start?: number[] | null
+  link_color_end?: number[] | null
 }
 
 export function recipeToJson(recipe: GlyphRecipe): unknown {
@@ -482,6 +623,10 @@ export function recipeToJson(recipe: GlyphRecipe): unknown {
         rotate_z: spec.rotateZ,
         color_start: [...spec.colorStart],
         color_end: spec.colorEnd ? [...spec.colorEnd] : null,
+        link_geo: spec.linkGeo,
+        link_ratio: spec.linkRatio,
+        link_color_start: spec.linkColorStart ? [...spec.linkColorStart] : null,
+        link_color_end: spec.linkColorEnd ? [...spec.linkColorEnd] : null,
       }),
     ),
   }
@@ -545,6 +690,19 @@ export function recipeFromJson(raw: unknown): GlyphRecipe {
         sd.color_end === null || sd.color_end === undefined
           ? null
           : toRecipeColor(sd.color_end, [80, 200, 180, 255]),
+      // Templates predating links carry none of these keys and load as
+      // linkGeo null — no links, output identical to before.
+      linkGeo:
+        sd.link_geo === null || sd.link_geo === undefined ? null : Math.trunc(sd.link_geo),
+      linkRatio: sd.link_ratio ?? 0.15,
+      linkColorStart:
+        sd.link_color_start === null || sd.link_color_start === undefined
+          ? null
+          : toRecipeColor(sd.link_color_start, [150, 110, 70, 255]),
+      linkColorEnd:
+        sd.link_color_end === null || sd.link_color_end === undefined
+          ? null
+          : toRecipeColor(sd.link_color_end, [110, 150, 90, 255]),
     })
   })
 

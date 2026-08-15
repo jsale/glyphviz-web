@@ -2185,6 +2185,10 @@ function rebuildScene(fitCamera: boolean) {
   currentOverlays?.dispose()
   currentRoot = built.root
   currentLinks = built.links
+  // A link drawn as a stretched glyph gets a halo like any other glyph, but
+  // its object hangs off the link overlay rather than off its own frame — so
+  // the selection is told where to find them, once per build.
+  selection.setLinkGlyphs(built.links.glyphObjects)
   currentOverlays = built.overlays
   currentFrames = built.frames
   applyLineResolution()
@@ -3792,6 +3796,7 @@ const hyperglyphWindow = new HyperglyphWindow({
         `(parent=${parent ? parent.id : 0}, ids ${nodes[0].id}-${nodes[nodes.length - 1].id})`,
     )
   },
+  status,
 })
 app.appendChild(hyperglyphWindow.element)
 hyperglyphButton.addEventListener('click', () => hyperglyphWindow.toggle())

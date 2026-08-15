@@ -26,6 +26,13 @@ that harness cannot reach:
   - the dialog's own `default_recipe()`, the two-level glyph it opens on
   - insertion parameters (start_id / parent_id / base_branch_level), the second
     call Insert into Scene makes
+  - LINK TO PARENT (desktop a9a845d): a level whose `link_geo` is set emits a
+    companion type-7 edge from each of its nodes back to its parent, right
+    after that node. The interleaving IS the contract — the Composer's insert
+    only offsets start_id and never remaps — so a drift in emission order
+    silently repoints every child_id. Covered with inherited colours, an
+    independent link gradient, a root-level link (ignored on both sides), and
+    three linked levels inserted mid-scene.
   - the Topology Scale AUTO-FIT (desktop 88091e1): a level whose children are
     distributed angularly gets TOPO_SCALE_ANTZ stamped on it when its own
     topology reads translate_x as a distance, and 1.0 when it reads it as an
@@ -72,6 +79,16 @@ FIELDS = [
 ]
 
 
+def node_row(n):
+    """One node as the web side reads it. A LINK carries its B-end in the
+    optional tracked columns (`extras['child_id']`), which is where both apps
+    read it from — without it the edge has no second endpoint at all."""
+    row = {f: getattr(n, f) for f in FIELDS}
+    if n.extras.get('child_id') is not None:
+        row["child_id"] = int(n.extras["child_id"])
+    return row
+
+
 def case(name, recipe, *, start_id=1, parent_id=0, base_branch_level=0,
          positions=True):
     """One dumped case. `positions=False` marks a recipe whose placement is
@@ -85,7 +102,7 @@ def case(name, recipe, *, start_id=1, parent_id=0, base_branch_level=0,
         "parent_id": parent_id,
         "base_branch_level": base_branch_level,
         "compare_positions": positions,
-        "nodes": [{f: getattr(n, f) for f in FIELDS} for n in nodes],
+        "nodes": [node_row(n) for n in nodes],
     }
 
 
@@ -263,6 +280,80 @@ def build_cases():
                       dist_mode=DIST_ANGULAR, dist_tz=0.5,
                       scale_x=0.15, scale_y=0.15, scale_z=0.15,
                       color_start=(40, 40, 200, 255)),
+        ])))
+
+    # ---- Link to parent (desktop a9a845d) ------------------------------
+    #
+    # A non-root level with link_geo set emits a companion type-7 edge from
+    # each of its nodes back to its parent, right AFTER that node — so the ids
+    # interleave, and any drift in that order repoints every child_id.
+    cases.append(case("links_simple", GlyphRecipe(name="Limbs", levels=[
+        LevelSpec(count=1, geometry=3, topo=2, dist_mode=DIST_LINEAR,
+                  color_start=(200, 200, 200, 255)),
+        LevelSpec(count=4, geometry=3, topo=TOPO_NONE, dist_mode=DIST_ANGULAR,
+                  dist_tz=3.0, scale_x=0.4, scale_y=0.4, scale_z=0.4,
+                  color_start=(240, 120, 60, 255),
+                  link_geo=19, link_ratio=0.2),
+    ])))
+
+    # Link colours: inherited from the child (link_color_start None) on one
+    # level, and their own gradient on the next — two different code paths in
+    # _lerp_color, and the gradient is the one that rounds half-to-even.
+    cases.append(case("links_colored", GlyphRecipe(name="Coloured limbs", levels=[
+        LevelSpec(count=1, geometry=1, topo=2, dist_mode=DIST_LINEAR,
+                  color_start=(255, 255, 255, 255)),
+        LevelSpec(count=3, geometry=3, topo=2, dist_mode=DIST_ANGULAR,
+                  dist_tz=2.0, scale_x=0.5, scale_y=0.5, scale_z=0.5,
+                  color_start=(0, 1, 2, 3), color_end=(5, 6, 7, 8),
+                  link_geo=1, link_ratio=0.35),
+        LevelSpec(count=2, geometry=3, topo=TOPO_NONE, dist_mode=DIST_ANGULAR,
+                  dist_tz=1.0, scale_x=0.25, scale_y=0.25, scale_z=0.25,
+                  color_start=(10, 20, 30, 255),
+                  link_geo=11, link_ratio=0.1,
+                  link_color_start=(0, 0, 0, 0),
+                  link_color_end=(3, 5, 7, 9)),
+    ])))
+
+    # Links on the ROOT level are ignored — a root's parent is whatever the
+    # glyph is inserted under, not part of the glyph.
+    cases.append(case("links_ignored_on_root", GlyphRecipe(name="Root link", levels=[
+        LevelSpec(count=2, geometry=1, topo=2, dist_mode=DIST_LINEAR,
+                  dist_step=4.0, color_start=(200, 200, 200, 255),
+                  link_geo=19, link_ratio=0.5),
+        LevelSpec(count=2, geometry=3, topo=TOPO_NONE, dist_mode=DIST_ANGULAR,
+                  dist_tz=1.5, color_start=(100, 100, 250, 255)),
+    ])))
+
+    # Three levels deep, links on every non-root level, inserted mid-scene:
+    # the id allocator has to interleave nodes and edges through the whole
+    # depth-first walk with a non-1 start_id.
+    cases.append(case("links_deep_inserted", GlyphRecipe(name="Tree", levels=[
+        LevelSpec(count=1, geometry=3, topo=2, ratio=0.2,
+                  dist_mode=DIST_LINEAR, color_start=(120, 90, 60, 255)),
+        LevelSpec(count=3, geometry=3, topo=2, dist_mode=DIST_ANGULAR,
+                  dist_tilt=35.0, dist_tz=4.0,
+                  scale_x=0.6, scale_y=0.6, scale_z=0.6,
+                  color_start=(140, 110, 70, 255),
+                  link_geo=19, link_ratio=0.25,
+                  link_color_start=(90, 60, 40, 255)),
+        LevelSpec(count=2, geometry=3, topo=TOPO_NONE, dist_mode=DIST_ANGULAR,
+                  dist_tilt=40.0, dist_tz=2.5,
+                  scale_x=0.35, scale_y=0.35, scale_z=0.35,
+                  color_start=(200, 60, 90, 255),
+                  link_geo=19, link_ratio=0.12),
+    ]), start_id=500, parent_id=17, base_branch_level=2))
+
+    # A level whose links are on and whose colour is a gradient AND whose own
+    # link colour is a solid: the link takes the solid, the node the gradient.
+    cases.append(case("links_solid_over_gradient", GlyphRecipe(
+        name="Mixed", levels=[
+            LevelSpec(count=1, geometry=1, topo=1, dist_mode=DIST_LINEAR,
+                      color_start=(255, 255, 255, 255)),
+            LevelSpec(count=5, geometry=1, topo=TOPO_NONE,
+                      dist_mode=DIST_LINEAR, dist_step=2.0,
+                      color_start=(0, 0, 0, 255), color_end=(255, 255, 255, 255),
+                      link_geo=16, link_ratio=0.4,
+                      link_color_start=(7, 9, 11, 13)),
         ])))
 
     return cases

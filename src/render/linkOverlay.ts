@@ -1,9 +1,12 @@
 // Link (type = 7) edge rendering, ported (behavior, not code) from the
-// desktop viewport's _draw_topology_overlays link pass + _draw_link_prism
-// (verified 2026-07-24). An edge runs from the A-end (parent_id) node's
-// world position to the B-end (child_id) node's world position:
+// desktop viewport's _draw_topology_overlays link pass + _draw_link_prism +
+// _draw_link_glyph (verified 2026-07-24, glyph links added 2026-08-15 from
+// desktop 21f400c). An edge runs from the A-end (parent_id) node's world
+// position to the B-end (child_id) node's world position, in one of three
+// modes chosen by `geometry` alone — so a link's look travels with the CSV and
+// no new column appears:
 //
-// - Any geometry except Textured Prism (28) → the classic line, pixel width
+// - Line (27) → the classic line, pixel width
 //   max(ratio·20, 1), in the link's color/alpha, unlit. Drawn with the
 //   three.js fat-line addon because WebGL core lines are capped at 1 px —
 //   LineMaterial needs the viewport resolution (setResolution). The
@@ -13,6 +16,24 @@
 //   edge direction (reference +Z, or +X when near-vertical). Texture flow
 //   (rotate_rate_z scrolling) waits on the textures step; until then the
 //   tube renders in flat link color like the desktop's untextured path.
+// - ANY OTHER geometry → that glyph itself, stretched along the axis joining
+//   the two ends (linkGeometry.ts owns the matrix): `ratio` is the thickness
+//   on both cross-axes and the endpoint distance is the length. This is what
+//   ANTz always did, and it is what makes an edge able to carry shape as well
+//   as connection — a Composer level that links its objects to their parents
+//   (glyphRecipe.ts) draws as a jointed limb rather than a hairline.
+//   Point (22) stays line-drawn with the two line modes: a fixed-pixel sprite
+//   has no extent to stretch, and that keeps the Org_Event_Network example's
+//   6,400 Point edges rendering exactly as before. An id this app does not
+//   render yet warns and draws nothing, the same answer buildScene gives for
+//   an ordinary node carrying it (the desktop instead falls back to a sphere,
+//   as it does for every unknown id anywhere).
+//
+// A glyph link is ONE Object3D each, where lines and prisms batch — the same
+// trade the desktop makes ("performance is left to the author, deliberately: a
+// scene of solid glyph links draws that many glyphs, and Line is still one
+// keystroke away"). Its matrix is rewritten per frame from its endpoints, like
+// every other edge here.
 //
 // Built for scale (the Org_Event_Network example carries 6,400 links in a
 // 65k-node scene, which the first per-link-object version took minutes to
@@ -39,6 +60,9 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import type { GvNode } from '../gv/types'
 import { Geometry, NodeType } from '../gv/types'
 import { linkChildId } from '../gv/links'
+import { createGlyphObject, createPickProxy } from './glyphGeometry'
+import { isGlyphLink, linkGlyphMatrix, localZSpan } from './linkGeometry'
+import { SELECTION_BOX_HALF } from './picking'
 
 const MIN_PRISM_RADIUS = 0.01
 const EPS = 1e-6
@@ -208,6 +232,58 @@ class PrismGroup {
   }
 }
 
+/**
+ * One link drawn as its own geometry, stretched between its two ends
+ * (`linkGeometry.ts`). Unlike the batched lines and prisms this is a real
+ * Object3D — it has to be, since it draws a lit, textured, indexed glyph — so
+ * it is also pick-solid across its whole body and can carry a selection halo,
+ * both of which the geometry-cycling workflow (O / Shift+O on a link) needs.
+ */
+class GlyphLink {
+  readonly spec: EdgeSpec
+  readonly object: THREE.Object3D
+  private readonly geometry: number
+  /** Cross-axis thickness, desktop `max(node.ratio, 1e-4)` — NOT the prism's
+   *  0.01 floor, which exists to keep a tube from collapsing to a line. */
+  private readonly ratio: number
+
+  constructor(spec: EdgeSpec, node: GvNode, object: THREE.Object3D) {
+    this.spec = spec
+    this.object = object
+    this.geometry = node.geometry
+    this.ratio = Math.max(node.ratio, 1e-4)
+    object.name = 'link-glyph'
+    // The matrix comes from the two endpoints, never from position/quaternion.
+    object.matrixAutoUpdate = false
+    // pickNodeId walks a pick proxy up to the nearest ancestor carrying a
+    // nodeId, so this stands in for the frame an ordinary glyph hangs under —
+    // a glyph link lives in world space here, not under the link's own frame.
+    object.userData.nodeId = node.id
+    object.userData.isGlyph = true
+    // The selection halo's z bounds. A glyph's local z span is mapped onto the
+    // edge and is not always symmetric (a Pin's runs 0…1.1), so the box cannot
+    // be the usual ±1.05 cube; the padding is that same 5% of the span.
+    const [zMin, zMax] = localZSpan(node.geometry)
+    const pad = ((zMax - zMin) * (SELECTION_BOX_HALF - 1)) / 2
+    object.userData.haloZ = [zMin - pad, zMax + pad]
+  }
+
+  /** True when the edge drew (a zero-length one has no axis to orient along). */
+  update(a: THREE.Vector3, b: THREE.Vector3): boolean {
+    a.setFromMatrixPosition(this.spec.aFrame.matrixWorld)
+    b.setFromMatrixPosition(this.spec.bFrame.matrixWorld)
+    const m = linkGlyphMatrix([a.x, a.y, a.z], [b.x, b.y, b.z], this.ratio, this.geometry)
+    this.object.visible = m !== null
+    if (m === null) return false
+    this.object.matrix.fromArray(m)
+    // Forced rather than flagged: the halo pass and the raycaster both read
+    // matrixWorld in the same frame this runs, and a flag would only be
+    // consumed by the renderer's next traversal.
+    this.object.updateMatrixWorld(true)
+    return true
+  }
+}
+
 // Ring order stepping consistently around the square: ++, +−, −−, −+.
 const PRISM_RING: ReadonlyArray<readonly [number, number]> = [
   [1, 1],
@@ -290,7 +366,15 @@ export class LinkOverlay {
   readonly group = new THREE.Group()
   private lineGroups: LineGroup[] = []
   private prismGroups: PrismGroup[] = []
+  private glyphLinks: GlyphLink[] = []
   private edgeCount = 0
+  /**
+   * Link id → the stretched glyph drawn for it, for the selection halo. An
+   * ordinary node's halo is found through its frame's glyph child; a glyph
+   * link's lives in this overlay instead, because its transform comes from two
+   * other nodes rather than from its own frame.
+   */
+  readonly glyphObjects = new Map<number, THREE.Object3D>()
   /** Shared with the picker, which needs the viewport size for pixel widths. */
   private resolution = new THREE.Vector2()
   /** Link rows that produced a drawn (and therefore pickable) edge. */
@@ -304,7 +388,8 @@ export class LinkOverlay {
   private vCorner = new THREE.Vector3()
 
   constructor(lines: Map<string, { edges: EdgeSpec[]; widthPx: number; alpha: number }>,
-              prisms: Map<string, { edges: EdgeSpec[]; alpha: number }>) {
+              prisms: Map<string, { edges: EdgeSpec[]; alpha: number }>,
+              glyphs: GlyphLink[] = []) {
     this.group.name = 'link-overlay'
     const all: EdgeSpec[] = []
     for (const { edges, widthPx, alpha } of lines.values()) {
@@ -321,9 +406,18 @@ export class LinkOverlay {
       this.edgeCount += edges.length
       all.push(...edges)
     }
+    for (const glyph of glyphs) {
+      this.glyphLinks.push(glyph)
+      this.group.add(glyph.object)
+      this.glyphObjects.set(glyph.spec.nodeId, glyph.object)
+      this.edgeCount++
+      all.push(glyph.spec)
+    }
     // Prisms are pick targets on the same terms as lines: the desktop's pick
     // pass draws every link as a line whatever its geometry, so a tube is
-    // clicked along its axis rather than on its silhouette.
+    // clicked along its axis rather than on its silhouette. A glyph link keeps
+    // that centre-line target AND gets its own solid proxy, exactly as the
+    // desktop's pick pass draws both.
     for (const edge of all) this.nodeIds.add(edge.nodeId)
     if (all.length > 0) this.group.add(new LinkPicker(all, this.resolution))
   }
@@ -350,6 +444,7 @@ export class LinkOverlay {
     for (const g of this.prismGroups) {
       g.update(this.va, this.vb, this.vDir, this.vRight, this.vUp, this.vCorner)
     }
+    for (const g of this.glyphLinks) g.update(this.va, this.vb)
   }
 }
 
@@ -366,9 +461,15 @@ export function buildLinkOverlay(
   frames: ReadonlyMap<number, THREE.Object3D>,
   root: THREE.Object3D,
   warn: (message: string) => void,
+  /** What a stretched glyph link draws with, when the scene has any. */
+  assets: {
+    textures?: ReadonlyMap<number, THREE.Texture>
+    meshes?: ReadonlyMap<number, THREE.BufferGeometry>
+  } = {},
 ): LinkOverlay {
   const lines = new Map<string, { edges: EdgeSpec[]; widthPx: number; alpha: number }>()
   const prisms = new Map<string, { edges: EdgeSpec[]; alpha: number }>()
+  const glyphs: GlyphLink[] = []
 
   for (const node of nodes) {
     if (node.type !== NodeType.Link || node.hide !== 0) continue
@@ -393,6 +494,29 @@ export function buildLinkOverlay(
       pickWidthPx: Math.max(node.ratio * 20, MIN_PICK_WIDTH_PX),
     }
     const alpha = node.color.a / 255
+    if (isGlyphLink(node.geometry)) {
+      const mesh = node.geometry === Geometry.Mesh ? assets.meshes?.get(node.meshId) : undefined
+      const object = createGlyphObject(node.geometry, {
+        color: spec.color,
+        opacity: alpha,
+        // A torus link reads `ratio` as its tube proportion, the same field the
+        // matrix uses as thickness — the desktop passes it to both too.
+        ratio: node.ratio,
+        map: node.textureId > 0 ? assets.textures?.get(node.textureId) : undefined,
+        mesh,
+      })
+      if (!object) {
+        warn(`Geometry id ${node.geometry} is not rendered yet (link node ${node.id}).`)
+        continue
+      }
+      // Pick-solid across the whole body, where a line link is only clickable
+      // near its centre line (desktop `_draw_link_pick_targets`). Wire ids swap
+      // to their solid equivalent inside createPickProxy, as everywhere else.
+      const proxy = createPickProxy(node.geometry, mesh)
+      if (proxy) object.add(proxy)
+      glyphs.push(new GlyphLink(spec, node, object))
+      continue
+    }
     if (node.geometry === Geometry.TexturedPrism) {
       const key = alpha.toFixed(6)
       let g = prisms.get(key)
@@ -413,7 +537,7 @@ export function buildLinkOverlay(
     }
   }
 
-  const overlay = new LinkOverlay(lines, prisms)
+  const overlay = new LinkOverlay(lines, prisms, glyphs)
   root.add(overlay.group)
   if (overlay.count > 0) {
     root.updateMatrixWorld(true) // once, so the first frame is exact

@@ -122,6 +122,23 @@ const BOX_EDGES = [
 export class Selection {
   /** The glyphs a halo is drawn around, in halo-slot order. */
   private glyphs: THREE.Object3D[] = []
+  /**
+   * Each halo's local-space z bounds, parallel to `glyphs`. ±1.05 for an
+   * ordinary glyph; a stretched LINK glyph instead carries the geometry's own
+   * z span mapped onto the edge (`userData.haloZ`), which is not always
+   * symmetric — a Pin's runs 0…1.1, and a box drawn at ±1.05 around it would
+   * sit half a link off its own limb. Desktop `_draw_selection_box`'s
+   * z_lo/z_hi arguments, which exist for exactly this.
+   */
+  private zSpans: [number, number][] = []
+  /**
+   * Link id → the stretched glyph drawn for it (`LinkOverlay.glyphObjects`).
+   * A link's halo cannot be found the usual way — its glyph hangs off the link
+   * overlay in world space, not off its own frame — so the app hands this over
+   * once per scene build. Line and prism links never appear in it and stay
+   * halo-less, matching the desktop's outline pass.
+   */
+  private linkGlyphs: ReadonlyMap<number, THREE.Object3D> = new Map()
   private order: number[] = []
   private members = new Set<number>()
   private overflow = 0
@@ -206,8 +223,18 @@ export class Selection {
    * primary by passing scene row order). Ids with no frame in the scene are
    * dropped. `null` or an empty list clears.
    */
+  /**
+   * Register the scene's stretched link glyphs. Call once per scene build,
+   * before any `set` — a rebuild replaces every object, so a stale map would
+   * outline a link that no longer exists at a position it no longer has.
+   */
+  setLinkGlyphs(glyphs: ReadonlyMap<number, THREE.Object3D>): void {
+    this.linkGlyphs = glyphs
+  }
+
   set(frames: FrameLookup, ids: number | null | Iterable<number>): void {
     this.glyphs.length = 0
+    this.zSpans.length = 0
     this.order.length = 0
     this.members.clear()
     this.overflow = 0
@@ -217,13 +244,15 @@ export class Selection {
       if (!frame || this.members.has(nodeId)) continue // not in the scene at all
       this.members.add(nodeId)
       this.order.push(nodeId)
-      const glyph = frame.children.find((c) => c.userData.isGlyph)
+      const glyph = frame.children.find((c) => c.userData.isGlyph) ?? this.linkGlyphs.get(nodeId)
       if (!glyph) continue
       if (this.glyphs.length >= this.maxHalos) {
         this.overflow++
         continue
       }
       this.glyphs.push(glyph)
+      const z = glyph.userData.haloZ as [number, number] | undefined
+      this.zSpans.push(z ?? [-SELECTION_BOX_HALF, SELECTION_BOX_HALF])
     }
 
     this.reserve(this.glyphs.length)
@@ -253,17 +282,17 @@ export class Selection {
       const bx = e[4] * b
       const by = e[5] * b
       const bz = e[6] * b
-      const cx = e[8] * b
-      const cy = e[9] * b
-      const cz = e[10] * b
+      // Z takes its two bounds separately rather than a half-extent: they are
+      // symmetric for every ordinary glyph and are not for a link's.
+      const [zLo, zHi] = this.zSpans[i]
       let o = i * CORNERS * 3
       for (let corner = 0; corner < CORNERS; corner++) {
         const sx = corner & 4 ? 1 : -1
         const sy = corner & 2 ? 1 : -1
-        const sz = corner & 1 ? 1 : -1
-        p[o++] = e[12] + sx * ax + sy * bx + sz * cx
-        p[o++] = e[13] + sx * ay + sy * by + sz * cy
-        p[o++] = e[14] + sx * az + sy * bz + sz * cz
+        const z = corner & 1 ? zHi : zLo
+        p[o++] = e[12] + sx * ax + sy * bx + z * e[8]
+        p[o++] = e[13] + sx * ay + sy * by + z * e[9]
+        p[o++] = e[14] + sx * az + sy * bz + z * e[10]
       }
     }
     // Upload only the slots in use — the buffer keeps its high-water size, and

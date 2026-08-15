@@ -72,19 +72,32 @@ describe('cycleGeometry', () => {
     expect(n.geometry).toBe(Geometry.Star)
   })
 
-  it('toggles a Link node between Line and Textured Prism in either direction', () => {
+  // A Link used to toggle between the two line modes, which was its whole
+  // vocabulary before a link could carry a glyph. It now cycles the full
+  // range: every geometry draws as that shape stretched between its two ends.
+  it('steps a Link node through the whole geometry range, in either direction', () => {
     const link = node({ type: NodeType.Link, geometry: Geometry.Line })
     cycleGeometry([link], 1)
     expect(link.geometry).toBe(Geometry.TexturedPrism)
     cycleGeometry([link], 1)
-    expect(link.geometry).toBe(Geometry.Line)
+    expect(link.geometry).toBe(Geometry.CubeWire) // 28 wraps to 0
     cycleGeometry([link], -1)
     expect(link.geometry).toBe(Geometry.TexturedPrism)
   })
 
-  it('leaves a link node on a non-line geometry pointing at the prism', () => {
+  it('steps a Link over Mesh and Point, the two ids meaningless on an edge', () => {
+    // 21 Grid → 22 Point is a duplicate of the Line mode, 23 Mesh needs a
+    // mesh_id → 24 Circle.
+    const link = node({ type: NodeType.Link, geometry: Geometry.GridSolid })
+    cycleGeometry([link], 1)
+    expect(link.geometry).toBe(Geometry.Circle)
+    cycleGeometry([link], -1)
+    expect(link.geometry).toBe(Geometry.GridSolid)
+  })
+
+  it('keeps a Link on a glyph geometry rather than snapping to a line mode', () => {
     const link = node({ type: NodeType.Link, geometry: Geometry.SphereSolid })
     cycleGeometry([link], 1)
-    expect(link.geometry).toBe(Geometry.TexturedPrism)
+    expect(link.geometry).toBe(Geometry.ConeWire) // 3 → 4, no special case
   })
 })

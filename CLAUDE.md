@@ -1503,6 +1503,135 @@ something to decide now).
         the dome show a closed, watertight solid, and the wire pin reads as one
         silhouette converging on a real point. Console clean but for the
         pre-existing `map: undefined` warnings.
+   bb. Links carry shape, and both tool windows learn the format (shipped
+      2026-08-15, Jeff's request — a port of desktop `21f400c` + `a9a845d` +
+      `2d36a05`, driven by his new **Hyperglyph Tree Designer**, a Lab page
+      that designs branching trees and exports them as Glyph Composer
+      templates). Jeff asked for the two TOOL changes; the renderer one is a
+      prerequisite he had forgotten this app was missing (agreed 2026-08-15) —
+      the Designer's presets set `link_geo` to 19/1/11/16, so without it a tree
+      imported here would draw as stick-lines instead of limbs.
+      - A LINK IS ANY GEOMETRY, stretched between its two ends (desktop
+        `21f400c`, ANTz `npDrawLink`). `src/render/linkGeometry.ts` is the
+        desktop's Qt-free `link_geometry.py`: `Rz(atan2(uy,ux) − 90°) ·
+        Rx(asin(uz) + 90°)` built column by column, `ratio` on BOTH cross-axes,
+        the endpoint distance as the length. A link has no independent pose —
+        its own translate/rotate/scale play no part, and neither does the
+        Global Scale slider or the minimum-size clamp, which belong to a
+        node's own draw matrix.
+        - The roll is ANTz's composition, NOT an arbitrary-up cross product
+          (which is what the prism tube beside it still uses): column 0 is
+          horizontal, so a glyph link keeps a gravity-referenced roll as it
+          swings around instead of flipping when a reference axis is crossed.
+        - Each glyph's OWN local z extent maps onto the segment rather than
+          ANTz's fixed 2 units. Identical for every −1…1 shape; it differs only
+          for Pin, whose apex sits at its local origin (6aa) — a pin link's tip
+          lands on A and its dome on B, where ANTz left it hanging past the
+          B-end.
+        - Line (27), Prism (28) and Point (22) stay line-drawn. That set IS the
+          back-compat surface: Org_Event_Network's 6,400 Point edges render
+          exactly as before. An id this app doesn't render yet warns and draws
+          nothing, where the desktop falls back to a sphere — the same
+          divergence buildScene already has for an ordinary node.
+        - A glyph link is ONE Object3D each, where lines and prisms batch —
+          the desktop's own trade ("performance is left to the author; Line is
+          still one keystroke away"). Its matrix is rewritten per frame from
+          its endpoints like every other edge, but `updateMatrixWorld(true)` is
+          FORCED rather than flagged: the halo pass and the raycaster read
+          matrixWorld in the same frame, where a flag would only be consumed by
+          the renderer's next traversal.
+        - It is pick-solid across its whole body (a proxy under the glyph, plus
+          the existing centre-line picker — the desktop's pick pass draws
+          both), and a selected one draws a HALO, which the O-cycling workflow
+          needs. The halo's z bounds come from the geometry's own span, so
+          `Selection` now keeps a per-halo `[zLo, zHi]` instead of assuming
+          ±1.05 — a Pin limb's box runs −0.275…11.275 on an 11-unit edge, not a
+          cube centred on the midpoint. Line and prism links still get none.
+        - O / Shift+O cycles a link through the FULL geometry range (skipping
+          Mesh and Point), where it used to toggle Line↔Prism — that toggle was
+          a link's whole vocabulary before this. The two existing tests that
+          pinned the toggle are the behaviour this replaces.
+        - The desktop's other two pieces have no web counterpart: its
+          inspector `ratio` box was widened 1.0 → 10.0, where this app's row
+          has never had a cap; and its PDB bond change lands in an importer
+          section 10 deliberately does not port.
+        - Parity: `tools/dump_link_matrices.py` runs the REAL
+          `link_glyph_matrix` over 15 endpoint/ratio/geometry cases (vertical
+          both ways, degenerate, pin, far from the origin, hairline and fat
+          ratios) plus `is_glyph_link`/`local_z_span` for all 29 ids;
+          `linkGeometry.parity.test.ts` diffs at 1e-12. Verified to FAIL both
+          ways — 3 cases without the pin span, 15 with the roll columns
+          flipped.
+      - COMPOSER LINK LEVELS (desktop `a9a845d`). A `LevelSpec` carries
+        `linkGeo` / `linkRatio` / an optional link colour pair, and
+        `generateNodes` emits a companion type-7 Link from each of the level's
+        objects back to its parent. Separate a level from its parent (Altitude
+        Z) and the link becomes the visible limb — which is what turns a
+        composed glyph from a stack of touching shells into a jointed,
+        branching structure.
+        - Emission is CHILD-THEN-EDGE with sequential ids, so the Composer's
+          insert (which only offsets `startId`) and Draw Mode stamping stay
+          coherent with no remapping. The interleaving is as much of the
+          contract as the values are, which is why the parity fixture carries
+          `child_id` and the test diffs it row for row.
+        - `linkGeo` null is the default AND the load default for every key a
+          template omits, so the entire existing template population generates
+          byte-identically — checked by regenerating the vendored fixture: 34
+          of 35 existing cases came back with unchanged nodes (the 35th is the
+          random-placement one, un-reproducible on both sides by design).
+        - Ignored on level 0: a root's parent is whatever the glyph is inserted
+          under, not part of the glyph. A linked level also DOUBLES its
+          contribution to `projectedNodeCount`.
+        - GUI: a "Link to Parent" group at the foot of every non-root level's
+          form — enable checkbox, Geometry (Mesh and Point excluded, the same
+          two ids the O-cycle skips on a link), Thickness, Use node color, and
+          the link's own colour + gradient, greyed in one `sync()` chain the
+          way the desktop's checkable QGroupBox drives `setEnabled`. The level
+          list marks a linked level with the desktop's own `⌁`.
+      - GENERATOR ▸ SAVE RECIPE… (desktop `2d36a05`): the Hyperglyph Generator
+        writes its design as the same Glyph Template .json the Composer opens,
+        so a randomized hyperglyph worth keeping can be reworked level by level
+        instead of only being inserted as-is. Named `Hyperglyph_<seed>` — the
+        design's reproducible identity — which is also the downloaded filename.
+        - The awkward part is that with Idle Motion running the preview is
+          SPINNING when Save is clicked. A recipe stores one rotation per LEVEL
+          while idle motion gives every NODE its own axis and speed, so
+          "Capture live orientation" (on by default) captures level 0 — the
+          single trunk node — exactly, and takes each deeper level's FIRST node
+          as its representative. First-node over a circular mean deliberately:
+          it is an orientation that genuinely occurred on screen and stays
+          stable as the spread grows.
+        - `composerSafeAngle` folds only OUT-OF-RANGE values into 0…360, using
+          Python's modulo sign. Rate integration has no wraparound, so an
+          idling glyph reaches tens of thousands of degrees, which a rotation
+          field would clamp — while a static recipe still round-trips
+          byte-identically rather than having every authored −20 rewritten as
+          340. The snapshot skips LINK rows, whose rotate is inert and always
+          0.
+        - The size warning is a NODE COUNT (`COMPOSER_EDIT_NODE_WARN` = 2000),
+          not a file size: the .json is tiny whatever the tree expands to, and
+          what gets heavy is the Composer's auto-preview rebuilding the whole
+          tree 350 ms after every keystroke. Said in the info line right after
+          Regenerate — while Regenerate is still one cheap click away — and
+          again as a Save/Cancel `confirm()` at save time. The default budget
+          of 500 never trips it, pinned by a test so the prompt does not become
+          something to click through.
+      - Driven in Chrome, 57 measured checks over three passes, including the
+        motivating case END TO END: the real Tree Designer page (opened from
+        the desktop repo over `file://`) exports its Classic Fractal Tree, the
+        web Composer loads all 10 levels with the 8 linked ones marked, and the
+        767-node tree renders with 255 limbs — each spanning its own two
+        endpoints to 4e-16, none of them line-drawn. Then a limb picked by
+        clicking its body, its halo, O re-shaping it, the CSV round trip (255
+        type-7 rows out and back with no dangling B-end), the same tree as a
+        Draw Mode brush painting a forest (two stamps, 0 duplicate ids), and
+        the Generator's Save Recipe → the file reopening in the Composer.
+        Console clean throughout.
+        - One thing the pictures settled that no measurement would have: at the
+          whole tree's default framing a limb is ~10 px long and the joint
+          spheres cover its midpoint, so a click there correctly selects the
+          sphere in front. The pick check had to frame a limb close up before
+          it meant anything.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -2305,11 +2434,23 @@ something to decide now).
       **shipped 2026-08-14, see roadmap 6aa.** It was the agreed next port
       (Jeff, 2026-08-14, on ending the placement session), to be followed by a
       commit AND a push, which this repo otherwise never does unprompted.
-    - Two further desktop commits landed the same day and are unsurveyed
-      here: `2d36a05` (Hyperglyph Generator ▸ Save Recipe…, writing the
-      Composer's own template JSON — both windows already exist here) and
-      `7ed0b55` (File ▸ Save Selection As…, a standalone scene with world
-      placement baked into the detached roots).
+    - ~~**Links carry shape, and the two tool windows learn the format**~~
+      (desktop `21f400c` + `a9a845d` + `2d36a05`, plus `16c9426` which this app
+      already behaved as) — **shipped 2026-08-15, see roadmap 6bb.** Jeff asked
+      for the two TOOL ports (Composer link levels, Generator Save Recipe…)
+      after building the Hyperglyph Tree Designer; the link-as-any-geometry
+      renderer came with them as the prerequisite that makes a Designer tree
+      draw as limbs rather than hairlines.
+    - **File ▸ Save Selection As…** (desktop `7ed0b55`) — a standalone scene
+      written from the current selection, with world placement baked into the
+      detached roots. Still unported; unsurveyed here.
+    - **Hyperglyph Tree Designer** (desktop `418569c`) — a self-contained
+      browser page in `hyperglyph_lab/`, shipped twice (there and under
+      `glyphviz-docs/docs/hyperglyph_lab/`, pinned byte-identical by a test).
+      Nothing to port: it is already a web tool, it writes the Composer
+      template format both apps read, and this app opens its output (proved
+      end to end in 6bb's drive). Worth linking to from this app one day, not
+      reimplementing.
     - Texture support on the flat 2-D markers (desktop `f67757d`) is probably
       already equivalent here — `uvGeometry.ts` gives Circle/Cross/Star UVs
       the desktop had none for — but the desktop's crop-not-stretch rule

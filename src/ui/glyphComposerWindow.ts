@@ -98,6 +98,24 @@ const GEO_ITEMS: [number, string][] = Object.keys(GEOMETRY_NAMES)
   .filter((id) => id !== Geometry.Mesh)
   .map((id) => [id, GEOMETRY_NAMES[id]])
 
+/**
+ * Geometry choices for a level's parent-link — `_LINK_GEO_ITEMS`. Any id is
+ * legal on a type-7 node, but Mesh needs a mesh_id the recipe cannot carry and
+ * Point is a fixed-pixel sprite with nothing to stretch (the same two ids the
+ * viewport's O-key cycling skips on a link), so neither is offered.
+ */
+const LINK_GEO_ITEMS: [number, string][] = Object.keys(GEOMETRY_NAMES)
+  .map(Number)
+  .sort((a, b) => a - b)
+  .filter((id) => id !== Geometry.Mesh && id !== Geometry.Point)
+  .map((id) => [id, GEOMETRY_NAMES[id]])
+
+/** What the Link to Parent group opens on — desktop `GEO_CYLINDER`. */
+const DEFAULT_LINK_GEO = Geometry.CylinderSolid
+/** The dialog's remembered link colours, before a level has chosen its own. */
+const DEFAULT_LINK_COLOR_START: RecipeColor = [150, 110, 70, 255]
+const DEFAULT_LINK_COLOR_END: RecipeColor = [110, 150, 90, 255]
+
 const TOPO_ITEMS: [number, string][] = Object.keys(TOPO_NAMES)
   .map(Number)
   .sort((a, b) => a - b)
@@ -353,7 +371,10 @@ export class GlyphComposerWindow {
     const spec = this.recipe.levels[index]
     const geo = GEOMETRY_NAMES[spec.geometry] ?? String(spec.geometry)
     const prefix = index === 0 ? 'Root' : `Level ${index}`
-    return `${prefix}  ×${spec.count}  ${geo}`
+    // The desktop's own marker for a level that links its objects to their
+    // parents, so a linked level reads as one from the list alone.
+    const link = index > 0 && spec.linkGeo !== null ? '  ⌁' : ''
+    return `${prefix}  ×${spec.count}  ${geo}${link}`
   }
 
   private refreshLevelList(): void {
@@ -690,7 +711,136 @@ export class GlyphComposerWindow {
       this.onChange()
     })
 
+    // --- Link to parent (non-root levels) ---
+    if (!isRoot) this.buildLinkGroup(spec)
+
     this.loading = false
+  }
+
+  /**
+   * The "Link to Parent" group (desktop `_build_link_group`): every node at
+   * this level gets a companion type-7 Link back to its parent, drawn as the
+   * chosen geometry stretched between the two.
+   *
+   * Give the level some Altitude Z and the link becomes the visible limb
+   * between parent and child — which is what turns a composed glyph from a
+   * stack of touching shells into a jointed, branching structure, and is how a
+   * Hyperglyph Tree Designer template describes its branches.
+   *
+   * Root levels have no group at all, as there: a root's parent is whatever
+   * the glyph is inserted under, not part of the glyph.
+   */
+  private buildLinkGroup(spec: LevelSpec): void {
+    this.form.appendChild(el('div', { className: 'composer-heading', textContent: 'Link to Parent' }))
+
+    const enabled = el('input', { type: 'checkbox', checked: spec.linkGeo !== null })
+    const enabledRow = el('label', {
+      className: 'sel-check',
+      title:
+        'Add a Link (type=7) edge from each node at this level back to its\n' +
+        'parent, drawn as the chosen geometry stretched between the two.\n' +
+        'Give the level some Altitude Z so there is a gap for the link to\n' +
+        'span — that gap is the branch.',
+    })
+    enabledRow.append(enabled, document.createTextNode('Link each node to its parent'))
+    this.form.appendChild(enabledRow)
+
+    const geometry = this.idSelect(LINK_GEO_ITEMS, spec.linkGeo ?? DEFAULT_LINK_GEO, (value) => {
+      // Only meaningful while the group is on; the box below is the switch.
+      if (enabled.checked) spec.linkGeo = value
+    })
+    this.form.appendChild(windowRow('Geometry', geometry, "The limb's own shape."))
+
+    const thickness = this.numberField(spec.linkRatio, { min: 0.01, max: 10, step: 0.05 }, (v) => {
+      spec.linkRatio = v
+    })
+    this.form.appendChild(
+      windowRow(
+        'Thickness',
+        thickness,
+        'Thickness of the stretched glyph on both cross-axes, in world units\n' +
+          "(a type-7 node's `ratio` — not multiplied by scale).",
+      ),
+    )
+
+    // Colours are remembered while "Use node color" is on, exactly as the main
+    // gradient's end colour is, so unchecking and rechecking restores them.
+    let linkStart: RecipeColor = spec.linkColorStart ?? DEFAULT_LINK_COLOR_START
+    let linkEnd: RecipeColor = spec.linkColorEnd ?? DEFAULT_LINK_COLOR_END
+
+    const inherit = el('input', { type: 'checkbox', checked: spec.linkColorStart === null })
+    const inheritRow = el('label', {
+      className: 'sel-check',
+      title:
+        "Each link takes its child node's own (gradient-resolved) colour.\n" +
+        'Uncheck to give the links their own — wood-brown limbs under brightly\n' +
+        'coloured fruit.',
+    })
+    inheritRow.append(inherit, document.createTextNode('Use node color'))
+    this.form.appendChild(inheritRow)
+
+    const startField = this.colorField(
+      () => linkStart,
+      (value) => {
+        linkStart = value
+        if (!inherit.checked) spec.linkColorStart = value
+      },
+    )
+    this.form.appendChild(windowRow('Link color', startField))
+
+    const linkGradient = el('input', {
+      type: 'checkbox',
+      checked: spec.linkColorEnd !== null && spec.linkColorStart !== null,
+    })
+    const linkGradientRow = el('label', {
+      className: 'sel-check',
+      title: "Fade this level's links from the first colour to the second, in placement order.",
+    })
+    linkGradientRow.append(linkGradient, document.createTextNode('Enable link gradient'))
+    this.form.appendChild(linkGradientRow)
+
+    const endField = this.colorField(
+      () => linkEnd,
+      (value) => {
+        linkEnd = value
+        if (!inherit.checked && linkGradient.checked) spec.linkColorEnd = value
+      },
+    )
+    this.form.appendChild(windowRow('Gradient to', endField))
+
+    // One rule for the whole group's greying: a control is live only when the
+    // group is on AND whatever it depends on is (the desktop's setEnabled
+    // chain, which its checkable QGroupBox drives from the top).
+    const inputsOf = (element: HTMLElement) => [...element.querySelectorAll('input')]
+    const sync = () => {
+      const on = enabled.checked
+      geometry.disabled = !on
+      thickness.disabled = !on
+      inherit.disabled = !on
+      linkGradient.disabled = !on || inherit.checked
+      for (const input of inputsOf(startField)) input.disabled = !on || inherit.checked
+      for (const input of inputsOf(endField)) {
+        input.disabled = !on || inherit.checked || !linkGradient.checked
+      }
+    }
+    sync()
+
+    const apply = () => {
+      if (!enabled.checked) {
+        spec.linkGeo = null
+      } else {
+        spec.linkGeo = Number(geometry.value)
+        spec.linkRatio = Number(thickness.value)
+        spec.linkColorStart = inherit.checked ? null : linkStart
+        spec.linkColorEnd = inherit.checked || !linkGradient.checked ? null : linkEnd
+      }
+      sync()
+      this.refreshCurrentLabel()
+      this.onChange()
+    }
+    enabled.addEventListener('change', apply)
+    inherit.addEventListener('change', apply)
+    linkGradient.addEventListener('change', apply)
   }
 
   // -------------------------------------------------------- Topology Scale row

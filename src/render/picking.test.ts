@@ -210,6 +210,79 @@ describe('selection box', () => {
     expect(sel.object.visible).toBe(false)
   })
 
+  it('outlines a glyph LINK along the edge it draws', () => {
+    // A link carrying a real geometry is indistinguishable from an ordinary
+    // node on screen, and cycling geometry with O is exactly the workflow that
+    // needs to show which one is selected (desktop `_draw_selected_link_outlines`).
+    // Its glyph hangs off the link overlay, not off its own frame, so the
+    // selection is handed the map.
+    const built = buildAndUpdate([
+      makeNode({ id: 1, translate: { x: -6, y: 0, z: 0 } }),
+      makeNode({ id: 2, translate: { x: 6, y: 0, z: 0 } }),
+      makeNode({
+        id: 3,
+        type: NodeType.Link,
+        parentId: 1,
+        geometry: Geometry.CylinderSolid,
+        ratio: 0.5,
+        extras: { child_id: '2' },
+      }),
+    ])
+    const sel = new Selection()
+    sel.setLinkGlyphs(built.links.glyphObjects)
+    sel.set(built.frames, 3)
+    expect(sel.haloCount).toBe(1)
+    const [box] = haloBoxes(sel)
+    // Spans the whole 12-unit edge (plus the 5% pad) and is `ratio` thick.
+    expect(box.min.x).toBeCloseTo(-6 * SELECTION_BOX_HALF)
+    expect(box.max.x).toBeCloseTo(6 * SELECTION_BOX_HALF)
+    expect(box.max.y).toBeCloseTo(0.5 * SELECTION_BOX_HALF)
+  })
+
+  it('gives a Pin link the asymmetric box its own z span asks for', () => {
+    // The pin's local z runs 0…1.1, so a ±1.05 cube would sit half a link off
+    // the shape it is meant to outline.
+    const built = buildAndUpdate([
+      makeNode({ id: 1 }),
+      makeNode({ id: 2, translate: { x: 0, y: 0, z: 11 } }),
+      makeNode({
+        id: 3,
+        type: NodeType.Link,
+        parentId: 1,
+        geometry: Geometry.PinSolid,
+        ratio: 0.5,
+        extras: { child_id: '2' },
+      }),
+    ])
+    const sel = new Selection()
+    sel.setLinkGlyphs(built.links.glyphObjects)
+    sel.set(built.frames, 3)
+    const [box] = haloBoxes(sel)
+    // 5% of the 1.1 span, in world units: the edge is 11 long, so 0.275 either
+    // end — NOT a box centred on the midpoint.
+    expect(box.min.z).toBeCloseTo(-0.275)
+    expect(box.max.z).toBeCloseTo(11.275)
+  })
+
+  it('draws no halo for a line link, matching the desktop outline pass', () => {
+    const built = buildAndUpdate([
+      makeNode({ id: 1 }),
+      makeNode({ id: 2, translate: { x: 6, y: 0, z: 0 } }),
+      makeNode({
+        id: 3,
+        type: NodeType.Link,
+        parentId: 1,
+        geometry: Geometry.Line,
+        extras: { child_id: '2' },
+      }),
+    ])
+    const sel = new Selection()
+    sel.setLinkGlyphs(built.links.glyphObjects)
+    sel.set(built.frames, 3)
+    expect(sel.id).toBe(3) // selected, and the inspector/table show it
+    expect(sel.haloCount).toBe(0)
+  })
+
   it('refuses to select ids with no frame in the scene', () => {
     const { frames } = buildAndUpdate([makeNode({ id: 1 })])
     const sel = new Selection()

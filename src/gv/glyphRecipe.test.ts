@@ -24,8 +24,16 @@ import {
   suggestedTopoScale,
 } from './glyphRecipe'
 import type { DistMode, GlyphRecipe } from './glyphRecipe'
+import { linkChildId } from './links'
 import { ALL_AXES_LINEAR, LINEAR_PLACEMENT_AXES } from './placementAxes'
-import { DEFAULT_TOPO_SCALE, Geometry, Topo, TOPO_NAMES, TOPO_SCALE_ANTZ } from './types'
+import {
+  DEFAULT_TOPO_SCALE,
+  Geometry,
+  NodeType,
+  Topo,
+  TOPO_NAMES,
+  TOPO_SCALE_ANTZ,
+} from './types'
 
 describe('defaultRecipe', () => {
   it('is the desktop dialog\'s two-level opening glyph', () => {
@@ -125,6 +133,99 @@ describe('projectedNodeCount', () => {
     // Ten levels of 200 is 200^10 — the point is that asking costs nothing.
     const recipe = { name: 'x', levels: Array.from({ length: 10 }, () => levelSpec({ count: 200 })) }
     expect(projectedNodeCount(recipe, 200_000)).toBe(200_000)
+  })
+})
+
+describe('link to parent', () => {
+  const linked = (overrides: Partial<ReturnType<typeof levelSpec>> = {}): GlyphRecipe => ({
+    name: 'Limbs',
+    levels: [
+      levelSpec({ count: 1, distMode: Dist.Linear, colorStart: [10, 20, 30, 255] }),
+      levelSpec({
+        count: 3,
+        distMode: Dist.Angular,
+        colorStart: [200, 100, 50, 255],
+        linkGeo: Geometry.CylinderSolid,
+        linkRatio: 0.25,
+        ...overrides,
+      }),
+    ],
+  })
+
+  it('emits each edge right after the node it hangs from, with sequential ids', () => {
+    const nodes = generateNodes(linked())
+    expect(nodes.map((n) => n.id)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(nodes.map((n) => n.type)).toEqual([
+      NodeType.Glyph,
+      NodeType.Glyph,
+      NodeType.Link,
+      NodeType.Glyph,
+      NodeType.Link,
+      NodeType.Glyph,
+      NodeType.Link,
+    ])
+    // Each link runs parent (the trunk) → the node above it.
+    for (const link of nodes.filter((n) => n.type === NodeType.Link)) {
+      expect(link.parentId).toBe(1)
+      expect(linkChildId(link)).toBe(link.id - 1)
+      expect(link.geometry).toBe(Geometry.CylinderSolid)
+      expect(link.ratio).toBe(0.25)
+      // A link has no independent pose — it IS the edge.
+      expect(link.translate).toEqual({ x: 0, y: 0, z: 0 })
+      expect(link.rotate).toEqual({ x: 0, y: 0, z: 0 })
+      expect(link.scale).toEqual({ x: 1, y: 1, z: 1 })
+      expect(link.topo).toBe(Topo.None)
+    }
+  })
+
+  it('gives each link its child’s own resolved colour by default', () => {
+    const nodes = generateNodes(
+      linked({ colorStart: [0, 0, 0, 255], colorEnd: [100, 100, 100, 255] }),
+    )
+    const pairs = nodes.filter((n) => n.type === NodeType.Link)
+    expect(pairs.map((n) => n.color.r)).toEqual([0, 50, 100])
+  })
+
+  it('runs its own gradient across the siblings when given one', () => {
+    const nodes = generateNodes(
+      linked({ linkColorStart: [0, 0, 0, 255], linkColorEnd: [10, 20, 30, 255] }),
+    )
+    const links = nodes.filter((n) => n.type === NodeType.Link)
+    expect(links.map((n) => [n.color.r, n.color.g, n.color.b])).toEqual([
+      [0, 0, 0],
+      [5, 10, 15],
+      [10, 20, 30],
+    ])
+  })
+
+  it('ignores linkGeo on the root level', () => {
+    // A root's parent is whatever the glyph is inserted under, not part of the
+    // glyph — so there is no edge to draw.
+    const recipe = linked()
+    recipe.levels[0].linkGeo = Geometry.CylinderSolid
+    expect(generateNodes(recipe).filter((n) => n.parentId === 0)).toHaveLength(1)
+    expect(generateNodes(recipe).filter((n) => n.type === NodeType.Link)).toHaveLength(3)
+  })
+
+  it('counts a linked level twice in projectedNodeCount', () => {
+    const recipe = linked()
+    expect(projectedNodeCount(recipe)).toBe(generateNodes(recipe).length)
+    recipe.levels.push(levelSpec({ count: 2, linkGeo: Geometry.CubeSolid }))
+    expect(projectedNodeCount(recipe)).toBe(generateNodes(recipe).length)
+  })
+
+  it('leaves a template written before links existed generating identically', () => {
+    const before = generateNodes(recipeFromJson(recipeToJson(defaultRecipe())))
+    const legacy = recipeToJson(defaultRecipe()) as { levels: Record<string, unknown>[] }
+    for (const level of legacy.levels) {
+      delete level.link_geo
+      delete level.link_ratio
+      delete level.link_color_start
+      delete level.link_color_end
+    }
+    const after = generateNodes(recipeFromJson(legacy))
+    expect(after).toEqual(before)
+    expect(after.some((n) => n.type === NodeType.Link)).toBe(false)
   })
 })
 

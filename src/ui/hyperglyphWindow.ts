@@ -14,6 +14,10 @@
 // auto-rerolling on every edit made "Randomize" impossible to inspect before
 // committing to it. (The Composer is the opposite, and correctly so: it has an
 // Auto-preview checkbox, because it edits a design rather than rolling one.)
+//
+// The one thing it writes is a recipe .json (Save Recipe…), the same Glyph
+// Template the Composer's Load Template opens — so a randomized design worth
+// keeping can be reworked level by level instead of only being inserted as-is.
 
 import {
   buildHyperglyphNodes,
@@ -21,6 +25,14 @@ import {
   generateHyperglyph,
 } from '../gv/hyperglyph'
 import type { HyperglyphDesign } from '../gv/hyperglyph'
+import {
+  COMPOSER_EDIT_NODE_WARN,
+  projectedNodeCount,
+  recipeToJson,
+  snapshotLevelRotations,
+} from '../gv/glyphRecipe'
+import type { GlyphRecipe } from '../gv/glyphRecipe'
+import type { GvNode } from '../gv/types'
 import { FloatWindow, windowRow } from './floatWindow'
 import { GlyphPreview } from './glyphPreview'
 
@@ -38,6 +50,8 @@ const BRANCH_LEVELS_MAX = 10
 export interface HyperglyphWindowHost {
   /** Add the design's nodes to the live scene and report it on the status bar. */
   insert(design: HyperglyphDesign): void
+  /** Report a message on the status line (what was saved, and where to open it). */
+  status(message: string): void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(
@@ -60,8 +74,16 @@ export class HyperglyphWindow {
   private readonly idleMotion: HTMLInputElement
   private readonly info: HTMLDivElement
   private readonly insertButton: HTMLButtonElement
+  private readonly captureLive: HTMLInputElement
+  private readonly saveButton: HTMLButtonElement
 
   private design: HyperglyphDesign | null = null
+  /**
+   * The node objects the preview is drawing — the same ones the rate
+   * integrator mutates every frame, which is what makes "capture live
+   * orientation" the pose actually on screen at the instant of the click.
+   */
+  private previewNodes: GvNode[] = []
 
   constructor(host: HyperglyphWindowHost) {
     this.host = host
@@ -188,6 +210,36 @@ export class HyperglyphWindow {
 
     // --- Footer ---
     const footer = el('div', { className: 'float-window-footer' })
+
+    // Above the buttons, because it modifies what Save Recipe writes rather
+    // than how the design is generated.
+    this.captureLive = el('input', { type: 'checkbox', checked: true })
+    const captureRow = el('label', {
+      className: 'sel-check',
+      title:
+        'Save the pose the preview has spun into, instead of the orientation\n' +
+        'the design was generated with.\n' +
+        'A recipe holds one rotation per LEVEL while Idle Motion gives every\n' +
+        'node its own axis and speed, so siblings drift apart: the trunk is\n' +
+        "captured exactly, and each deeper level takes its first node's\n" +
+        'current orientation as the representative.\n' +
+        'No effect with Idle Motion off — nothing has moved.',
+    })
+    captureRow.append(this.captureLive, document.createTextNode('Capture live orientation'))
+    footer.appendChild(captureRow)
+
+    this.saveButton = el('button', {
+      type: 'button',
+      className: 'float-window-action',
+      textContent: 'Save Recipe…',
+      disabled: true,
+      title:
+        'Download this design as a Glyph Template .json — the format the Glyph\n' +
+        'Composer (Ctrl+G) opens, for editing it level by level.',
+    })
+    this.saveButton.addEventListener('click', () => this.saveRecipe())
+    footer.appendChild(this.saveButton)
+
     this.insertButton = el('button', {
       type: 'button',
       className: 'float-window-action',
@@ -237,19 +289,85 @@ export class HyperglyphWindow {
       maxNodes,
       seed,
       idleMotion: this.idleMotion.checked,
+      // The seed IS the design's identity (the same seed / Max Nodes / Branch
+      // Levels always regenerate it), so it goes in the name — which is what a
+      // saved recipe carries into the Composer's Template field, and what the
+      // downloaded file is called.
+      name: `Hyperglyph_${seed}`,
     })
     this.design = design
     this.insertButton.disabled = false
+    this.saveButton.disabled = false
 
     const nodes = buildHyperglyphNodes(design)
+    this.previewNodes = nodes
     // Every Regenerate is a different design of a different size, so the
     // preview camera reframes — unlike the Composer's, which is editing one.
     this.preview.setNodes(nodes)
 
     const seedDesc = randomize ? 'random seed' : 'fixed seed (Randomize off)'
-    this.info.textContent =
+    let info =
       `${nodes.length} nodes | family=${design.meta.geometryFamily} | ` +
       `palette=${design.meta.paletteScheme} | ${seedDesc}: ${seed}`
+    // Said up front, not only at save time — a design this large is worth
+    // knowing about while Regenerate is still one cheap click away.
+    if (nodes.length > COMPOSER_EDIT_NODE_WARN) {
+      info +=
+        ` — over ${COMPOSER_EDIT_NODE_WARN.toLocaleString()} nodes: fine here and in ` +
+        'the scene, but heavy to edit in the Glyph Composer.'
+    }
+    this.info.textContent = info
+  }
+
+  // ------------------------------------------------- save recipe (.json)
+
+  /**
+   * The recipe Save Recipe would write right now: the design as generated, or —
+   * while Capture live orientation is checked — the same design re-posed to
+   * where the preview has spun to. Harmless with Idle Motion off: nothing has
+   * moved, so the capture returns the authored values unchanged.
+   */
+  private recipeToSave(): GlyphRecipe | null {
+    if (!this.design) return null
+    if (!this.captureLive.checked) return this.design.recipe
+    return snapshotLevelRotations(this.design.recipe, this.previewNodes)
+  }
+
+  private saveRecipe(): void {
+    const recipe = this.recipeToSave()
+    if (!recipe) return
+
+    // The .json is tiny whatever the tree expands to; what gets heavy is the
+    // Composer's auto-preview, which regenerates the whole tree 350 ms after
+    // every keystroke. So the warning is a NODE COUNT, and it is a
+    // Save/Cancel, not a refusal — the design is perfectly valid.
+    const projected = projectedNodeCount(recipe)
+    if (projected > COMPOSER_EDIT_NODE_WARN) {
+      const proceed = window.confirm(
+        `This design expands to about ${projected.toLocaleString()} nodes.\n\n` +
+          'The recipe file itself stays small and the glyph renders fine in the ' +
+          'scene — but the Glyph Composer rebuilds the entire tree after every ' +
+          'edit, so it will feel sluggish above a few thousand nodes.\n\n' +
+          'In the Composer, turn off Auto-preview and use Preview Now, or lower ' +
+          'the per-level Count values, to keep editing responsive.\n\n' +
+          'Save it anyway?',
+      )
+      if (!proceed) return
+    }
+
+    const text = `${JSON.stringify(recipeToJson(recipe), null, 2)}\n`
+    const blob = new Blob([text], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${recipe.name}.json`
+    a.click()
+    URL.revokeObjectURL(a.href)
+
+    const posed = this.captureLive.checked ? ' (live orientation)' : ''
+    this.host.status(
+      `Hyperglyph Generator: saved recipe${posed} as ${recipe.name}.json — ` +
+        'open it with Glyph Composer (Ctrl+G) ▸ Load Template.',
+    )
   }
 
   /** Read a number field, clamped — a spinbox cannot be typed out of range. */

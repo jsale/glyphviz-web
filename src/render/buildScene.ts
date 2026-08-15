@@ -366,7 +366,13 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     attach(node, root, null, visited)
   }
 
-  const links = buildLinkOverlay(nodes, frames, root, (m) => warnings.add(m))
+  // A link carrying a real glyph geometry draws that glyph stretched between
+  // its two ends, so the overlay needs the same textures and meshes an
+  // ordinary node draws with (linkGeometry.ts).
+  const links = buildLinkOverlay(nodes, frames, root, (m) => warnings.add(m), {
+    textures: options.textures,
+    meshes: options.meshes,
+  })
 
   // A link whose edge never drew — either endpoint missing (the desktop's
   // "pending" state) or dangling — would otherwise have nothing on screen to

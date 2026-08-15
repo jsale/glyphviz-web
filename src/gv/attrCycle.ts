@@ -16,10 +16,23 @@ const TOPO_COUNT = TOPO_MAX + 1
 /**
  * Link-only render modes: a bare line or textured prism is meaningless on a
  * regular glyph (they draw as an EDGE between two endpoints, never at the
- * node's own frame), so the geometry cycle steps over them — and a Link node
- * cycles between just those two.
+ * node's own frame), so the geometry cycle steps over them.
  */
 const LINK_ONLY_GEOMETRIES = new Set<number>([Geometry.Line, Geometry.TexturedPrism])
+
+/**
+ * Ids a LINK node's cycle steps over instead (desktop `_LINK_SKIP_GEOS`). Mesh
+ * for the same reason every other node type skips it — a bare Mesh id means
+ * nothing without a mesh_id — and Point because a link renders it as a plain
+ * line, a duplicate of the Line mode two stops away rather than a distinct
+ * look. Everything else is meaningful on a link: Line and Prism are its two
+ * line modes and every other id draws as that glyph stretched between the
+ * link's two ends (render/linkGeometry.ts).
+ */
+const LINK_SKIP_GEOMETRIES = new Set<number>([Geometry.Mesh, Geometry.Point])
+
+/** What an ordinary node steps over: the two line modes plus Mesh. */
+const ORDINARY_SKIP_GEOMETRIES = new Set<number>([...LINK_ONLY_GEOMETRIES, Geometry.Mesh])
 
 /**
  * Types the cycling keys never touch. World/Camera rows have no shape at all;
@@ -41,21 +54,20 @@ function wrap(value: number, count: number): number {
 
 /**
  * Step each target's `geometry` by ±1, skipping Mesh (needs a mesh_id to mean
- * anything) and the link-only ids. Link nodes toggle between Line and Textured
- * Prism instead — direction-agnostic, since there are only the two states.
+ * anything) and the link-only ids.
+ *
+ * A LINK node cycles the same full range, since every geometry is meaningful
+ * on a link — it skips Mesh and Point instead. It used to toggle between Line
+ * and Prism, which was the whole vocabulary a link had before a link could
+ * carry a glyph (desktop 21f400c); cycling a link through the shapes is now
+ * the workflow, which is also why a selected glyph link draws a halo.
  */
 export function cycleGeometry(targets: readonly GvNode[], step: number): void {
   if (step === 0) return // a zero step would spin forever in the skip loop
   for (const node of targets) {
-    if (node.type === NodeType.Link) {
-      node.geometry =
-        node.geometry === Geometry.TexturedPrism ? Geometry.Line : Geometry.TexturedPrism
-      continue
-    }
+    const skip = node.type === NodeType.Link ? LINK_SKIP_GEOMETRIES : ORDINARY_SKIP_GEOMETRIES
     let geo = wrap(node.geometry + step, GEOMETRY_COUNT)
-    while (geo === Geometry.Mesh || LINK_ONLY_GEOMETRIES.has(geo)) {
-      geo = wrap(geo + step, GEOMETRY_COUNT)
-    }
+    while (skip.has(geo)) geo = wrap(geo + step, GEOMETRY_COUNT)
     node.geometry = geo
   }
 }
