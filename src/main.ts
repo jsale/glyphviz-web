@@ -149,7 +149,7 @@ import {
   PINNED_SCALE,
   XrProperties,
 } from './render/xrProperties'
-import type { XrPropSelectData } from './ui/xrPropertiesModel'
+import type { XrGrabMode, XrPropSelectData } from './ui/xrPropertiesModel'
 import { CameraRig, rigFromView } from './render/cameraMode'
 import type { OrbitRig } from './render/cameraMode'
 import {
@@ -332,14 +332,26 @@ scene.add(xrLabel.sprite)
 // re-based (render/xrNav.ts says why). Its callbacks run only inside a live
 // session, so the later-declared state they read is always initialised by then.
 const xrRig = new XrRig(renderer, camera, scene, {
-  onPick(raycaster) {
+  onPick(raycaster, _hand, pose, additive) {
     if (!currentRoot) return false
     const nodeId = pickNodeId(raycaster, currentRoot)
+    // The right thumbstick click held is this app's Ctrl: the press TOGGLES
+    // membership and never grabs, because the gesture is about the selection
+    // rather than about moving what is in it. A miss is ignored rather than
+    // clearing, exactly as Ctrl+click on empty space does with the mouse.
+    if (additive) {
+      if (nodeId === null) {
+        status('Nothing under the ray — add-select left the selection alone.')
+        return false
+      }
+      toggleXrSelection(nodeId)
+      return false
+    }
     // Trigger on an ALREADY-selected glyph claims the press as a grab; the
     // selection is left alone, so a multi-selection can be dragged as a group.
     // If the hand never travels far enough the release falls back to an
     // ordinary click (beginXrGrab's own threshold), so nothing is lost.
-    if (nodeId !== null && selection.ids.includes(nodeId) && beginXrGrab(raycaster, nodeId))
+    if (nodeId !== null && selection.ids.includes(nodeId) && beginXrGrab(raycaster, nodeId, pose))
       return true
     // A ray that hits nothing clears the selection, exactly as a click on
     // empty space does with the mouse.
@@ -347,8 +359,8 @@ const xrRig = new XrRig(renderer, camera, scene, {
     status(nodeId === null ? 'Nothing under the ray.' : `Selected node ${nodeId}.`)
     return false
   },
-  onDragRay(raycaster) {
-    xrGrabMove(raycaster)
+  onDragRay(raycaster, _hand, pose) {
+    xrGrabMove(raycaster, pose)
   },
   onDragEnd(_hand, cancelled) {
     endXrGrab(cancelled)
@@ -1510,6 +1522,13 @@ renderer.domElement.addEventListener(
   get selectionIds() {
     return [...selection.ids]
   },
+  // A grab in flight leaves no trace anywhere else — no DOM, and the scene
+  // graph only shows the result.
+  get xrGrabState() {
+    return xrGrab === null
+      ? null
+      : { nodeId: xrGrab.nodeId, mode: xrGrab.mode, moved: xrGrab.moved }
+  },
   // The wrist panel's own readouts, which exist nowhere else while a session
   // is running: what is drawn, and where the transport stands.
   get drawState() {
@@ -1663,6 +1682,21 @@ function xrPrimaryNode(): GvNode | null {
   return selectedNodes()[0] ?? null
 }
 
+/**
+ * Ctrl+click's behaviour, reached from a headset: flip one node's membership
+ * and leave the rest alone (`selectionOps`' own rule, and `toggleSelection`'s
+ * on the mouse side).
+ */
+function toggleXrSelection(nodeId: number) {
+  const ids = new Set(selection.ids)
+  const had = ids.delete(nodeId)
+  if (!had) ids.add(nodeId)
+  setSelection(ids)
+  status(
+    `${had ? 'Removed' : 'Added'} node ${nodeId} — ${selection.size} node(s) selected.`,
+  )
+}
+
 /** Apply an edit to every selected node, in place. */
 function xrEditSelection(mutate: (node: GvNode) => void) {
   for (const node of selectedNodes()) mutate(node)
@@ -1755,15 +1789,33 @@ function round6(value: number): number {
 /** Hand travel, in METRES, before a held trigger counts as a drag rather than a
  *  click. Without it every press on a selected glyph would nudge it. */
 const XR_GRAB_THRESHOLD_M = 0.02
+/** …and the same for a turn, which can happen with the hand almost still. */
+const XR_GRAB_TWIST_THRESHOLD_RAD = 0.05
+
+/**
+ * Hand travel along the ray, in METRES, that doubles (or halves) a size grab.
+ * Exponential so the gesture is symmetric — push 25 cm to double, pull 25 cm
+ * back to halve — and along the RAY because that is the one axis the fishing
+ * rod leaves unused: in move mode the handle distance is locked, so pushing
+ * and pulling does nothing there and is free to mean something here.
+ */
+const XR_GRAB_SIZE_DOUBLE_M = 0.25
 
 interface XrGrabState {
   nodeId: number
+  mode: XrGrabMode
   /** Distance from the ray origin to the handle point, world units. */
   distance: number
   /** The handle point when the trigger came down, WORLD space. */
   startHandle: THREE.Vector3
-  /** The primary frame's position at grab start, PARENT-local. */
+  /** Where the hand was, and which way it pointed, at grab start (WORLD). */
+  startOrigin: THREE.Vector3
+  startForward: THREE.Vector3
+  startPose: THREE.Quaternion
+  /** The primary frame's transform at grab start, PARENT-local. */
   startFramePos: THREE.Vector3
+  startFrameQuat: THREE.Quaternion
+  startFrameScale: THREE.Vector3
   ctx: TranslateDragContext
   /** False until the hand has travelled past the threshold. */
   moved: boolean
@@ -1771,7 +1823,11 @@ interface XrGrabState {
 
 let xrGrab: XrGrabState | null = null
 
-function beginXrGrab(raycaster: THREE.Raycaster, nodeId: number): boolean {
+function beginXrGrab(
+  raycaster: THREE.Raycaster,
+  nodeId: number,
+  pose: THREE.Quaternion,
+): boolean {
   const node = nodesById.get(nodeId)
   const frame = currentFrames?.get(nodeId)
   if (!node || !frame?.parent) return false
@@ -1788,16 +1844,29 @@ function beginXrGrab(raycaster: THREE.Raycaster, nodeId: number): boolean {
   )
   xrGrab = {
     nodeId,
+    // Read ONCE, here: a mode change mid-grab would rewrite a different field
+    // from the same hand motion.
+    mode: xrProperties.grabMode,
     distance,
     startHandle: raycaster.ray.at(distance, new THREE.Vector3()),
+    startOrigin: raycaster.ray.origin.clone(),
+    startForward: raycaster.ray.direction.clone(),
+    startPose: pose.clone(),
     startFramePos: frame.position.clone(),
+    startFrameQuat: frame.quaternion.clone(),
+    startFrameScale: frame.scale.clone(),
     ctx: translateDragContext(node),
     moved: false,
   }
   return true
 }
 
-function xrGrabMove(raycaster: THREE.Raycaster) {
+/**
+ * One frame of a held grab. Which of the three fields it writes is the chip on
+ * the Properties panel's Move page — the grab IS the transform gizmo here, and
+ * carries the gizmo's own three modes.
+ */
+function xrGrabMove(raycaster: THREE.Raycaster, pose: THREE.Quaternion) {
   const grab = xrGrab
   if (!grab || !currentRoot) return
   const node = nodesById.get(grab.nodeId)
@@ -1808,12 +1877,36 @@ function xrGrabMove(raycaster: THREE.Raycaster) {
   const handle = raycaster.ray.at(grab.distance, new THREE.Vector3())
   if (!grab.moved) {
     // The threshold is in metres of real hand travel, so it means the same
-    // thing whether the world is a diorama or a room around you.
+    // thing whether the world is a diorama or a room around you. Turning is
+    // measured as an ANGLE, since a twist in place moves the hand barely at all.
     const travelM = handle.distanceTo(grab.startHandle) / Math.max(1e-9, xrRig.state.scale)
-    if (travelM < XR_GRAB_THRESHOLD_M) return
+    const twist = grab.startPose.angleTo(pose)
+    if (travelM < XR_GRAB_THRESHOLD_M && twist < XR_GRAB_TWIST_THRESHOLD_RAD) return
     grab.moved = true
   }
 
+  if (grab.mode === 'move') xrGrabApplyMove(node, frame, parent, grab, handle)
+  else if (grab.mode === 'turn') xrGrabApplyTurn(node, frame, parent, grab, pose)
+  else xrGrabApplySize(node, frame, grab, raycaster)
+
+  // Every other selected node takes the same per-field change in ITS OWN
+  // coordinates — the desktop's `_apply_axis_deltas`: additive for translate
+  // and rotate, a RATIO for scale, which is what keeps a group's relative
+  // proportions while it grows.
+  applyDragToFollowers(node, grab.mode === 'move' ? 'translate' : grab.mode === 'turn' ? 'rotate' : 'scale')
+  currentRoot.updateMatrixWorld(true)
+  selection.refreshHalos()
+  const nodes = selectedNodes()
+  inspector.show(nodes, nodes.length === 1 ? worldPosOf(node.id) : null)
+}
+
+function xrGrabApplyMove(
+  node: GvNode,
+  frame: THREE.Object3D,
+  parent: THREE.Object3D,
+  grab: XrGrabState,
+  handle: THREE.Vector3,
+) {
   // World delta into the frame's PARENT space. Differencing two transformed
   // points rather than rotating a vector, so the parent's own scale is carried
   // exactly as buildScene applied it.
@@ -1831,14 +1924,66 @@ function xrGrabMove(raycaster: THREE.Raycaster) {
   node.translate.z = t.z
   // Reproject onto the topology surface and track outward orientation.
   applyFrameTransform(frame, node, grab.ctx.parentGv)
-  // Every other selected node takes the same per-field change in ITS OWN
-  // topology coordinates — the desktop's `_apply_axis_deltas`, which is what
-  // makes a multi-selection drag as a group and still round-trip to CSV.
-  applyDragToFollowers(node, 'translate')
-  currentRoot.updateMatrixWorld(true)
-  selection.refreshHalos()
-  const nodes = selectedNodes()
-  inspector.show(nodes, nodes.length === 1 ? worldPosOf(node.id) : null)
+}
+
+/**
+ * Grab-to-turn: the node takes the hand's own rotation since the grab began.
+ *
+ * The hand's delta is a WORLD rotation and the frame's is parent-local, so it
+ * is conjugated into the parent's space — P⁻¹·R·P — before being composed onto
+ * the orientation the frame started with. The read-back is then the gizmo's
+ * rotate branch exactly: strip the outward base rotation (constant through a
+ * turn, since it depends only on translate) and decompose what is left through
+ * whichever rotation convention the node declares.
+ */
+function xrGrabApplyTurn(
+  node: GvNode,
+  frame: THREE.Object3D,
+  parent: THREE.Object3D,
+  grab: XrGrabState,
+  pose: THREE.Quaternion,
+) {
+  const worldDelta = pose.clone().multiply(grab.startPose.clone().invert())
+  const parentQ = parent.getWorldQuaternion(new THREE.Quaternion())
+  const localDelta = parentQ.clone().invert().multiply(worldDelta).multiply(parentQ)
+  frame.quaternion.copy(localDelta).multiply(grab.startFrameQuat)
+
+  const own = frameBaseRotation(node, grab.ctx.parentGv)
+    .transpose() // inverse of a pure rotation
+    .multiply(new THREE.Matrix4().makeRotationFromQuaternion(frame.quaternion))
+  const r = invertLocalRotation(own, node.rotate, node.rotationMode)
+  node.rotate.x = r.x
+  node.rotate.y = r.y
+  node.rotate.z = r.z
+  // Snap the frame to the exact CSV-representable rotation.
+  applyFrameTransform(frame, node, grab.ctx.parentGv)
+}
+
+/**
+ * Grab-to-size: push the hand along the ray to grow, pull back to shrink.
+ *
+ * Uniform on all three axes — a single hand has no way to say "taller but not
+ * wider", and the Move page's per-axis rows are how you say that. The factor is
+ * exponential, so pushing and pulling the same distance are exact inverses and
+ * a size can always be walked back by retracing the gesture.
+ */
+function xrGrabApplySize(
+  node: GvNode,
+  frame: THREE.Object3D,
+  grab: XrGrabState,
+  raycaster: THREE.Raycaster,
+) {
+  const travel = raycaster.ray.origin.clone().sub(grab.startOrigin).dot(grab.startForward)
+  const metres = travel / Math.max(1e-9, xrRig.state.scale)
+  const factor = Math.pow(2, metres / XR_GRAB_SIZE_DOUBLE_M)
+  frame.scale.copy(grab.startFrameScale).multiplyScalar(factor)
+  node.scale.x = frame.scale.x
+  node.scale.y = frame.scale.y
+  node.scale.z = frame.scale.z
+  // Draw scale is derived from node.scale (the floor and the Global Scale live
+  // there), so the glyph has to be re-derived or the shape lags the frame.
+  const glyph = frame.children.find((c) => c.userData.isGlyph)
+  if (glyph) applyGlyphDrawScale(glyph, node)
 }
 
 function endXrGrab(cancelled: boolean) {

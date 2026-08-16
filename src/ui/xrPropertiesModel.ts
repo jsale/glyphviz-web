@@ -37,6 +37,23 @@ export type XrPropPage = 'select' | 'shape' | 'move' | 'look'
 export type XrPropAxis = 'x' | 'y' | 'z'
 export type XrPropVectorField = 'translate' | 'rotate' | 'scale'
 
+/**
+ * What a trigger-held grab does to the selection.
+ *
+ * The grab IS the transform gizmo in a headset — TransformControls needs a
+ * screen-space pointer and there is no screen — so it carries the gizmo's own
+ * three modes, sticky, exactly as W/E/R arm them at the desk. One chip rather
+ * than three separate gestures, for the same reason the desktop has one gizmo
+ * with a mode and not three gizmos.
+ */
+export type XrGrabMode = 'move' | 'turn' | 'size'
+
+export const GRAB_MODES: ReadonlyArray<{ mode: XrGrabMode; label: string }> = [
+  { mode: 'move', label: 'Move' },
+  { mode: 'turn', label: 'Turn' },
+  { mode: 'size', label: 'Size' },
+]
+
 export type XrPropId =
   | 'pin'
   | 'page-select'
@@ -71,6 +88,9 @@ export type XrPropId =
   | 'axis-z'
   | 'step-down'
   | 'step-up'
+  | 'grab-move'
+  | 'grab-turn'
+  | 'grab-size'
   | 'translate-dec'
   | 'translate-inc'
   | 'translate-scrub'
@@ -158,6 +178,7 @@ export interface XrPropState {
   /** Index into STEP_LADDER. */
   step: number
   pinned: boolean
+  grabMode: XrGrabMode
   labels: XrPropLabels
   select: XrPropSelectData
   /** Index into `select.values`, owned by the panel. */
@@ -233,6 +254,8 @@ const AXIS_W = 0.11
 const STEP_DEC_X = 0.475
 export const STEP_VAL_X = 0.6
 export const STEP_VAL_W = 0.175
+/** The grab-mode chips start clear of their own caption. */
+const GRAB_X = 0.21
 
 export function rowY(index: number): number {
   return ROW_TOP + index * ROW_PITCH
@@ -403,11 +426,21 @@ function buildMove(
   vectorRow(rows, widgets, 1, 'translate', num(node.translate[axis]))
   vectorRow(rows, widgets, 2, 'rotate', num(node.rotate[axis]))
   vectorRow(rows, widgets, 3, 'scale', num(node.scale[axis]))
-  rows.push({
-    y: rowY(4),
-    caption: '',
-    value: '',
-    note: 'hold the value and slide to scrub',
+
+  // What a trigger-held grab out in the scene does. It lives here because these
+  // are the three fields it writes — the chip is the gizmo's mode switch, and
+  // the rows above are the same three values reached by hand.
+  const y4 = rowY(4)
+  rows.push({ y: y4, caption: 'grab', value: '' })
+  const w = (1 - GRAB_X - PAD - PAD * 2) / 3
+  GRAB_MODES.forEach(({ mode, label }, i) => {
+    widgets.push({
+      id: `grab-${mode}` as XrPropId,
+      kind: 'button',
+      rect: rect(GRAB_X + i * (w + PAD), y4, w, ROW_H),
+      label,
+      active: state.grabMode === mode,
+    })
   })
 }
 

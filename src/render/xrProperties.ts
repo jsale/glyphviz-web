@@ -33,6 +33,7 @@ import {
   propSignature,
   scrubNotches,
   stepSize,
+  type XrGrabMode,
   type XrPropAxis,
   type XrPropId,
   type XrPropLayout,
@@ -108,7 +109,7 @@ export interface XrPropertiesActions {
 /** What main.ts supplies each frame; the panel owns everything else. */
 export type XrPropertiesInput = Omit<
   XrPropState,
-  'page' | 'axis' | 'step' | 'pinned' | 'valueIndex' | 'addToSelection'
+  'page' | 'axis' | 'step' | 'pinned' | 'valueIndex' | 'addToSelection' | 'grabMode'
 >
 
 export class XrProperties extends XrSurface<XrPropWidget> {
@@ -127,6 +128,9 @@ export class XrProperties extends XrSurface<XrPropWidget> {
   private criterionIndex = 0
   private valueIndex = 0
   private addToSelection = false
+  /** What a trigger-held grab out in the scene does. Sticky, like the desktop
+   *  gizmo's armed mode (roadmap 6h) — a mode you are in until you change it. */
+  private grab: XrGrabMode = 'move'
 
   /** Scrub bookkeeping: where the press landed and how many notches of value
    *  have been applied so far, so each frame applies only the DIFFERENCE. */
@@ -152,6 +156,12 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     return SELECT_CRITERIA[this.criterionIndex]
   }
 
+  /** What a trigger-held grab out in the scene should do. Read by main.ts at
+   *  the moment a grab starts, so a mode change never disturbs one in flight. */
+  get grabMode(): XrGrabMode {
+    return this.grab
+  }
+
   /** Panel-owned state — read by the drive harness, which has no other way to
    *  see any of it. */
   get uiState(): {
@@ -162,6 +172,7 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     criterion: SelectCriterion
     valueIndex: number
     addToSelection: boolean
+    grabMode: XrGrabMode
   } {
     return {
       page: this.page,
@@ -171,6 +182,7 @@ export class XrProperties extends XrSurface<XrPropWidget> {
       criterion: this.criterion,
       valueIndex: this.valueIndex,
       addToSelection: this.addToSelection,
+      grabMode: this.grab,
     }
   }
 
@@ -202,6 +214,7 @@ export class XrProperties extends XrSurface<XrPropWidget> {
       axis: this.axis,
       step: this.step,
       pinned: this.pinned,
+      grabMode: this.grab,
       valueIndex: this.valueIndex,
       addToSelection: this.addToSelection,
     }
@@ -258,6 +271,11 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     if (this.applySelectPress(id)) return
     if (id === 'axis-x' || id === 'axis-y' || id === 'axis-z') {
       this.axis = id.slice(5) as XrPropAxis
+      this.refresh()
+      return
+    }
+    if (id.startsWith('grab-')) {
+      this.grab = id.slice(5) as XrGrabMode
       this.refresh()
       return
     }

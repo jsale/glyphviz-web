@@ -2569,18 +2569,63 @@ something to decide now).
          passed: the **add checkbox was an unlabelled empty box**. Captioned
          now. That is twice in two sessions — an in-headset surface has to be
          looked at, and the panel-texture dump is the only way to do it.
+   - **P5, grab-to-turn/size + add-select** (shipped 2026-08-16, Jeff's request
+     — the two things P4 left open, taken the same day).
+     - GRAB MODES. The grab IS the transform gizmo in a headset, so it carries
+       the gizmo's own three sticky modes rather than inventing three gestures:
+       a **Move / Turn / Size chip** on the Properties panel's Move page, under
+       the three vector rows it writes. Read ONCE at `beginXrGrab`, so a mode
+       change can never rewrite a different field from a drag already in flight.
+       - TURN takes the hand's own rotation since the grab began. The delta is a
+         WORLD rotation and the frame's is parent-local, so it is conjugated —
+         `P⁻¹·R·P` — onto the orientation the frame started with, and read back
+         through the gizmo's own rotate branch (strip `frameBaseRotation`, which
+         is constant through a turn since it depends only on translate, then
+         `invertLocalRotation` in whichever convention the node declares). A
+         twist needs its own threshold, an ANGLE, because a roll in place moves
+         the hand barely at all.
+       - SIZE is hand travel along the RAY: the one axis the fishing rod leaves
+         unused, since move mode locks the handle distance. Exponential — 25 cm
+         doubles, 25 cm back halves — so the gesture is exactly reversible and a
+         size can always be walked back by retracing it. Uniform on all three
+         axes: one hand cannot say "taller but not wider", and the per-axis rows
+         above are how you say that. Followers take a RATIO, not a delta
+         (`_apply_axis_deltas`), which is what preserves a group's proportions.
+       - Measured: 0.3 → 0.6 on a 25 cm push and → 0.15 on the pull back, all
+         three axes to 1e-9; a 12°-per-step wrist roll stepping the node ~11.2°
+         per sample; and each mode leaving the other two fields untouched.
+     - ADD-SELECT on the **right thumbstick click, held as a modifier** — this
+       app's Ctrl, and the first claim on either of the two free inputs. Trigger
+       toggles one node's membership instead of replacing the selection, and the
+       modifier SUPPRESSES the grab outright: the gesture is about the selection,
+       not about moving what is in it. A modifier press on empty space leaves the
+       selection alone, exactly as Ctrl+click does with a mouse. One modifier for
+       both hands, taken off the right stick so the comfortable chord is
+       cross-handed (right thumb, left index) while same-handed still works.
+     - THE BUG THE DRIVE CAUGHT, and nothing else would have:
+       `setFromRotationMatrix(ray.matrixWorld)` needs an UNSCALED rotation
+       matrix, and the XR rig's world matrix carries the world-units-per-metre
+       scale (~150 on a typical fit). The extracted quaternion was meaningless,
+       so `angleTo` between two frames of a real wrist twist read ~0 and the
+       turn threshold never opened — the node simply never rotated, with a clean
+       console and every scene-graph assertion passing. `getWorldQuaternion`
+       decomposes, which divides the scale back out. Anything reading an
+       ORIENTATION off an object under the XR rig must decompose, never extract.
+     - Harness lesson recorded with it: the drive's `pointAt` helper used to
+       no-op when a widget was missing, which sent the following press to the
+       SCENE and cleared the selection, making every later check nonsense. It
+       now throws, and asserts the hover actually landed before pressing.
+     - Driven in Chrome, **100 measured checks** (P3's 54 + P4's 26 + 20).
    - PENDING, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
      small once the rig exists, and the demo that impresses people) — Jeff
      deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
      hand tracking, comfort options (snap turn, vignette) and authoring
      gestures — Draw Mode with a controller is the natural one, since
-     `drawMode.ts`/`drawPlane.ts` already take a ray. Grab-to-move shipped as
-     P4; what is still missing is grab-to-ROTATE/SCALE (both reachable from the
-     Properties panel's Move page meanwhile) and a per-node ADD gesture — an XR
-     trigger pick always replaces the selection, so a multi-selection is built
-     from the Select page's criteria rather than by picking nodes one at a
-     time. A modifier-less headset has no obvious Ctrl+click; the two free
-     thumbstick clicks are the candidates.
+     `drawMode.ts`/`drawPlane.ts` already take a ray. Grab-to-move/turn/size
+     shipped as P4+P5, and add-select took the RIGHT thumbstick click; the LEFT
+     stick click is the one free input left. Still absent in-headset: a
+     rubber-band region select (the desktop's Shift+drag has no ray analogue
+     worth guessing at), and Draw Mode itself.
 10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
     through step 8 — the two remaining desktop features, by conscious
     choice, so their absence is a decision and not a gap):

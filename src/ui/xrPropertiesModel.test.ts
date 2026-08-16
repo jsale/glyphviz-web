@@ -35,6 +35,7 @@ function state(overrides: Partial<XrPropState> = {}): XrPropState {
     axis: 'x',
     step: DEFAULT_STEP,
     pinned: false,
+    grabMode: 'move',
     labels: { textureLabel: 'none' },
     select: { criterion: 'branchLevel', values: SELECT_VALUES, selectable: 109 },
     valueIndex: 0,
@@ -88,6 +89,7 @@ describe('propLayout — geometry of the quad', () => {
     state({ page: 'select', select: { criterion: 'topo', values: [], selectable: 0 } }),
     state({ page: 'shape' }),
     state({ page: 'move' }),
+    state({ page: 'move', grabMode: 'size' }),
     state({ page: 'look' }),
     state({ node: null, count: 0 }),
     state({ page: 'shape', node: node({ type: NodeType.WorldGrid }) }),
@@ -321,7 +323,27 @@ describe('propLayout — the Move page', () => {
       'scale-dec',
       'scale-scrub',
       'scale-inc',
+      'grab-move',
+      'grab-turn',
+      'grab-size',
     ])
+  })
+
+  it('marks the armed grab mode and no other', () => {
+    for (const mode of ['move', 'turn', 'size'] as const) {
+      const chips = propLayout(state({ page: 'move', grabMode: mode })).widgets.filter((w) =>
+        w.id.startsWith('grab-'),
+      )
+      expect(chips).toHaveLength(3)
+      expect(chips.filter((c) => c.active).map((c) => c.id)).toEqual([`grab-${mode}`])
+    }
+  })
+
+  it('captions the grab row, since a chip row with no label names nothing', () => {
+    // Twice over two sessions an unlabelled control shipped and was only caught
+    // in the rendered texture; a headset has no tooltip to fall back on.
+    const rows = propLayout(state({ page: 'move' })).rows
+    expect(rows.some((r) => r.caption === 'grab')).toBe(true)
   })
 
   it('shows the chosen axis of each vector, and marks which one that is', () => {

@@ -71,7 +71,14 @@ const HAND_COLORS: Record<XrHand, THREE.Color> = {
 
 export interface XrCallbacks {
   /**
-   * Trigger pulled at the scene: the ray is already in world space.
+   * Trigger pulled at the scene: the ray is already in world space, and
+   * `pose` is the controller's world orientation (which a grab-to-TURN reads
+   * and nothing else does).
+   *
+   * `additive` is the right thumbstick click, held as a modifier — this app's
+   * Ctrl. It means "toggle this node's membership" rather than "replace the
+   * selection", and it suppresses the grab: the gesture is about the SELECTION,
+   * not about moving what is in it.
    *
    * Return true to claim the press as a DRAG — the rig then reports the ray
    * every frame through `onDragRay` until the trigger is released, and finishes
@@ -79,9 +86,14 @@ export interface XrCallbacks {
    * "click to select, click-drag to move", which is the desktop's own model
    * (its gizmo needs a selection first) and leaves no shipped gesture changed.
    */
-  onPick(raycaster: THREE.Raycaster, hand: XrHand): boolean
+  onPick(
+    raycaster: THREE.Raycaster,
+    hand: XrHand,
+    pose: THREE.Quaternion,
+    additive: boolean,
+  ): boolean
   /** A claimed press, still held. */
-  onDragRay(raycaster: THREE.Raycaster, hand: XrHand): void
+  onDragRay(raycaster: THREE.Raycaster, hand: XrHand, pose: THREE.Quaternion): void
   /** Trigger released, or the drag cancelled (a squeeze on the same hand). */
   onDragEnd(hand: XrHand, cancelled: boolean): void
   /** A/X: what the scene should be framed to, or null for an empty scene. */
@@ -125,6 +137,9 @@ interface HandInput {
   squeeze: number
   primary: boolean
   secondary: boolean
+  /** Thumbstick CLICK. The right hand's is the selection modifier — see
+   *  `additive` in fireButtons. */
+  stickClick: boolean
   /** Target-ray space object (the ray you point with). */
   ray: THREE.Object3D
   /** Grip space position in XR space — what a grab-drag anchors on. */
@@ -157,6 +172,9 @@ function readHands(
       squeeze: buttons[1]?.value ?? 0,
       primary: buttons[4]?.pressed ?? false,
       secondary: buttons[5]?.pressed ?? false,
+      // xr-standard index 3. Unclaimed until now, and the only free input left
+      // that a thumb can hold down while the index finger works the trigger.
+      stickClick: buttons[3]?.pressed ?? false,
       ray,
       // A hand-tracked source has no grip space; the ray origin stands in.
       grip: vec3(grip.position.x, grip.position.y, grip.position.z),
@@ -591,6 +609,22 @@ export class XrRig {
     return this.raycaster
   }
 
+  /**
+   * The hand's world ORIENTATION, which a grab-to-turn rotates a node by. The
+   * ray direction alone would lose the twist, which is the whole gesture.
+   *
+   * `getWorldQuaternion` rather than `setFromRotationMatrix(matrixWorld)`: the
+   * latter needs an UNSCALED rotation matrix, and the rig's world matrix
+   * carries the world-units-per-metre scale, which at a typical 150 makes the
+   * extracted quaternion meaningless — two frames of a real wrist twist then
+   * compared as no rotation at all. `getWorldQuaternion` decomposes, which
+   * divides the scale back out. Found by driving it; nothing in the scene graph
+   * looks wrong until you ask for an angle.
+   */
+  private poseFor(input: HandInput): THREE.Quaternion {
+    return input.ray.getWorldQuaternion(new THREE.Quaternion())
+  }
+
   /** Shorten a hand's laser to what it is touching (world units → metres). */
   private setRayLength(input: HandInput, distance: number | null): void {
     const line = input.ray.children.find((c) => (c as THREE.Line).isLine) as THREE.Line | undefined
@@ -630,6 +664,10 @@ export class XrRig {
   }
 
   private fireButtons(hands: Partial<Record<XrHand, HandInput>>): void {
+    // One modifier for both hands, taken off the RIGHT stick: the gesture is
+    // "hold this, then pick", and a cross-hand chord (right thumb, left index)
+    // is the comfortable way to do it while still working same-handed.
+    const additive = hands.right?.stickClick ?? false
     for (const hand of ['left', 'right'] as const) {
       const input = hands[hand]
       if (!input) continue
@@ -644,7 +682,9 @@ export class XrRig {
         if (target?.press()) {
           this.pressHand = hand
           this.pressTarget = target
-        } else if (this.callbacks.onPick(this.rayFor(input), hand)) {
+        } else if (
+          this.callbacks.onPick(this.rayFor(input), hand, this.poseFor(input), additive)
+        ) {
           this.grabHand = hand
         }
       } else if (down && this.pressHand === hand) {
@@ -654,7 +694,7 @@ export class XrRig {
         // that hand is now dragging the world, and a glyph following both would
         // move twice.
         if (this.grabbing.has(hand)) this.endGrab(true)
-        else this.callbacks.onDragRay(this.rayFor(input), hand)
+        else this.callbacks.onDragRay(this.rayFor(input), hand, this.poseFor(input))
       } else if (!down && this.pressHand === hand) {
         this.pressTarget?.release()
         this.pressHand = null
