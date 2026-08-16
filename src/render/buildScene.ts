@@ -213,7 +213,10 @@ function nodesById(nodes: readonly GvNode[]): Map<number, GvNode> {
  * regrafted node would take a different topology offset than the one it was
  * built with.
  */
-function effectiveParent(node: GvNode, byId: ReadonlyMap<number, GvNode>): GvNode | null {
+export function effectiveParent(
+  node: GvNode,
+  byId: ReadonlyMap<number, GvNode>,
+): GvNode | null {
   if (node.parentId === 0 || node.parentId === node.id) return null
   return byId.get(node.parentId) ?? null
 }

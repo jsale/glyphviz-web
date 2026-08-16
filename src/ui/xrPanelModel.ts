@@ -1,20 +1,22 @@
-// The in-VR control panel's layout and hit-testing — pure geometry, no THREE
-// and no DOM, so it runs in plain node like xrNav.ts and nextPanelMode.
+// The in-VR CONTROL panel's layout and hit-testing — pure geometry, no THREE
+// and no DOM, so it runs in plain node like xrNav.ts and nextPanelMode. The
+// normalised-coordinate convention and the hit-test helpers are shared with the
+// Properties panel; they live in xrWidget.ts.
 //
-// The panel is a quad on the left wrist that the other hand points at. Its
-// widgets are laid out in NORMALISED coordinates (0..1 across, 0..1 down from
-// the top), which is what lets the same table drive both the canvas painter
-// and the ray hit-test: a ray hit gives a UV, and the widget under that UV is
-// the one the trigger acts on. Nothing here knows how many pixels the texture
-// has or how many metres the quad is.
+// The panel is a quad on the LEFT wrist that the other hand points at.
 //
 // There is no desktop counterpart to port — the spike has no in-headset UI at
 // all. What it replaces is the DOM HUD, which a session cannot see, so the
 // rule for what earns a place is "things you cannot do from inside the
 // headset otherwise": the Channels transport, the draw limit (the frame-rate
-// lever), the scene switch, and the two framings. Everything that edits node
-// data stays out of v1 — that is the authoring phase, and a wrist panel is a
-// poor place to discover it.
+// lever), the scene switch, and the two framings. Editing a node's own data is
+// the RIGHT wrist's job (ui/xrPropertiesModel.ts) — keeping the two apart is
+// what lets each stay a glance rather than a menu.
+
+import { rect as makeRect, sliderFraction, widgetAt, type XrRect, type XrWidgetBase } from './xrWidget'
+
+export { sliderFraction, widgetAt }
+export type { XrRect }
 
 export type XrWidgetId =
   | 'play'
@@ -27,18 +29,9 @@ export type XrWidgetId =
   | 'fit-room'
   | 'fit-table'
 
-/** Normalised rect: x/y from the panel's top-left, both 0..1. */
-export interface XrRect {
-  x: number
-  y: number
-  w: number
-  h: number
-}
-
-export interface XrWidget {
+export interface XrWidget extends XrWidgetBase {
   id: XrWidgetId
   kind: 'button' | 'slider'
-  rect: XrRect
   /** What the painter draws in it (a slider draws its own readout instead). */
   label: string
   /**
@@ -124,24 +117,7 @@ export function panelWidgets(state: XrPanelState): XrWidget[] {
 }
 
 function row(y: number, x: number, w: number): XrRect {
-  return { x, y, w, h: ROW_H }
-}
-
-/** The widget under a normalised point, or null. Later widgets never overlap
- *  earlier ones, so the first hit is the answer. */
-export function widgetAt(widgets: readonly XrWidget[], u: number, v: number): XrWidget | null {
-  for (const widget of widgets) {
-    const { x, y, w, h } = widget.rect
-    if (u >= x && u <= x + w && v >= y && v <= y + h) return widget
-  }
-  return null
-}
-
-/** Where along a slider a point falls, clamped — a drag that runs off the end
- *  of the track should pin to the end, not stop responding. */
-export function sliderFraction(rect: XrRect, u: number): number {
-  if (rect.w <= 0) return 0
-  return Math.min(1, Math.max(0, (u - rect.x) / rect.w))
+  return makeRect(x, y, w, ROW_H)
 }
 
 /**

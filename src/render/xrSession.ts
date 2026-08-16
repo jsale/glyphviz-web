@@ -11,8 +11,18 @@
 //   right stick  turn (X) and rise/sink (Y)
 //   squeeze      grab the world and drag it; BOTH hands scale and turn it
 //   trigger      pick the node under the ray
-//   A / X        re-fit the scene in front of you
 //   B / Y        play/pause Channels
+//
+// The two face buttons the spike spent on re-fitting are panel switches here,
+// one per wrist: X shows/hides the CONTROL panel on the left, A the PROPERTIES
+// panel on the right (agreed with Jeff 2026-08-16). Re-fit did not lose a home
+// — the control panel's Fit row has offered Room view and Tabletop since it
+// shipped, and A was a duplicate of the first of those.
+//
+// Note what is NOT available: the left controller's Menu button and the right
+// one's Meta button never reach the page at all — the runtime keeps both for
+// the system menu and recentre — so the budget really is trigger, squeeze,
+// stick, stick-click and two face buttons per hand.
 //
 // Deliberately NOT ported: everything in the spike that exists to work around
 // its own stack. Its per-eye view matrices, swapchain routing and `--toe-deg`
@@ -66,17 +76,19 @@ export interface XrCallbacks {
   fitTarget(): { center: THREE.Vector3; extent: number } | null
   /** B/Y. */
   onSecondary(): void
-  /** Left X — put the wrist panel away, and bring it back. */
+  /** Left X — put the left wrist's CONTROL panel away, and bring it back. */
   onTogglePanel(): void
+  /** Right A — the same for the right wrist's PROPERTIES panel. */
+  onToggleProperties(): void
   onStart(): void
   onEnd(): void
 }
 
 /**
- * A surface the controller ray can drive — the wrist panel, and nothing else
- * so far. A hand whose ray is on it does NOT pick the scene: the panel is to
- * the ray what the DOM HUD is to the mouse, and a press meant for a button
- * must not also select whatever glyph is behind it.
+ * A surface the controller ray can drive — the two wrist panels. A hand whose
+ * ray is on one does NOT pick the scene: a panel is to the ray what the DOM HUD
+ * is to the mouse, and a press meant for a button must not also select whatever
+ * glyph is behind it.
  */
 export interface XrPointerTarget {
   /** Turn to face the viewer, before this frame's hit test reads the pose. */
@@ -89,6 +101,9 @@ export interface XrPointerTarget {
   release(): void
   clearHover(): void
 }
+
+/** Where the properties panel parks when it is unclipped from the wrist. */
+const FLOAT_MIN_PITCH_FORWARD = 1e-3
 
 /** Per-hand gamepad reading for one frame. */
 interface HandInput {
@@ -145,10 +160,22 @@ export class XrRig {
   /** Head pose in WORLD space, for anything that aims off the camera
    *  (the key light, the backdrop's distance sizing). */
   readonly headProxy = new THREE.Object3D()
-  /** Where the wrist panel hangs. Re-parented onto the LEFT grip as soon as
+  /** Where the CONTROL panel hangs. Re-parented onto the LEFT grip as soon as
    *  handedness resolves — which is only once a controller connects, so it
    *  starts on the rig and moves itself. */
   readonly panelAnchor = new THREE.Group()
+  /** The same for the PROPERTIES panel, on the RIGHT grip — so each panel is
+   *  pointed at with the hand that is not wearing it. */
+  readonly panelAnchorRight = new THREE.Group()
+  /**
+   * Where the properties panel parks when it is unclipped from the wrist.
+   *
+   * A child of the RIG, not of the head and not of the world: parked in rig
+   * space it stays where you left it as you look around (a head-locked panel
+   * is nauseating) while still travelling with you as you fly, and it is not
+   * rescaled by a two-handed pinch the way a world-anchored one would be.
+   */
+  readonly floatAnchor = new THREE.Group()
   state: XrRigState = identityRig()
 
   private readonly renderer: THREE.WebGLRenderer
@@ -169,11 +196,13 @@ export class XrRig {
   private prevSecondary: Record<XrHand, boolean> = { left: false, right: false }
   private pendingFit = false
   private pendingFitMetres: number | undefined
-  private pointer: XrPointerTarget | null = null
-  /** The hand hovering the pointer target this frame, and the one holding a
-   *  press on it — a drag belongs to the hand that started it. */
+  private pointers: XrPointerTarget[] = []
+  /** The hand hovering a pointer target this frame, the target it is on, and
+   *  the hand holding a press — a drag belongs to the hand that started it. */
   private pointerHand: XrHand | null = null
+  private pointerTarget: XrPointerTarget | null = null
   private pressHand: XrHand | null = null
+  private pressTarget: XrPointerTarget | null = null
   /** False until three has written a real viewer pose into the camera — it
    *  does that inside render(), so the first presenting frame has none yet. */
   private posed = false
@@ -196,7 +225,7 @@ export class XrRig {
     this.callbacks = callbacks
     this.group.name = 'xr-rig'
     scene.add(this.group)
-    this.group.add(this.panelAnchor)
+    this.group.add(this.panelAnchor, this.panelAnchorRight, this.floatAnchor)
 
     renderer.xr.enabled = true
     for (let i = 0; i < 2; i++) {
@@ -212,8 +241,9 @@ export class XrRig {
         const marker = grip.children[0] as THREE.Mesh | undefined
         const material = marker?.material as THREE.MeshBasicMaterial | undefined
         material?.color.copy(color)
-        // The panel rides the left wrist, which is only identifiable now.
+        // The panels ride a wrist each, which is only identifiable now.
         if (handedness === 'left') grip.add(this.panelAnchor)
+        else grip.add(this.panelAnchorRight)
       })
       grip.add(this.makeMarker())
       this.group.add(ray, grip)
@@ -273,11 +303,43 @@ export class XrRig {
     this.pendingFitMetres = targetMetres
   }
 
-  /** Route the controller ray to a surface (the wrist panel) before the scene. */
-  setPointerTarget(target: XrPointerTarget | null): void {
-    this.pointer = target
+  /**
+   * Route the controller ray to these surfaces (the wrist panels) before the
+   * scene. Order does not decide anything — the NEAREST hit wins, so two
+   * panels that happen to overlap along a ray behave the way two objects do.
+   */
+  setPointerTargets(targets: readonly XrPointerTarget[]): void {
+    this.pointers = [...targets]
     this.pointerHand = null
+    this.pointerTarget = null
     this.pressHand = null
+    this.pressTarget = null
+  }
+
+  /**
+   * Park the floating anchor in front of the viewer, in RIG space (metres).
+   *
+   * The forward direction has its PITCH dropped: a panel summoned while you are
+   * looking at your feet belongs in front of you, not on the floor. Looking
+   * straight up or down leaves no horizontal component to normalise, so that
+   * case falls back to the head's own right vector turned a quarter turn —
+   * which is the direction the body is facing however the neck is craned.
+   */
+  placeFloatAnchor(distanceM: number, dropM: number): void {
+    const head = new THREE.Vector3().setFromMatrixPosition(this.headLocal)
+    const forward = new THREE.Vector3(0, 0, -1).transformDirection(this.headLocal)
+    forward.y = 0
+    if (forward.lengthSq() < FLOAT_MIN_PITCH_FORWARD) {
+      const right = new THREE.Vector3(1, 0, 0).transformDirection(this.headLocal)
+      forward.set(right.z, 0, -right.x)
+      if (forward.lengthSq() < FLOAT_MIN_PITCH_FORWARD) forward.set(0, 0, -1)
+    }
+    forward.normalize()
+    this.floatAnchor.position
+      .copy(head)
+      .addScaledVector(forward, distanceM)
+      .add(new THREE.Vector3(0, -dropM, 0))
+    this.floatAnchor.updateMatrixWorld(true)
   }
 
   /**
@@ -311,6 +373,8 @@ export class XrRig {
     this.posed = false
     this.grabbing.clear()
     this.grabKey = ''
+    this.pressHand = null
+    this.pressTarget = null
     // A provisional fit for the one frame before a real head pose arrives, so
     // the scene is roughly in place rather than wherever the last one left it.
     this.applyFit(vec3(0, 1.6, 0), 0)
@@ -451,21 +515,46 @@ export class XrRig {
    * carries on through the button being pressed reads as missing it.
    */
   private updatePointer(hands: Partial<Record<XrHand, HandInput>>): void {
-    if (!this.pointer) return
-    this.pointer.orient(this.headProxy.position)
+    if (this.pointers.length === 0) return
+    for (const target of this.pointers) target.orient(this.headProxy.position)
     // A drag belongs to the hand that started it; the other hand cannot steal
     // the hover out from under it mid-slide.
     const order: XrHand[] = this.pressHand ? [this.pressHand] : ['right', 'left']
     let hovered: XrHand | null = null
+    let hoveredTarget: XrPointerTarget | null = null
+    const touched = new Set<XrPointerTarget>()
     for (const hand of order) {
       const input = hands[hand]
       if (!input) continue
-      const distance = hovered === null ? this.pointer.hover(this.rayFor(input)) : null
-      this.setRayLength(input, distance)
-      if (distance !== null) hovered = hand
+      let best: XrPointerTarget | null = null
+      let bestDistance = Infinity
+      if (hovered === null) {
+        // Every target is asked, because `hover` is also what records which
+        // widget is lit — asking only until the first hit would leave a stale
+        // highlight on the panel the ray has just left.
+        for (const target of this.pointers) {
+          const distance = target.hover(this.rayFor(input))
+          touched.add(target)
+          if (distance !== null && distance < bestDistance) {
+            bestDistance = distance
+            best = target
+          }
+        }
+      }
+      this.setRayLength(input, best === null ? null : bestDistance)
+      if (best !== null) {
+        // Only the nearest one keeps its highlight: a ray that passes through
+        // a near panel to reach a far one is pointing at the near one.
+        for (const target of this.pointers) if (target !== best) target.clearHover()
+        hovered = hand
+        hoveredTarget = best
+      }
     }
-    if (hovered === null && this.pressHand === null) this.pointer.clearHover()
+    if (hovered === null && this.pressHand === null) {
+      for (const target of touched) target.clearHover()
+    }
     this.pointerHand = hovered
+    this.pointerTarget = hoveredTarget
   }
 
   /**
@@ -533,24 +622,27 @@ export class XrRig {
       const wasDown = this.prevTrigger[hand] >= TRIGGER_THRESHOLD
       this.prevTrigger[hand] = trigger
       if (down && !wasDown) {
-        // The panel takes the press when the ray is on it, and the scene never
+        // A panel takes the press when the ray is on it, and the scene never
         // sees it — a button click must not also select the glyph behind it.
-        if (this.pointer && this.pointerHand === hand && this.pointer.press()) {
+        const target = this.pointerHand === hand ? this.pointerTarget : null
+        if (target?.press()) {
           this.pressHand = hand
+          this.pressTarget = target
         } else {
           this.pick(input, hand)
         }
       } else if (down && this.pressHand === hand) {
-        this.pointer?.drag(this.rayFor(input))
+        this.pressTarget?.drag(this.rayFor(input))
       } else if (!down && this.pressHand === hand) {
-        this.pointer?.release()
+        this.pressTarget?.release()
         this.pressHand = null
+        this.pressTarget = null
       }
-      // A/X: right re-fits, left puts the wrist panel away — the panel is on
-      // the left hand, so its switch belongs to that hand too.
+      // A/X: each hand's primary shows and hides the panel on THAT wrist, so
+      // the switch is under the thumb of the hand wearing it.
       if (input.primary && !this.prevPrimary[hand]) {
         if (hand === 'left') this.callbacks.onTogglePanel()
-        else this.requestFit()
+        else this.callbacks.onToggleProperties()
       }
       this.prevPrimary[hand] = input.primary
       if (input.secondary && !this.prevSecondary[hand]) this.callbacks.onSecondary()

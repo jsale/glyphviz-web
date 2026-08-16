@@ -1,0 +1,243 @@
+// The machinery every in-headset panel shares: a quad carrying a canvas
+// texture, billboarded at the viewer, hit-tested with a controller ray, and
+// repainted only when its picture actually changes.
+//
+// Factored out of xrPanel.ts when the Properties panel arrived rather than
+// copied into it — the same call ui/floatWindow.ts and ui/glyphPreview.ts made
+// when the Glyph Composer joined the Hyperglyph Generator, so the app has ONE
+// panel behaviour rather than two that drift.
+//
+// A Mesh, note, not a Sprite: a mesh's vertices go through the model-view
+// matrix, so its size lands in metres under the scaled camera rig exactly as
+// its position does. (A Sprite's does not — see xrLabel.ts, which had to be
+// sized in eye units for that reason.)
+
+import * as THREE from 'three'
+import { widgetAt, type XrWidgetBase } from '../ui/xrWidget'
+
+export interface XrSurfaceOptions {
+  /** Quad size in METRES (rig-local units are perceived metres — xrNav.ts). */
+  width: number
+  height: number
+  /** Canvas resolution. Roughly 4x the quad's centimetres reads crisply at 0.4 m. */
+  texWidth: number
+  texHeight: number
+  /** Offset from the anchor, metres — where a watch face sits, for a wrist panel. */
+  offset?: THREE.Vector3
+}
+
+/** Shared palette, so the two panels cannot drift into different-looking chrome. */
+export const SURFACE_BG = 'rgba(18, 18, 26, 0.94)'
+export const SURFACE_EDGE = 'rgba(120, 130, 160, 0.9)'
+export const SURFACE_TEXT = '#e8ecf6'
+export const SURFACE_DIM = '#9aa3b8'
+export const SURFACE_ACCENT = 'rgba(255, 243, 160, 1)'
+export const SURFACE_BTN = 'rgba(52, 58, 78, 0.95)'
+export const SURFACE_BTN_HOVER = 'rgba(96, 108, 145, 1)'
+export const SURFACE_BTN_ACTIVE = 'rgba(70, 104, 168, 1)'
+export const SURFACE_BTN_OFF = 'rgba(36, 40, 54, 0.9)'
+
+export abstract class XrSurface<W extends XrWidgetBase> {
+  readonly group = new THREE.Group()
+
+  protected readonly canvas = document.createElement('canvas')
+  protected readonly texture: THREE.CanvasTexture
+  protected readonly mesh: THREE.Mesh
+  protected widgets: W[] = []
+  protected hovered: string | null = null
+
+  private dragging: W | null = null
+  private signature = ''
+  /** Where the pointer last was on the quad, in the layout's own coordinates
+   *  (u across, v DOWN from the top) — a scrub needs its press point. */
+  private lastU = 0
+  private lastV = 0
+
+  constructor(options: XrSurfaceOptions) {
+    this.canvas.width = options.texWidth
+    this.canvas.height = options.texHeight
+    this.texture = new THREE.CanvasTexture(this.canvas)
+    // Raw pixels, like every other texture here: the renderer writes straight
+    // to the framebuffer (lighting.ts's colour-pipeline note).
+    this.texture.colorSpace = THREE.NoColorSpace
+    this.texture.anisotropy = 4
+    this.mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(options.width, options.height),
+      new THREE.MeshBasicMaterial({
+        map: this.texture,
+        transparent: true,
+        fog: false,
+        // A control surface must never be sliced by the scene it controls.
+        // Flying INSIDE a scene — which is the whole point of immersive mode,
+        // and exactly when you reach for the Properties panel — puts glyphs
+        // closer than your own wrist, and a depth-tested panel then draws in
+        // pieces. renderOrder puts these last instead.
+        depthTest: false,
+        depthWrite: false,
+      }),
+    )
+    this.mesh.renderOrder = 5
+    this.mesh.userData.isSelectionBox = true // chrome: never takes a blend mode
+    if (options.offset) this.mesh.position.copy(options.offset)
+    this.group.add(this.mesh)
+  }
+
+  get visible(): boolean {
+    return this.group.visible
+  }
+
+  set visible(value: boolean) {
+    this.group.visible = value
+    if (!value) this.clearHover()
+  }
+
+  /** Which widget the pointer is on — nothing else can observe this. */
+  get hoveredId(): string | null {
+    return this.hovered
+  }
+
+  /** Where the panel sits relative to its anchor, and how big it draws. */
+  setOffset(x: number, y: number, z: number): void {
+    this.mesh.position.set(x, y, z)
+  }
+
+  setScale(scale: number): void {
+    this.mesh.scale.setScalar(scale)
+  }
+
+  /**
+   * Keep the face turned toward the viewer, whatever the wrist is doing.
+   *
+   * The world matrix is refreshed here rather than left to the next render,
+   * because the ray hit test that follows in the same frame reads it — a panel
+   * pointed at where it was last frame is a panel whose buttons are slightly
+   * in the wrong place while the hand moves.
+   */
+  orient(headWorld: THREE.Vector3): void {
+    if (!this.group.visible) return
+    this.mesh.lookAt(headWorld)
+    this.mesh.updateMatrixWorld(true)
+  }
+
+  /**
+   * Ray hit test. Returns the hit distance in world units (the caller shortens
+   * the pointer ray to it) or null, and records which widget is under the
+   * pointer so the next paint can highlight it.
+   */
+  hover(raycaster: THREE.Raycaster): number | null {
+    if (!this.group.visible) return null
+    const hit = raycaster.intersectObject(this.mesh, false)[0]
+    if (!hit?.uv) {
+      this.setHovered(null)
+      return null
+    }
+    // Three's UV origin is bottom-left; every layout counts down from the top.
+    this.lastU = hit.uv.x
+    this.lastV = 1 - hit.uv.y
+    this.setHovered(widgetAt(this.widgets, this.lastU, this.lastV)?.id ?? null)
+    return hit.distance
+  }
+
+  /** Trigger pressed while hovering. True if it landed on a widget — which is
+   *  what stops the same press also selecting the glyph behind the panel. */
+  press(): boolean {
+    const widget = this.widgets.find((w) => w.id === this.hovered)
+    if (!widget) return false
+    if (widget.kind === 'button') {
+      this.onPress(widget)
+      return true
+    }
+    this.dragging = widget
+    this.onDragStart(widget, this.lastU, this.lastV)
+    return true
+  }
+
+  /** Trigger held: a slider or scrub tracks the ray until it is let go. */
+  drag(raycaster: THREE.Raycaster): void {
+    if (!this.dragging) return
+    const hit = raycaster.intersectObject(this.mesh, false)[0]
+    if (!hit?.uv) return
+    this.onDrag(this.dragging, hit.uv.x, 1 - hit.uv.y)
+  }
+
+  release(): void {
+    const widget = this.dragging
+    this.dragging = null
+    if (widget) this.onDragEnd(widget)
+  }
+
+  clearHover(): void {
+    this.setHovered(null)
+  }
+
+  dispose(): void {
+    this.texture.dispose()
+    this.mesh.geometry.dispose()
+    ;(this.mesh.material as THREE.Material).dispose()
+  }
+
+  /**
+   * Adopt this frame's widgets and repaint if the picture changed. Subclasses
+   * call this from their own `update(state)`; the signature is theirs to
+   * compute, because only they know what they draw.
+   */
+  protected sync(widgets: W[], signature: string): void {
+    this.widgets = widgets
+    if (this.hovered && !widgets.some((w) => w.id === this.hovered)) this.hovered = null
+    if (signature === this.signature) return
+    this.signature = signature
+    this.paint()
+    this.texture.needsUpdate = true
+  }
+
+  protected get context2d(): CanvasRenderingContext2D {
+    return this.canvas.getContext('2d')!
+  }
+
+  /** Paint the whole texture. Called only when the signature changed. */
+  protected abstract paint(): void
+
+  /** Re-run the subclass's own `update` with the state it last saw — the hover
+   *  highlight is part of the picture, so a hover change has to repaint. */
+  protected abstract refresh(): void
+
+  protected abstract onPress(widget: W): void
+
+  /* eslint-disable @typescript-eslint/no-unused-vars */
+  protected onDragStart(_widget: W, _u: number, _v: number): void {}
+  protected onDrag(_widget: W, _u: number, _v: number): void {}
+  protected onDragEnd(_widget: W): void {}
+  /* eslint-enable @typescript-eslint/no-unused-vars */
+
+  private setHovered(id: string | null): void {
+    if (id === this.hovered) return
+    this.hovered = id
+    this.refresh()
+  }
+}
+
+export function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  ctx.beginPath()
+  ctx.moveTo(x + r, y)
+  ctx.arcTo(x + w, y, x + w, y + h, r)
+  ctx.arcTo(x + w, y + h, x, y + h, r)
+  ctx.arcTo(x, y + h, x, y, r)
+  ctx.arcTo(x, y, x + w, y, r)
+  ctx.closePath()
+}
+
+/** Trim to fit, with an ellipsis — a scene name is as long as its filename,
+ *  and a tag label as long as its author felt like. */
+export function ellipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text
+  let cut = text
+  while (cut.length > 1 && ctx.measureText(`${cut}…`).width > maxWidth) cut = cut.slice(0, -1)
+  return `${cut}…`
+}

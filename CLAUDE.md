@@ -2377,12 +2377,128 @@ something to decide now).
        browser cannot be assumed to have — they are canvas PATHS now, and the
        scene stepper took ‹ › so a solid triangle never appears twice meaning
        two different things.
+   - **P3, the wrist PROPERTIES panel** (shipped 2026-08-16, Jeff's request):
+     editing a selected node's own parameters from inside the headset. A second
+     quad, on the RIGHT wrist, pointed at with the left hand — the inspector
+     (`ui/inspector.ts`) re-expressed for a device with no keyboard and no
+     mouse. `src/ui/xrPropertiesModel.ts` is the layout, values and hit-testing
+     (pure); `src/render/xrProperties.ts` paints it and turns ray hits into
+     edits.
+     - Jeff asked for the design to be settled before it was built, being new
+       to VR interaction. Four decisions, all taken 2026-08-16:
+       - PLACEMENT: right wrist, not a page on the existing left panel and not
+         a summoned floating slab. A wrist panel is always findable and never
+         lost, and putting the two on OPPOSITE wrists means each is pointed at
+         with the hand that is not wearing it — neither hand has to both hold a
+         panel and drive it. What a wrist costs is that your arm must be up to
+         read it, fine for a glance at the transport and tiring for a
+         ten-minute edit, so the panel PINS: one button unclips it onto a slab
+         parked in front of you and clips it back. Same layout at both ends,
+         1.7× larger when pinned — the win is resting your arm and having both
+         hands free, not more rows.
+       - BUTTON: **A** shows and hides it, mirroring X on the left, so each
+         hand's face button drives the panel on that wrist. A's old job
+         (re-fit) was already duplicated by the control panel's Room view
+         button, so nothing lost a home. Worth recording what is NOT available:
+         the left Menu and right Meta buttons never reach the page at all — the
+         runtime keeps both — so the real budget is trigger, squeeze, stick,
+         stick-CLICK (still unused on both hands) and two face buttons per hand.
+       - SCOPE: everything except `text` and `link`, which is the platform
+         rather than a choice — a headset browser cannot raise a keyboard into
+         a running immersive session. The panel shows the tag text so you know
+         which node you have; it cannot let you retype it.
+       - NOT direct grab-to-move: that stays with the pending authoring-
+         gestures phase, which has to settle the topology inverse in VR, undo,
+         and how a glyph grab shares the squeeze with grabbing the WORLD.
+     - Three widget shapes, because none of the DOM controls survive the trip:
+       a STEPPER `‹ value ›` for every enum-ish field, a TOGGLE for hide /
+       show_text, and a NUDGE (`− value +`, plus press-and-drag on the value to
+       SCRUB) for the vectors. The steppers already HAVE desktop cycle
+       semantics — J/O for topo/geometry, =/− and Alt+=/Alt+− for the palette
+       pair — so a VR stepper row is literally that key with a face on it, and
+       every action routes through the same `cycleTargets` subset and the same
+       `rebuildScene(false)` the DOM panels use, so the two inspectors cannot
+       drift.
+     - PAGES (Shape / Move / Look), not one long list: the quad is the size of
+       a large phone and five rows is what fits at a row height a ray can
+       reliably hit. ONE axis chip and ONE step chip serve all three vector
+       rows — nine live number fields on a 22 cm quad is not something a laser
+       can hit. The step ladder is 0.01 … 100 for all three vectors rather than
+       a natural one each: the chip has to read at a glance, and a user wanting
+       5° is better served pressing + five times than learning that rotate's
+       ladder differs from translate's.
+     - The SCRUB is what makes a value with no end stops draggable, and it is
+       quantised to the step (40 notches across the panel width) so a dragged
+       value walks a lattice of round numbers rather than landing wherever the
+       hand stopped. It mutates the node and rewrites that node's own frame in
+       place — `applyFrameTransform` + `applyGlyphDrawScale`, the gizmo drag's
+       own path — and commits ONCE on release. A `rebuildScene` per frame at 90
+       Hz is not affordable at any real scene's size, and this is the same
+       trade a mouse gizmo drag already makes. Targeted rather than
+       `refreshDrawScales`, which is the whole-scene version and right only for
+       the Global Scale slider; children ride along free, being nested under
+       their parent's Object3D. Measured in the drive: the node's Object3D
+       identity is unchanged across every frame of a scrub and replaced on
+       release.
+     - `render/xrSurface.ts` was FACTORED OUT of xrPanel.ts rather than copied
+       into the new file — the quad, canvas texture, billboarding, ray hit
+       test, hover/press/drag/release and the roundRect/ellipsis painters — so
+       the app has one panel behaviour, the same call ui/floatWindow.ts and
+       ui/glyphPreview.ts made when the Composer joined the Generator. The pure
+       hit-test primitives went to `ui/xrWidget.ts`, which both panel models
+       read.
+     - Two changes this made to the SHIPPED control panel, both deliberate:
+       - Panels are no longer DEPTH TESTED (`depthTest`/`depthWrite` off,
+         `renderOrder` puts them last). Flying INSIDE a scene is the whole
+         point of immersive mode and exactly when you reach for the Properties
+         panel, and it puts glyphs closer than your own wrist — a depth-tested
+         panel then draws in pieces. A control surface must never be sliced by
+         the scene it controls.
+       - `setPointerTarget` became `setPointerTargets`, NEAREST hit wins. Every
+         target is asked rather than stopping at the first: `hover` is also
+         what records which widget is lit, so asking only until the first hit
+         would leave a stale highlight on the panel the ray had just left.
+     - The pinned slab is a child of the RIG, not of the head and not of the
+       world: parked in rig space it stays where you left it as you look around
+       (a head-locked panel is nauseating) while still travelling with you as
+       you fly, and it is not rescaled by a two-handed pinch the way a
+       world-anchored one would be. Its forward direction has PITCH DROPPED, so
+       a panel pinned while you are looking at your feet lands in front of you
+       rather than on the floor. Leaving the session unpins it — a slab parked
+       in the last session's rig space would be waiting in mid-air at the start
+       of the next one.
+     - `xrPropertiesModel.test.ts` pins the layout invariants the control panel
+       learned the hard way (everything inside the quad, nothing overlapping,
+       a bottom margin so no widget draws clipped, every widget at least 0.1 of
+       the quad so a ray can hit it) plus the page contents, the greying of the
+       types J and O never touch, the 1-based facet, the name-without-id rule,
+       and the scrub quantisation.
+     - Driven in Chrome against the emulated Quest 3, 54 measured checks: both
+       panels on opposite grips, the ray shortening to the panel it touches, a
+       panel press never disturbing the selection behind it, every page's
+       widgets producing the right data change (topo/geometry stepping on the
+       real cycle rules, the palette index resolving into a literal colour,
+       alpha clamping, both flags), the axis and step chips re-aiming the same
+       three rows, a quarter-width scrub measuring exactly 10 notches of the
+       step with no rebuild in between, A and X toggling their own panel and
+       only their own, the pin round trip (re-parent, 1.7×, parked 0.776 m from
+       the head = √(0.75² + 0.2²), no drift when the head turns, and back), and
+       a clean console.
+       - The dumped panel TEXTURE is what caught the one real defect, after all
+         54 numeric checks had passed: the Move page's step chip was a bare
+         `− 10 +` with nothing saying what the 10 was, and a headset has no
+         tooltip. It is captioned now. Same lesson as the control panel's own
+         three picture-only faults — an in-headset surface has to be looked at.
    - PENDING, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
      small once the rig exists, and the demo that impresses people) — Jeff
      deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
      hand tracking, comfort options (snap turn, vignette) and authoring
      gestures — Draw Mode with a controller is the natural one, since
-     `drawMode.ts`/`drawPlane.ts` already take a ray.
+     `drawMode.ts`/`drawPlane.ts` already take a ray. Direct grab-to-move a
+     selected glyph belongs to that phase too (deferred from P3, 2026-08-16).
+     Multi-select has no in-headset gesture yet either: an XR trigger pick
+     always replaces the selection, so the Properties panel's "N nodes" title
+     can only arise from a selection made at the desk before entering.
 10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
     through step 8 — the two remaining desktop features, by conscious
     choice, so their absence is a decision and not a gap):

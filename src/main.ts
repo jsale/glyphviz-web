@@ -94,7 +94,9 @@ import {
 } from './render/baseScale'
 import {
   applyFrameTransform,
+  applyGlyphDrawScale,
   buildScene,
+  effectiveParent,
   frameBaseRotation,
   rescaleSceneFrames,
 } from './render/buildScene'
@@ -138,6 +140,12 @@ import type { StereoEye } from './render/stereo'
 import { XrRig } from './render/xrSession'
 import { XrLabel } from './render/xrLabel'
 import { XrPanel } from './render/xrPanel'
+import {
+  PINNED_DISTANCE_M,
+  PINNED_DROP_M,
+  PINNED_SCALE,
+  XrProperties,
+} from './render/xrProperties'
 import { CameraRig, rigFromView } from './render/cameraMode'
 import type { OrbitRig } from './render/cameraMode'
 import {
@@ -343,7 +351,17 @@ const xrRig = new XrRig(renderer, camera, scene, {
   },
   onTogglePanel() {
     xrPanel.visible = !xrPanel.visible
-    status(xrPanel.visible ? 'Wrist panel shown.' : 'Wrist panel hidden — press X to bring it back.')
+    status(
+      xrPanel.visible ? 'Control panel shown.' : 'Control panel hidden — press X to bring it back.',
+    )
+  },
+  onToggleProperties() {
+    xrProperties.visible = !xrProperties.visible
+    status(
+      xrProperties.visible
+        ? 'Properties panel shown.'
+        : 'Properties panel hidden — press A to bring it back.',
+    )
   },
   onStart() {
     // Cross-eye stereo is a second pair of eyes drawn into one flat canvas;
@@ -356,7 +374,8 @@ const xrRig = new XrRig(renderer, camera, scene, {
     xrButton.textContent = 'Exit VR'
     status(
       'Immersive mode — left stick: fly, right stick: turn/rise, squeeze: grab ' +
-        '(both hands to resize), trigger: select, A/X: re-fit, B/Y: play Channels.',
+        '(both hands to resize), trigger: select, X: control panel, A: properties ' +
+        'panel, B/Y: play Channels.',
     )
   },
   onEnd() {
@@ -369,6 +388,10 @@ const xrRig = new XrRig(renderer, camera, scene, {
     xrLabel.hide()
     applyLineResolution()
     xrButton.textContent = 'Enter VR'
+    // A slab parked in the last session's rig space would be waiting in mid-air
+    // at the start of the next one; the wrist is where the panel belongs by
+    // default.
+    xrProperties.unpin()
     status('Left immersive mode.')
   },
 })
@@ -402,7 +425,75 @@ const xrPanel = new XrPanel({
   },
 })
 xrRig.panelAnchor.add(xrPanel.group)
-xrRig.setPointerTarget(xrPanel)
+
+// The right wrist's PROPERTIES panel — the DOM inspector re-expressed for a
+// headset (ui/xrPropertiesModel.ts says what survived the trip and why).
+//
+// Every action routes through the SAME functions the DOM panels use, so the two
+// inspectors cannot drift: the shape steppers are `cycleAttribute`'s own rules,
+// the palette pair is `cyclePaletteAttribute`'s, and a commit is the inspector
+// host's `rebuildScene(false)`.
+const xrProperties = new XrProperties({
+  stepTopo: (step) => xrCycle('topo', step),
+  stepGeometry: (step) => xrCycle('geometry', step),
+  stepPalette: (step) => xrCyclePalette('palette', step),
+  stepColorIndex: (step) => xrCyclePalette('index', step),
+  stepFacet: (step) =>
+    xrEditSelection((n) => {
+      // 0-based in the data, 1..6 everywhere a person reads it — and it wraps,
+      // like every other cycle in this app rather than clamping at the ends.
+      n.subspace = (((n.subspace + step) % 6) + 6) % 6
+    }),
+  stepTexture: (step) =>
+    xrEditSelection((n) => {
+      n.textureId = Math.max(0, n.textureId + step)
+    }),
+  nudgeRatio: (delta) => xrEditSelection((n) => (n.ratio = round6(n.ratio + delta))),
+  nudgeAlpha: (delta) =>
+    xrEditSelection((n) => (n.color.a = Math.max(0, Math.min(255, Math.round(n.color.a + delta))))),
+  nudgeVector: (field, axis, delta) =>
+    // In place, not through a rebuild: a scrub rewrites this 90 times a second
+    // and `rebuildScene` at Event_Cloud's scale is not a per-frame cost. This
+    // is the gizmo drag's own path (applyFrameTransform + refreshHalos), and
+    // the rebuild that re-cells overlays and repaints the table lands once, on
+    // release, exactly as a mouse drag's does.
+    xrNudgeVector(field, axis, delta),
+  toggleHide: () => {
+    const on = xrPrimaryNode()?.hide === 0
+    xrEditSelection((n) => (n.hide = on ? 1 : 0))
+  },
+  toggleShowText: () => {
+    const on = xrPrimaryNode()?.showText === 0
+    xrEditSelection((n) => (n.showText = on ? 1 : 0))
+  },
+  commit: () => xrCommitEdit(),
+  setPinned: (pinned) => setXrPropertiesPinned(pinned),
+})
+xrRig.panelAnchorRight.add(xrProperties.group)
+xrRig.setPointerTargets([xrPanel, xrProperties])
+
+/**
+ * Unclip the properties panel onto the floating slab, or clip it back.
+ *
+ * The slab is parked ONCE, at the moment it is pinned — in rig space, so it
+ * stays where you left it as you look around and travels with you as you fly.
+ * Re-pinning re-parks it, which is how you move it: dock, turn to face where
+ * you want it, pin again.
+ */
+function setXrPropertiesPinned(pinned: boolean) {
+  if (pinned) {
+    xrRig.placeFloatAnchor(PINNED_DISTANCE_M, PINNED_DROP_M)
+    xrRig.floatAnchor.add(xrProperties.group)
+    xrProperties.setOffset(0, 0, 0)
+    xrProperties.setScale(PINNED_SCALE)
+    status('Properties panel unclipped — pin again to re-park it, dock to return it.')
+  } else {
+    xrRig.panelAnchorRight.add(xrProperties.group)
+    xrProperties.setOffset(0, 0.09, -0.02)
+    xrProperties.setScale(1)
+    status('Properties panel docked to the right wrist.')
+  }
+}
 
 // --- HUD -------------------------------------------------------------------
 
@@ -1340,8 +1431,14 @@ renderer.domElement.addEventListener(
   // world is, where the headset thinks the head is — reaches the DOM.
   xrRig,
   xrPanel,
+  xrProperties,
   get xrState() {
     return xrRig.state
+  },
+  // Which page/axis/step the properties panel is on, and whether it is pinned
+  // — panel-local state that reaches neither the DOM nor the scene graph.
+  get xrPropertiesUi() {
+    return xrProperties.uiState
   },
   get selectionId() {
     return selection.id
@@ -1429,6 +1526,119 @@ function updateXrPanel() {
         : null,
     exampleName: exampleSelect.value,
   })
+}
+
+/**
+ * This frame's readings for the properties panel. Same cost rule as the control
+ * panel above: called every frame, repaints only when its signature moves.
+ *
+ * The PRIMARY node is the first selected in scene row order, exactly as the DOM
+ * inspector's is — so the two panels name the same node as the one whose values
+ * are on show, and an edit made in the headset lands where an edit made at the
+ * desk would.
+ */
+function updateXrProperties() {
+  const nodes = selectedNodes()
+  const primary = nodes[0] ?? null
+  xrProperties.update({
+    node: primary,
+    count: nodes.length,
+    labels: {
+      textureLabel: primary ? xrTextureLabel(primary.textureId) : '',
+    },
+  })
+}
+
+/** The media file a texture_id names, or the bare id when the scene came in as
+ *  a lone CSV and there is no folder to look in (the DOM row degrades the same
+ *  way). */
+function xrTextureLabel(id: number): string {
+  if (id === 0) return 'none'
+  const entry = currentMedia?.index.entries.find((e) => e.textureId === id)
+  return entry ? `${id} · ${entry.name}` : String(id)
+}
+
+// --- Properties panel edits ----------------------------------------------------
+//
+// Every one of these mutates the selection and stops there; the panel calls
+// `xrCommitEdit` once when the gesture ends. That split is what lets a scrub
+// rewrite a value at headset frame rate — a `rebuildScene` per frame is not
+// affordable at any real scene's size — and it is the same one a mouse gizmo
+// drag already makes.
+
+function xrPrimaryNode(): GvNode | null {
+  return selectedNodes()[0] ?? null
+}
+
+/** Apply an edit to every selected node, in place. */
+function xrEditSelection(mutate: (node: GvNode) => void) {
+  for (const node of selectedNodes()) mutate(node)
+}
+
+/** The shape steppers ARE J and O, on the same subset those keys operate on. */
+function xrCycle(kind: 'geometry' | 'topo', step: number) {
+  const targets = cycleTargets(selectedNodes())
+  if (kind === 'geometry') cycleGeometry(targets, step)
+  else cycleTopology(targets, step)
+}
+
+/** And the palette pair IS = / − and Alt+= / Alt+−. */
+function xrCyclePalette(kind: 'index' | 'palette', step: number) {
+  const targets = cycleTargets(selectedNodes())
+  if (kind === 'index') cycleColorIndex(targets, step)
+  else cyclePalette(targets, step)
+}
+
+/**
+ * Nudge one axis of translate/rotate/scale on every selected node, and show it
+ * immediately without a rebuild.
+ *
+ * Targeted rather than `refreshDrawScales`, which is the whole-scene version of
+ * this and costs O(N) — right for the Global Scale slider, which changes every
+ * node, and wrong here, where a scrub touches one. Children ride along for
+ * free: they are nested UNDER their parent's Object3D, so moving a frame moves
+ * its subtree.
+ *
+ * Values are rounded at each step so a scrub walks a lattice of clean numbers
+ * instead of accumulating float drift over a hundred frames of `+= 0.1`.
+ */
+function xrNudgeVector(field: 'translate' | 'rotate' | 'scale', axis: 'x' | 'y' | 'z', delta: number) {
+  const nodes = selectedNodes()
+  if (nodes.length === 0 || !currentRoot) return
+  for (const node of nodes) {
+    node[field][axis] = round6(node[field][axis] + delta)
+    xrRefreshNodeFrame(node)
+  }
+  // Halos are world-space geometry written off these matrices, so both have to
+  // be brought forward before the frame is drawn.
+  currentRoot.updateMatrixWorld(true)
+  selection.refreshHalos()
+}
+
+function xrRefreshNodeFrame(node: GvNode) {
+  const frame = currentFrames?.get(node.id)
+  if (!frame) return // past the draw limit — nothing drawn to move
+  applyFrameTransform(frame, node, effectiveParent(node, nodesById))
+  if (node.type === NodeType.WorldGrid) return
+  const glyph = frame.children.find((c) => c.userData.isGlyph)
+  if (glyph) applyGlyphDrawScale(glyph, node)
+}
+
+/** End of a gesture: the rebuild the DOM inspector's own commit runs, so the
+ *  overlays re-cell, the Node Table repaints and the DOM panels catch up. */
+function xrCommitEdit() {
+  rebuildScene(false)
+  const nodes = selectedNodes()
+  void decodeTexturesFor(
+    nodes.map((n) => n.textureId),
+    sceneEpoch,
+  )
+}
+
+/** Six decimals is what the CSV writer keeps, so this is the precision an edit
+ *  can actually survive a save at. */
+function round6(value: number): number {
+  return Math.round(value * 1e6) / 1e6
 }
 
 function parentOf(node: GvNode): GvNode | null {
@@ -4469,6 +4679,7 @@ renderer.setAnimationLoop(() => {
     // selected node's label goes into the scene as a billboard instead.
     updateXrLabel()
     updateXrPanel()
+    updateXrProperties()
     renderer.render(scene, camera)
   } else if (eyes) {
     const height = window.innerHeight
