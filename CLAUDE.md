@@ -2489,16 +2489,98 @@ something to decide now).
          `− 10 +` with nothing saying what the 10 was, and a headset has no
          tooltip. It is captioned now. Same lesson as the control panel's own
          three picture-only faults — an in-headset surface has to be looked at.
+   - **P4, grab-to-move + the Select page** (shipped 2026-08-16, Jeff's
+     request, immediately after P3). He asked for the Selection controls and
+     offered to take direct grab-to-move first, on the assumption that a
+     multi-selection could not otherwise be moved as a group. **That premise
+     was wrong and worth recording:** the Properties panel's nudge and scrub
+     have looped over `selectedNodes()` since P3, so group move/rotate/scale
+     already worked. Nothing was gated on the grab; it was built because it is
+     the better gesture, not because anything needed it.
+     - GRAB-TO-MOVE. Hold the trigger on an **already-selected** glyph and it
+       rides the ray; the whole selection comes with it. Trigger on an
+       unselected glyph still just selects, so no shipped gesture changed
+       meaning — "click to select, click-drag to move", which is also the
+       desktop's model, its gizmo needing a selection first. Chosen over
+       squeeze (agreed 2026-08-16): squeeze is the primary LOCOMOTION gesture,
+       and making it conditional on the ray crossing a selected node would
+       silently turn a world-grab into an object drag.
+       - The ray is a FISHING ROD, not a hand: the grabbed point keeps its
+         distance along the ray, so the same gesture works at arm's length and
+         across a 20 m scene, and turning the wrist swings it. Translation
+         only — the hand's rotation is deliberately not applied, since a free
+         6-DoF grab makes an accidental tumble far too easy and rotate is one
+         page away.
+       - It invents no second way to write CSV. `invertFrameTranslate` was
+         factored OUT of the mouse gizmo's `objectChange` (with
+         `translateDragContext` beside it) so the frame-moves-then-read-it-back
+         rule has exactly one statement; the grab moves `frame.position` and
+         calls it, then `applyDragToFollowers(node, 'translate')` pushes the
+         primary's per-field change onto the rest in each node's OWN topology
+         coordinates — the desktop's `_apply_axis_deltas`, which is what makes
+         a group drag round-trip to CSV. Measured: two nodes 2.7 units apart
+         took byte-identical translate deltas.
+       - No `pickDominantField` pinning, unlike the mouse. A gizmo handle
+         constrains motion to one axis and the pinning keeps the other two from
+         drifting; a grabbed hand moves freely in all three and every axis it
+         moves is meant.
+       - A **2 cm threshold of real hand travel** (metres, so it means the same
+         at any world scale) separates a drag from a click, and a press that
+         never crosses it falls back to the ordinary select — which is what
+         keeps "click a node inside a multi-selection to reduce the selection
+         to it" working. Measured both ways.
+       - Runs in place at frame rate and commits ONCE on release, the scrub's
+         trade and the mouse gizmo's. A squeeze on the same hand CANCELS the
+         grab rather than fighting it: that hand is now dragging the world, and
+         a glyph following both would move twice.
+     - THE SELECT PAGE, a fourth tab on the right wrist (Select / Shape / Move
+       / Look). Chosen over a third floating surface and over tabs on the left
+       panel: the right wrist already IS "the selection", and this is the
+       choosing half beside the editing half, which is also the order you use
+       them in. Costs no new input and no new surface.
+       - Every rule is `gv/selectionOps.ts`'s, unchanged — this is a face on
+         the desktop's Select By and Visibility groups, calling the same
+         functions the DOM Selection panel's buttons do. Two steppers (criterion
+         / value), an apply button whose label follows the **add** checkbox,
+         then All / None / Invert and Hide / Show all / Only.
+       - It is the ONE page that renders with nothing selected, which is the
+         point of it; only the other three fall back to the empty state, and
+         that state now points at this tab rather than being a dead end.
+       - Hide and Only grey out with no selection; **Show all never does** — it
+         is the way OUT of a hide, and has to stay reachable from a state where
+         everything visible is hidden and nothing is selected.
+       - `criterionValues` is O(nodes) and this runs on the animation loop, so
+         the host scans for ONE criterion — the panel exposes which through
+         `xrProperties.criterion`, read before `update` — memoised on an epoch
+         `rebuildScene` bumps, since geometry and topology are exactly what the
+         Shape steppers edit. The value list is therefore one frame behind a
+         criterion change, the same staleness rule the rest of the app runs on,
+         and the index resets to 0 on that change because it belonged to the
+         old list.
+     - Driven in Chrome against the emulated Quest 3, **80 measured checks**
+       (the 54 from P3 plus 26): Select All taking all 109 bulk-selectable rows,
+       Invert emptying it, Select matching yielding exactly one branch level and
+       exactly one geometry, **Add unioning 18 + 91 = 109 across two levels**
+       where a replace would have given 91, Only hiding precisely the
+       complement, and the grab moving a 109-node selection with identical
+       deltas, no rebuild mid-drag, and both the click and the
+       unselected-glyph cases leaving the data untouched.
+       - The picture caught the defect again, after all 80 numeric checks
+         passed: the **add checkbox was an unlabelled empty box**. Captioned
+         now. That is twice in two sessions — an in-headset surface has to be
+         looked at, and the panel-texture dump is the only way to do it.
    - PENDING, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
      small once the rig exists, and the demo that impresses people) — Jeff
      deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
      hand tracking, comfort options (snap turn, vignette) and authoring
      gestures — Draw Mode with a controller is the natural one, since
-     `drawMode.ts`/`drawPlane.ts` already take a ray. Direct grab-to-move a
-     selected glyph belongs to that phase too (deferred from P3, 2026-08-16).
-     Multi-select has no in-headset gesture yet either: an XR trigger pick
-     always replaces the selection, so the Properties panel's "N nodes" title
-     can only arise from a selection made at the desk before entering.
+     `drawMode.ts`/`drawPlane.ts` already take a ray. Grab-to-move shipped as
+     P4; what is still missing is grab-to-ROTATE/SCALE (both reachable from the
+     Properties panel's Move page meanwhile) and a per-node ADD gesture — an XR
+     trigger pick always replaces the selection, so a multi-selection is built
+     from the Select page's criteria rather than by picking nodes one at a
+     time. A modifier-less headset has no obvious Ctrl+click; the two free
+     thumbstick clicks are the candidates.
 10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
     through step 8 — the two remaining desktop features, by conscious
     choice, so their absence is a decision and not a gap):

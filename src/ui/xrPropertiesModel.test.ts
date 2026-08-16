@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { blankNode, NEW_OBJECT_DEFAULTS } from '../gv/createNode'
+import { CRITERION_LABELS } from '../gv/selectionOps'
 import type { GvNode } from '../gv/types'
 import { GEOMETRY_NAMES, Geometry, NodeType, Topo } from '../gv/types'
 import {
@@ -20,6 +21,12 @@ function node(overrides: Partial<GvNode> = {}): GvNode {
   return Object.assign(blankNode(42, NEW_OBJECT_DEFAULTS), overrides)
 }
 
+const SELECT_VALUES = [
+  { value: 0, label: '0' },
+  { value: 1, label: '1' },
+  { value: 2, label: '2' },
+]
+
 function state(overrides: Partial<XrPropState> = {}): XrPropState {
   return {
     node: node(),
@@ -29,6 +36,9 @@ function state(overrides: Partial<XrPropState> = {}): XrPropState {
     step: DEFAULT_STEP,
     pinned: false,
     labels: { textureLabel: 'none' },
+    select: { criterion: 'branchLevel', values: SELECT_VALUES, selectable: 109 },
+    valueIndex: 0,
+    addToSelection: false,
     ...overrides,
   }
 }
@@ -38,10 +48,20 @@ function ids(s: XrPropState): XrPropId[] {
 }
 
 describe('propLayout — chrome that every state carries', () => {
-  it('offers the pin even with nothing selected, so a parked slab can be recalled', () => {
+  it('offers the pin and the tabs with nothing selected', () => {
     const layout = propLayout(state({ node: null, count: 0 }))
     expect(layout.empty).not.toBeNull()
-    expect(layout.widgets.map((w) => w.id)).toEqual(['pin'])
+    expect(layout.widgets.map((w) => w.id)).toEqual([
+      'pin',
+      'page-select',
+      'page-shape',
+      'page-move',
+      'page-look',
+    ])
+  })
+
+  it('points an empty Properties page at the Select tab rather than a dead end', () => {
+    expect(propLayout(state({ node: null, count: 0 })).empty).toContain('Select tab')
   })
 
   it('labels the pin by what pressing it does', () => {
@@ -54,7 +74,7 @@ describe('propLayout — chrome that every state carries', () => {
   })
 
   it('marks the open page and no other', () => {
-    for (const page of ['shape', 'move', 'look'] as const) {
+    for (const page of ['select', 'shape', 'move', 'look'] as const) {
       const tabs = propLayout(state({ page })).widgets.filter((w) => w.id.startsWith('page-'))
       expect(tabs.filter((t) => t.active).map((t) => t.id)).toEqual([`page-${page}`])
     }
@@ -63,6 +83,9 @@ describe('propLayout — chrome that every state carries', () => {
 
 describe('propLayout — geometry of the quad', () => {
   const everyState: XrPropState[] = [
+    state({ page: 'select' }),
+    state({ page: 'select', node: null, count: 0 }),
+    state({ page: 'select', select: { criterion: 'topo', values: [], selectable: 0 } }),
     state({ page: 'shape' }),
     state({ page: 'move' }),
     state({ page: 'look' }),
@@ -118,10 +141,110 @@ describe('propLayout — geometry of the quad', () => {
   })
 })
 
+describe('propLayout — the Select page', () => {
+  it('offers the Select By steppers, the bulk commands and the visibility row', () => {
+    expect(ids(state({ page: 'select' }))).toEqual([
+      'pin',
+      'page-select',
+      'page-shape',
+      'page-move',
+      'page-look',
+      'criterion-prev',
+      'criterion-next',
+      'value-prev',
+      'value-next',
+      'select-apply',
+      'select-add',
+      'select-all',
+      'select-none',
+      'select-invert',
+      'vis-hide',
+      'vis-show',
+      'vis-only',
+    ])
+  })
+
+  it('renders with NOTHING selected — which is what the page is for', () => {
+    const layout = propLayout(state({ page: 'select', node: null, count: 0 }))
+    expect(layout.empty).toBeNull()
+    expect(layout.rows.length).toBeGreaterThan(0)
+    expect(layout.title).toBe('Select')
+    expect(layout.subtitle).toBe('109 nodes available')
+  })
+
+  it('says how many are selected once there are any', () => {
+    expect(propLayout(state({ page: 'select', count: 7 })).title).toBe('Select · 7 selected')
+  })
+
+  it('shows the criterion and the value the steppers point at', () => {
+    const layout = propLayout(state({ page: 'select', valueIndex: 2 }))
+    const value = (caption: string) => layout.rows.find((r) => r.caption === caption)?.value
+    expect(value('by')).toBe(CRITERION_LABELS.branchLevel)
+    expect(value('value')).toBe('2')
+  })
+
+  it('names the criterion the model was handed, not a fixed one', () => {
+    const layout = propLayout(
+      state({
+        page: 'select',
+        select: { criterion: 'geometry', values: [{ value: 3, label: '3: Cube' }], selectable: 4 },
+      }),
+    )
+    expect(layout.rows.find((r) => r.caption === 'by')?.value).toBe(CRITERION_LABELS.geometry)
+    expect(layout.rows.find((r) => r.caption === 'value')?.value).toBe('3: Cube')
+  })
+
+  it('greys the value stepper and Select when the scene offers no values', () => {
+    const widgets = propLayout(
+      state({ page: 'select', select: { criterion: 'topo', values: [], selectable: 0 } }),
+    ).widgets
+    const off = (id: string) => widgets.find((w) => w.id === id)?.disabled === true
+    expect(off('value-prev') && off('value-next') && off('select-apply')).toBe(true)
+    // The bulk commands are still meaningful — Select All does not need a value.
+    expect(off('select-all')).toBe(false)
+  })
+
+  it('renames the apply button by what the Add checkbox will make it do', () => {
+    const label = (add: boolean) =>
+      propLayout(state({ page: 'select', addToSelection: add })).widgets.find(
+        (w) => w.id === 'select-apply',
+      )?.label
+    expect(label(false)).toBe('Select matching')
+    expect(label(true)).toBe('Add matching')
+  })
+
+  it('reflects the Add checkbox', () => {
+    const checked = (add: boolean) =>
+      propLayout(state({ page: 'select', addToSelection: add })).widgets.find(
+        (w) => w.id === 'select-add',
+      )?.checked
+    expect(checked(false)).toBe(false)
+    expect(checked(true)).toBe(true)
+  })
+
+  it('greys Hide and Only with no selection, but never Show all', () => {
+    // Show all is the way OUT of a hide, so it has to stay reachable from a
+    // state where everything visible has been hidden and nothing is selected.
+    const widgets = propLayout(state({ page: 'select', node: null, count: 0 })).widgets
+    const off = (id: string) => widgets.find((w) => w.id === id)?.disabled === true
+    expect(off('vis-hide')).toBe(true)
+    expect(off('vis-only')).toBe(true)
+    expect(off('vis-show')).toBe(false)
+  })
+
+  it('leaves the visibility row live once something is selected', () => {
+    const widgets = propLayout(state({ page: 'select', count: 3 })).widgets
+    for (const id of ['vis-hide', 'vis-show', 'vis-only']) {
+      expect(widgets.find((w) => w.id === id)?.disabled).toBeFalsy()
+    }
+  })
+})
+
 describe('propLayout — the Shape page', () => {
   it('offers the enum steppers, ratio and texture', () => {
     expect(ids(state({ page: 'shape' }))).toEqual([
       'pin',
+      'page-select',
       'page-shape',
       'page-move',
       'page-look',
@@ -180,6 +303,7 @@ describe('propLayout — the Move page', () => {
   it('offers one axis chip set and one step chip for all three vectors', () => {
     expect(ids(state({ page: 'move' }))).toEqual([
       'pin',
+      'page-select',
       'page-shape',
       'page-move',
       'page-look',
@@ -241,6 +365,7 @@ describe('propLayout — the Look page', () => {
   it('offers the palette pair, alpha and the two flags', () => {
     expect(ids(state({ page: 'look' }))).toEqual([
       'pin',
+      'page-select',
       'page-shape',
       'page-move',
       'page-look',

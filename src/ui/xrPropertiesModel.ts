@@ -27,19 +27,34 @@
 // fits at a row height a ray can reliably hit.
 
 import { paletteIndexCount, PALETTE_NAMES } from '../gv/colorPalette'
+import { CRITERION_LABELS } from '../gv/selectionOps'
+import type { CriterionValue, SelectCriterion } from '../gv/selectionOps'
 import type { GvNode, Rgba } from '../gv/types'
 import { GEOMETRY_NAMES, NODE_TYPE_NAMES, NodeType, TOPO_NAMES } from '../gv/types'
 import { rect, type XrRect, type XrWidgetBase } from './xrWidget'
 
-export type XrPropPage = 'shape' | 'move' | 'look'
+export type XrPropPage = 'select' | 'shape' | 'move' | 'look'
 export type XrPropAxis = 'x' | 'y' | 'z'
 export type XrPropVectorField = 'translate' | 'rotate' | 'scale'
 
 export type XrPropId =
   | 'pin'
+  | 'page-select'
   | 'page-shape'
   | 'page-move'
   | 'page-look'
+  | 'criterion-prev'
+  | 'criterion-next'
+  | 'value-prev'
+  | 'value-next'
+  | 'select-apply'
+  | 'select-add'
+  | 'select-all'
+  | 'select-none'
+  | 'select-invert'
+  | 'vis-hide'
+  | 'vis-show'
+  | 'vis-only'
   | 'topo-prev'
   | 'topo-next'
   | 'geometry-prev'
@@ -118,6 +133,21 @@ export interface XrPropLabels {
   textureLabel: string
 }
 
+/**
+ * What the Select page needs from the scene. The VALUES for the current
+ * criterion only — `criterionValues` is O(nodes), and computing all three every
+ * frame at Event_Cloud's 209k rows would be three full scans a frame for a page
+ * that is usually not even open. The panel owns which criterion is showing and
+ * the host reads it back, so the list is one frame behind a criterion change —
+ * the same staleness rule the rest of this app runs on.
+ */
+export interface XrPropSelectData {
+  criterion: SelectCriterion
+  values: readonly CriterionValue[]
+  /** How many nodes the scene offers to bulk selection at all. */
+  selectable: number
+}
+
 export interface XrPropState {
   /** The PRIMARY selected node (scene row order), or null. */
   node: GvNode | null
@@ -129,7 +159,15 @@ export interface XrPropState {
   step: number
   pinned: boolean
   labels: XrPropLabels
+  select: XrPropSelectData
+  /** Index into `select.values`, owned by the panel. */
+  valueIndex: number
+  /** The Select By rows ADD to the selection rather than replacing it. */
+  addToSelection: boolean
 }
+
+/** The three criteria, in the desktop Select By combo's own order. */
+export const SELECT_CRITERIA: readonly SelectCriterion[] = ['branchLevel', 'geometry', 'topo']
 
 /**
  * Nudge sizes, coarse to fine. One ladder for all three vectors rather than a
@@ -172,7 +210,9 @@ const PAD = 0.03
 export const PIN_RECT: XrRect = rect(0.795, 0.025, 0.175, 0.105)
 export const TAB_Y = 0.225
 const TAB_H = 0.105
-const TAB_W = (1 - PAD * 4) / 3
+/** Four tabs across, which is still 5.5 cm each on a 26 cm quad — comfortably
+ *  past a pointing hand's jitter. */
+const TAB_W = (1 - PAD * 5) / 4
 
 export const ROW_TOP = 0.375
 export const ROW_PITCH = 0.12
@@ -214,18 +254,8 @@ export function propLayout(state: XrPropState): XrPropLayout {
     active: state.pinned,
   })
 
-  if (!node) {
-    return {
-      title: 'Properties',
-      subtitle: '',
-      empty: 'Point at a glyph and pull the trigger.',
-      color: null,
-      rows,
-      widgets,
-    }
-  }
-
   const pages: Array<[XrPropId, XrPropPage, string]> = [
+    ['page-select', 'select', 'Select'],
     ['page-shape', 'shape', 'Shape'],
     ['page-move', 'move', 'Move'],
     ['page-look', 'look', 'Look'],
@@ -239,6 +269,32 @@ export function propLayout(state: XrPropState): XrPropLayout {
       active: state.page === page,
     })
   })
+
+  // The Select page is the one that works with NOTHING selected — that is what
+  // it is for. The other three have nothing to show without a node, so only
+  // they fall back to the empty state.
+  if (state.page === 'select') {
+    buildSelect(state, rows, widgets)
+    return {
+      title: state.count === 0 ? 'Select' : `Select · ${state.count} selected`,
+      subtitle: `${state.select.selectable} nodes available`,
+      empty: null,
+      color: node ? node.color : null,
+      rows,
+      widgets,
+    }
+  }
+
+  if (!node) {
+    return {
+      title: 'Properties',
+      subtitle: '',
+      empty: 'Point at a glyph, or use the Select tab.',
+      color: null,
+      rows,
+      widgets,
+    }
+  }
 
   const frozen = NEVER_CYCLED.has(node.type)
   if (state.page === 'shape') buildShape(state, node, frozen, rows, widgets)
@@ -352,6 +408,112 @@ function buildMove(
     caption: '',
     value: '',
     note: 'hold the value and slide to scrub',
+  })
+}
+
+/**
+ * The Select page: the desktop's Select By and Visibility groups
+ * (`gv/selectionOps.ts` holds every rule, unchanged — this is a face on them).
+ *
+ * Two steppers choose the criterion and the value, one wide button applies it,
+ * and a checkbox decides whether that REPLACES the selection or adds to it —
+ * the desktop's own "Add to Selection". The bulk commands and the visibility
+ * commands take a row of three each, which is what fits at a hittable width.
+ */
+function buildSelect(state: XrPropState, rows: XrPropRow[], widgets: XrPropWidget[]): void {
+  const { criterion, values } = state.select
+  const current = values[state.valueIndex]
+  const empty = values.length === 0
+
+  stepperRow(
+    rows,
+    widgets,
+    0,
+    'by',
+    CRITERION_LABELS[criterion],
+    'criterion-prev',
+    'criterion-next',
+    false,
+  )
+  stepperRow(
+    rows,
+    widgets,
+    1,
+    'value',
+    // The bare label: `criterionValues` already formats geometry and topology
+    // as "3: Cube", which is exactly what a stepper wants to show.
+    empty ? '—' : current.label,
+    'value-prev',
+    'value-next',
+    empty,
+  )
+
+  // Apply, with the Add checkbox beside it. A wide target, because this is the
+  // button the two rows above exist to feed.
+  //
+  // The checkbox is CAPTIONED in the row's value slot, which lands in the gap
+  // between the two. A bare tick box says nothing about what it does, and there
+  // are no tooltips in a headset — the same fault the Move page's step chip had,
+  // and the same way it was found: by looking at the rendered texture rather
+  // than at an assertion.
+  const y2 = rowY(2)
+  rows.push({ y: y2, caption: '', value: 'add' })
+  widgets.push(
+    {
+      id: 'select-apply',
+      kind: 'button',
+      rect: rect(CAP_X, y2, 0.46, ROW_H),
+      label: state.addToSelection ? 'Add matching' : 'Select matching',
+      disabled: empty,
+    },
+    {
+      id: 'select-add',
+      kind: 'button',
+      rect: rect(INC_X, y2, INC_W, ROW_H),
+      label: '',
+      checked: state.addToSelection,
+    },
+  )
+
+  tripleRow(rows, widgets, 3, [
+    ['select-all', 'All'],
+    ['select-none', 'None'],
+    ['select-invert', 'Invert'],
+  ])
+  tripleRow(
+    rows,
+    widgets,
+    4,
+    [
+      ['vis-hide', 'Hide'],
+      ['vis-show', 'Show all'],
+      ['vis-only', 'Only'],
+    ],
+    state.count === 0,
+  )
+}
+
+/** Three equal buttons across a row — the bulk and visibility commands. */
+function tripleRow(
+  rows: XrPropRow[],
+  widgets: XrPropWidget[],
+  index: number,
+  entries: Array<[XrPropId, string]>,
+  disabled = false,
+): void {
+  const y = rowY(index)
+  rows.push({ y, caption: '', value: '' })
+  const w = (1 - PAD * 4) / 3
+  entries.forEach(([id, label], i) => {
+    widgets.push({
+      id,
+      kind: 'button',
+      rect: rect(PAD + i * (w + PAD), y, w, ROW_H),
+      label,
+      // Show all is the way OUT of a hide, so it stays live with no selection;
+      // Hide and Only need something to act on.
+      disabled: disabled && id !== 'vis-show',
+    })
   })
 }
 

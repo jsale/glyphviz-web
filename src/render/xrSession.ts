@@ -70,8 +70,20 @@ const HAND_COLORS: Record<XrHand, THREE.Color> = {
 }
 
 export interface XrCallbacks {
-  /** Trigger pulled at the scene: the ray is already in world space. */
-  onPick(raycaster: THREE.Raycaster, hand: XrHand): void
+  /**
+   * Trigger pulled at the scene: the ray is already in world space.
+   *
+   * Return true to claim the press as a DRAG — the rig then reports the ray
+   * every frame through `onDragRay` until the trigger is released, and finishes
+   * with `onDragEnd`. That is how grabbing an already-selected glyph works:
+   * "click to select, click-drag to move", which is the desktop's own model
+   * (its gizmo needs a selection first) and leaves no shipped gesture changed.
+   */
+  onPick(raycaster: THREE.Raycaster, hand: XrHand): boolean
+  /** A claimed press, still held. */
+  onDragRay(raycaster: THREE.Raycaster, hand: XrHand): void
+  /** Trigger released, or the drag cancelled (a squeeze on the same hand). */
+  onDragEnd(hand: XrHand, cancelled: boolean): void
   /** A/X: what the scene should be framed to, or null for an empty scene. */
   fitTarget(): { center: THREE.Vector3; extent: number } | null
   /** B/Y. */
@@ -203,6 +215,8 @@ export class XrRig {
   private pointerTarget: XrPointerTarget | null = null
   private pressHand: XrHand | null = null
   private pressTarget: XrPointerTarget | null = null
+  /** The hand holding a claimed scene drag (a grabbed glyph). */
+  private grabHand: XrHand | null = null
   /** False until three has written a real viewer pose into the camera — it
    *  does that inside render(), so the first presenting frame has none yet. */
   private posed = false
@@ -375,6 +389,7 @@ export class XrRig {
     this.grabKey = ''
     this.pressHand = null
     this.pressTarget = null
+    this.grabHand = null
     // A provisional fit for the one frame before a real head pose arrives, so
     // the scene is roughly in place rather than wherever the last one left it.
     this.applyFit(vec3(0, 1.6, 0), 0)
@@ -386,6 +401,7 @@ export class XrRig {
     const saved = this.saved
     this.saved = null
     this.grabbing.clear()
+    this.endGrab(true)
     if (saved) {
       this.group.remove(this.camera)
       saved.parent?.add(this.camera)
@@ -628,15 +644,23 @@ export class XrRig {
         if (target?.press()) {
           this.pressHand = hand
           this.pressTarget = target
-        } else {
-          this.pick(input, hand)
+        } else if (this.callbacks.onPick(this.rayFor(input), hand)) {
+          this.grabHand = hand
         }
       } else if (down && this.pressHand === hand) {
         this.pressTarget?.drag(this.rayFor(input))
+      } else if (down && this.grabHand === hand) {
+        // A squeeze on the SAME hand cancels the grab rather than fighting it:
+        // that hand is now dragging the world, and a glyph following both would
+        // move twice.
+        if (this.grabbing.has(hand)) this.endGrab(true)
+        else this.callbacks.onDragRay(this.rayFor(input), hand)
       } else if (!down && this.pressHand === hand) {
         this.pressTarget?.release()
         this.pressHand = null
         this.pressTarget = null
+      } else if (!down && this.grabHand === hand) {
+        this.endGrab(false)
       }
       // A/X: each hand's primary shows and hides the panel on THAT wrist, so
       // the switch is under the thumb of the hand wearing it.
@@ -650,8 +674,11 @@ export class XrRig {
     }
   }
 
-  private pick(input: HandInput, hand: XrHand): void {
-    this.callbacks.onPick(this.rayFor(input), hand)
+  private endGrab(cancelled: boolean): void {
+    const hand = this.grabHand
+    if (hand === null) return
+    this.grabHand = null
+    this.callbacks.onDragEnd(hand, cancelled)
   }
 
   private makeRay(): THREE.Line {

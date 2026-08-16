@@ -51,6 +51,9 @@ import { expandZips, filesFromDataTransfer, filesFromInput } from './io/browserF
 import type { PathedFile } from './io/browserFiles'
 import { ChannelAudio, parseAudioManifest } from './io/channelAudio'
 import {
+  bulkSelectableNodes,
+  CRITERION_LABELS,
+  criterionValues,
   invertSelection,
   isolateSelection,
   selectAllIds,
@@ -146,6 +149,7 @@ import {
   PINNED_SCALE,
   XrProperties,
 } from './render/xrProperties'
+import type { XrPropSelectData } from './ui/xrPropertiesModel'
 import { CameraRig, rigFromView } from './render/cameraMode'
 import type { OrbitRig } from './render/cameraMode'
 import {
@@ -329,12 +333,25 @@ scene.add(xrLabel.sprite)
 // session, so the later-declared state they read is always initialised by then.
 const xrRig = new XrRig(renderer, camera, scene, {
   onPick(raycaster) {
-    if (!currentRoot) return
+    if (!currentRoot) return false
     const nodeId = pickNodeId(raycaster, currentRoot)
+    // Trigger on an ALREADY-selected glyph claims the press as a grab; the
+    // selection is left alone, so a multi-selection can be dragged as a group.
+    // If the hand never travels far enough the release falls back to an
+    // ordinary click (beginXrGrab's own threshold), so nothing is lost.
+    if (nodeId !== null && selection.ids.includes(nodeId) && beginXrGrab(raycaster, nodeId))
+      return true
     // A ray that hits nothing clears the selection, exactly as a click on
     // empty space does with the mouse.
     setSelection(nodeId)
     status(nodeId === null ? 'Nothing under the ray.' : `Selected node ${nodeId}.`)
+    return false
+  },
+  onDragRay(raycaster) {
+    xrGrabMove(raycaster)
+  },
+  onDragEnd(_hand, cancelled) {
+    endXrGrab(cancelled)
   },
   fitTarget() {
     if (!currentRoot) return null
@@ -468,7 +485,49 @@ const xrProperties = new XrProperties({
   },
   commit: () => xrCommitEdit(),
   setPinned: (pinned) => setXrPropertiesPinned(pinned),
+
+  // Select page — the desktop's Select By and Visibility groups, reached from
+  // a wrist. Every rule is `gv/selectionOps.ts`'s, unchanged: these call the
+  // same functions the DOM Selection panel's buttons do.
+  selectMatching: (criterion, value, add) => {
+    const matched = selectByCriterion(currentNodes, criterion, value)
+    const ids = add ? new Set([...selection.ids, ...matched]) : matched
+    setSelection(ids)
+    const label = CRITERION_LABELS[criterion]
+    status(
+      matched.size === 0
+        ? `No nodes with ${label} ${value}.`
+        : `${add ? 'Added' : 'Selected'} ${matched.size} node(s) with ${label} ${value}.`,
+    )
+  },
+  selectAll: () => {
+    setSelection(selectAllIds(currentNodes))
+    status(`Selected ${selection.size} node(s).`)
+  },
+  selectNone: () => {
+    setSelection(null)
+    status('Selection cleared.')
+  },
+  invertSelection: () => {
+    setSelection(invertSelection(currentNodes, new Set(selection.ids)))
+    status(`Inverted — ${selection.size} node(s) selected.`)
+  },
+  hideSelected: () => xrApplyVisibility(setHidden(currentNodes, new Set(selection.ids), true), 'Hid'),
+  showAll: () => xrApplyVisibility(showAll(currentNodes), 'Showed'),
+  isolateSelected: () =>
+    xrApplyVisibility(isolateSelection(currentNodes, new Set(selection.ids)), 'Isolated,'),
 })
+
+/** A visibility command's tail: `hide` is CSV data, so it needs a rebuild, and
+ *  the desktop reports the count it actually changed. */
+function xrApplyVisibility(changed: number[], verb: string) {
+  if (changed.length === 0) {
+    status('Nothing to change.')
+    return
+  }
+  rebuildScene(false)
+  status(`${verb} ${changed.length} node(s).`)
+}
 xrRig.panelAnchorRight.add(xrProperties.group)
 xrRig.setPointerTargets([xrPanel, xrProperties])
 
@@ -1443,6 +1502,14 @@ renderer.domElement.addEventListener(
   get selectionId() {
     return selection.id
   },
+  // The Select page's whole output is the selection SET, and in a session no
+  // DOM panel is on screen to show it.
+  get selectionCount() {
+    return selection.size
+  },
+  get selectionIds() {
+    return [...selection.ids]
+  },
   // The wrist panel's own readouts, which exist nowhere else while a session
   // is running: what is drawn, and where the transport stands.
   get drawState() {
@@ -1546,7 +1613,33 @@ function updateXrProperties() {
     labels: {
       textureLabel: primary ? xrTextureLabel(primary.textureId) : '',
     },
+    select: xrSelectData(xrProperties.criterion),
   })
+}
+
+/**
+ * The Select page's value list for ONE criterion, memoised.
+ *
+ * `criterionValues` and `bulkSelectableNodes` are both O(nodes), and this runs
+ * on the animation loop — at Event_Cloud's 209k rows an unmemoised call would
+ * be a full scan every frame for a page that is usually not even open. The
+ * cache is invalidated by the criterion changing and by `xrSelectEpoch`, which
+ * rebuildScene bumps: geometry and topology are exactly the fields the shape
+ * steppers edit, so the distinct set really can move under it.
+ */
+let xrSelectEpoch = 0
+let xrSelectCache: { key: string; data: XrPropSelectData } | null = null
+
+function xrSelectData(criterion: SelectCriterion): XrPropSelectData {
+  const key = `${criterion}|${xrSelectEpoch}`
+  if (xrSelectCache?.key === key) return xrSelectCache.data
+  const data: XrPropSelectData = {
+    criterion,
+    values: criterionValues(currentNodes, criterion),
+    selectable: bulkSelectableNodes(currentNodes).length,
+  }
+  xrSelectCache = { key, data }
+  return data
 }
 
 /** The media file a texture_id names, or the bare id when the scene came in as
@@ -1639,6 +1732,147 @@ function xrCommitEdit() {
  *  can actually survive a save at. */
 function round6(value: number): number {
   return Math.round(value * 1e6) / 1e6
+}
+
+// --- Direct grab-to-move (immersive) --------------------------------------------
+//
+// The VR answer to the transform gizmo, which a headset cannot use at all —
+// TransformControls drags from a screen-space pointer and there is no screen.
+// Hold the trigger on an ALREADY-selected glyph and it rides the ray; the whole
+// selection comes with it.
+//
+// The ray is a fishing rod, not a hand: the grabbed point keeps its DISTANCE
+// along the ray, so the same gesture works on a glyph at arm's length and on
+// one across a 20 m scene, and turning the wrist swings it. Only translation —
+// the hand's rotation is deliberately not applied, since a free 6-DoF grab
+// makes an accidental tumble far too easy and rotate is one page away on the
+// Properties panel.
+//
+// What it does NOT do is invent a second way to write CSV: the frame is moved,
+// and then the very same `invertFrameTranslate` the mouse gizmo uses reads that
+// motion back as the node's own translate in its own topology coordinates.
+
+/** Hand travel, in METRES, before a held trigger counts as a drag rather than a
+ *  click. Without it every press on a selected glyph would nudge it. */
+const XR_GRAB_THRESHOLD_M = 0.02
+
+interface XrGrabState {
+  nodeId: number
+  /** Distance from the ray origin to the handle point, world units. */
+  distance: number
+  /** The handle point when the trigger came down, WORLD space. */
+  startHandle: THREE.Vector3
+  /** The primary frame's position at grab start, PARENT-local. */
+  startFramePos: THREE.Vector3
+  ctx: TranslateDragContext
+  /** False until the hand has travelled past the threshold. */
+  moved: boolean
+}
+
+let xrGrab: XrGrabState | null = null
+
+function beginXrGrab(raycaster: THREE.Raycaster, nodeId: number): boolean {
+  const node = nodesById.get(nodeId)
+  const frame = currentFrames?.get(nodeId)
+  if (!node || !frame?.parent) return false
+  const world = frame.getWorldPosition(new THREE.Vector3())
+  // Project the glyph onto the ray: that point is the handle, and holding its
+  // distance constant is what makes the grab work at any range.
+  const distance = world.clone().sub(raycaster.ray.origin).dot(raycaster.ray.direction)
+  if (!(distance > 0)) return false
+  primaryStart = snapshotTransform(node)
+  followerStart = new Map(
+    selectedNodes()
+      .filter((n) => n.id !== nodeId)
+      .map((n) => [n.id, snapshotTransform(n)]),
+  )
+  xrGrab = {
+    nodeId,
+    distance,
+    startHandle: raycaster.ray.at(distance, new THREE.Vector3()),
+    startFramePos: frame.position.clone(),
+    ctx: translateDragContext(node),
+    moved: false,
+  }
+  return true
+}
+
+function xrGrabMove(raycaster: THREE.Raycaster) {
+  const grab = xrGrab
+  if (!grab || !currentRoot) return
+  const node = nodesById.get(grab.nodeId)
+  const frame = currentFrames?.get(grab.nodeId)
+  const parent = frame?.parent
+  if (!node || !frame || !parent) return
+
+  const handle = raycaster.ray.at(grab.distance, new THREE.Vector3())
+  if (!grab.moved) {
+    // The threshold is in metres of real hand travel, so it means the same
+    // thing whether the world is a diorama or a room around you.
+    const travelM = handle.distanceTo(grab.startHandle) / Math.max(1e-9, xrRig.state.scale)
+    if (travelM < XR_GRAB_THRESHOLD_M) return
+    grab.moved = true
+  }
+
+  // World delta into the frame's PARENT space. Differencing two transformed
+  // points rather than rotating a vector, so the parent's own scale is carried
+  // exactly as buildScene applied it.
+  const localNow = parent.worldToLocal(handle.clone())
+  const localStart = parent.worldToLocal(grab.startHandle.clone())
+  frame.position.copy(grab.startFramePos).add(localNow.sub(localStart))
+
+  // The gizmo's own read-back. Full three-axis inversion, with no dominant-field
+  // pinning: a gizmo handle constrains motion to one axis and the pinning is
+  // what keeps the other two from drifting, but a grabbed hand moves freely in
+  // all three and every axis it moves is meant.
+  const t = invertFrameTranslate(node, frame, grab.ctx)
+  node.translate.x = t.x
+  node.translate.y = t.y
+  node.translate.z = t.z
+  // Reproject onto the topology surface and track outward orientation.
+  applyFrameTransform(frame, node, grab.ctx.parentGv)
+  // Every other selected node takes the same per-field change in ITS OWN
+  // topology coordinates — the desktop's `_apply_axis_deltas`, which is what
+  // makes a multi-selection drag as a group and still round-trip to CSV.
+  applyDragToFollowers(node, 'translate')
+  currentRoot.updateMatrixWorld(true)
+  selection.refreshHalos()
+  const nodes = selectedNodes()
+  inspector.show(nodes, nodes.length === 1 ? worldPosOf(node.id) : null)
+}
+
+function endXrGrab(cancelled: boolean) {
+  const grab = xrGrab
+  xrGrab = null
+  primaryStart = null
+  followerStart = new Map()
+  if (!grab) return
+  if (!grab.moved) {
+    // Never left the threshold, so it was a click after all: fall back to the
+    // ordinary select, which is what makes clicking a node inside a
+    // multi-selection still reduce the selection to it.
+    if (!cancelled) {
+      setSelection(grab.nodeId)
+      status(`Selected node ${grab.nodeId}.`)
+    }
+    return
+  }
+  // Final commit, exactly as the mouse gizmo's `dragging-changed` does: the
+  // full rebuild refreshes glyph draw scale, the overlays, the table and the
+  // HUD. Once, at the end — the drag itself ran in place.
+  rebuildScene(false)
+  const count = selection.size
+  status(
+    cancelled
+      ? 'Grab cancelled.'
+      : `Moved ${count} node${count === 1 ? '' : 's'} to ${fmtVec(nodesById.get(grab.nodeId))}.`,
+  )
+}
+
+function fmtVec(node: GvNode | undefined): string {
+  if (!node) return '—'
+  const f = (v: number) => Number(v.toFixed(3)).toString()
+  return `${f(node.translate.x)}, ${f(node.translate.y)}, ${f(node.translate.z)}`
 }
 
 function parentOf(node: GvNode): GvNode | null {
@@ -2375,6 +2609,9 @@ function stepBuiltInScene(delta: number) {
 }
 
 function rebuildScene(fitCamera: boolean) {
+  // Geometry and topology are exactly what the VR shape steppers edit, so the
+  // Select page's distinct-value lists can move under any rebuild.
+  xrSelectEpoch++
   const prevSelected = new Set(selection.ids)
   const built = buildScene(currentNodes, {
     showHidden,
@@ -3373,10 +3610,15 @@ let dragField: 'x' | 'y' | 'z' | null | 'undecided' = 'undecided'
 let followerStart = new Map<number, DragSnapshot>()
 let primaryStart: DragSnapshot | null = null
 
-/** Push the primary's change onto every other selected node. */
-function applyDragToFollowers(primary: GvNode) {
+/**
+ * Push the primary's change onto every other selected node.
+ *
+ * `mode` is passed rather than read off the gizmo because the immersive grab
+ * drives this too, and it is always a translate whatever mode the (detached)
+ * gizmo happens to be armed in.
+ */
+function applyDragToFollowers(primary: GvNode, mode: DragMode) {
   if (followerStart.size === 0 || !primaryStart) return
-  const mode = gizmo.mode as DragMode
   for (const [id, start] of followerStart) {
     const node = nodesById.get(id)
     if (!node) continue
@@ -3419,36 +3661,86 @@ function gridOffsetSpace(v: THREE.Vector3, grid: GvNode): THREE.Vector3 {
   return new THREE.Vector3(d(v.x, grid.scale.x), d(v.y, grid.scale.y), d(v.z, grid.scale.z))
 }
 
-gizmo.addEventListener('objectChange', () => {
-  const node = selection.id !== null ? nodesById.get(selection.id) : undefined
-  const frame = gizmo.object
-  if (!node || !frame) return
+/**
+ * Everything the inverse topology math needs about the node's PARENT, resolved
+ * once per drag tick.
+ *
+ * Shared by the mouse gizmo's translate drag and the immersive grab (see
+ * `xrGrabMove`): both move a frame and then have to say what that motion means
+ * in the node's own CSV coordinates, and there must be exactly one statement of
+ * how that is read.
+ */
+interface TranslateDragContext {
+  parentGv: GvNode | null
+  gridParent: GvNode | null
+  gridGlobe: boolean
+  parentTopo: number
+  parentRatio: number
+  baseScale: number
+  topoScale: number
+}
+
+function translateDragContext(node: GvNode): TranslateDragContext {
   const parentGv = parentOf(node)
   // Children of a World Grid invert through geography, regardless of the
   // grid row's own topo field: a globe is exactly the Sphere topology at
   // radius 180/π; a flat grid is Cartesian recentered on the window midpoint.
   const gridParent = parentGv?.type === NodeType.WorldGrid ? parentGv : null
   const gridGlobe = gridParent !== null && gridIsGlobe(gridParent)
-  const parentTopo = gridParent
-    ? gridGlobe
-      ? Topo.Sphere
-      : Topo.None
-    : parentGv
-      ? parentGv.topo
-      : -1
-  const parentRatio = gridParent ? 0 : (parentGv?.ratio ?? 0)
-  // A globe grid's children place at the geographic radius, which the Global
-  // Scale plays no part in; everything else inverts through the live value the
-  // frame was placed with.
-  const dragBaseScale = gridGlobe ? GRID_GLOBE_RADIUS : baseScale()
-  // The parent's Topology Scale, divided back out per axis by the inversion so
-  // a retuned parent's children still track the cursor 1:1 (grid parents are
-  // exempt on both sides, which parentTopoScale answers with 1.0).
-  const dragTopoScale = parentTopoScale(parentGv)
+  return {
+    parentGv,
+    gridParent,
+    gridGlobe,
+    parentTopo: gridParent
+      ? gridGlobe
+        ? Topo.Sphere
+        : Topo.None
+      : parentGv
+        ? parentGv.topo
+        : -1,
+    parentRatio: gridParent ? 0 : (parentGv?.ratio ?? 0),
+    // A globe grid's children place at the geographic radius, which the Global
+    // Scale plays no part in; everything else inverts through the live value
+    // the frame was placed with.
+    baseScale: gridGlobe ? GRID_GLOBE_RADIUS : baseScale(),
+    // The parent's Topology Scale, divided back out per axis by the inversion
+    // so a retuned parent's children still track the pointer 1:1 (grid parents
+    // are exempt on both sides, which parentTopoScale answers with 1.0).
+    topoScale: parentTopoScale(parentGv),
+  }
+}
+
+/** The frame's current position, read back as the node's own translate. */
+function invertFrameTranslate(node: GvNode, frame: THREE.Object3D, ctx: TranslateDragContext): Vec3 {
+  const inverted = invertTopoOffset({
+    parentTopo: ctx.parentTopo,
+    offset: ctx.gridParent ? gridOffsetSpace(frame.position, ctx.gridParent) : frame.position,
+    prev: node.translate, // last committed tick — keeps unwrap continuous
+    parentRatio: ctx.parentRatio,
+    subspace: node.subspace,
+    baseScale: ctx.baseScale,
+    parentTopoScale: ctx.topoScale,
+  })
+  if (ctx.gridParent && !ctx.gridGlobe) {
+    // Cartesian inversion recovered the window-relative offset; translate
+    // fields are absolute lon/lat.
+    const c = gridCenter(ctx.gridParent)
+    inverted.x += c.lon
+    inverted.y += c.lat
+  }
+  return inverted
+}
+
+gizmo.addEventListener('objectChange', () => {
+  const node = selection.id !== null ? nodesById.get(selection.id) : undefined
+  const frame = gizmo.object
+  if (!node || !frame) return
+  const ctx = translateDragContext(node)
+  const parentGv = ctx.parentGv
 
   // Live re-read of the primary + followers while a drag is in flight.
   const showDragged = () => {
-    applyDragToFollowers(node)
+    applyDragToFollowers(node, gizmo.mode as DragMode)
     const nodes = selectedNodes()
     inspector.show(nodes, nodes.length === 1 ? worldPosOf(node.id) : null)
   }
@@ -3482,32 +3774,17 @@ gizmo.addEventListener('objectChange', () => {
     const motion = frame.position.clone().sub(dragStartOffset)
     if (motion.lengthSq() < 1e-12) return
     dragField = pickDominantField(
-      parentTopo,
+      ctx.parentTopo,
       dragStartTranslate,
-      gridParent ? gridOffsetSpace(motion, gridParent) : motion,
-      parentRatio,
+      ctx.gridParent ? gridOffsetSpace(motion, ctx.gridParent) : motion,
+      ctx.parentRatio,
       node.subspace,
-      dragBaseScale,
-      dragTopoScale,
+      ctx.baseScale,
+      ctx.topoScale,
     )
   }
 
-  const inverted = invertTopoOffset({
-    parentTopo,
-    offset: gridParent ? gridOffsetSpace(frame.position, gridParent) : frame.position,
-    prev: node.translate, // last committed tick — keeps unwrap continuous
-    parentRatio,
-    subspace: node.subspace,
-    baseScale: dragBaseScale,
-    parentTopoScale: dragTopoScale,
-  })
-  if (gridParent && !gridGlobe) {
-    // Cartesian inversion recovered the window-relative offset; translate
-    // fields are absolute lon/lat.
-    const c = gridCenter(gridParent)
-    inverted.x += c.lon
-    inverted.y += c.lat
-  }
+  const inverted = invertFrameTranslate(node, frame, ctx)
   const t =
     dragField === null ? inverted : { ...dragStartTranslate, [dragField]: inverted[dragField] }
 
@@ -4611,7 +4888,7 @@ renderer.setAnimationLoop(() => {
   // A channel frame or a gizmo drag rewrites node fields without a rebuild, so
   // the table's visible rows have to be repainted from them. Only the ~30 rows
   // on screen are touched, and nothing at all while the panel is collapsed.
-  const nodesMoved = tickAnimation(dtMs) || gizmo.dragging
+  const nodesMoved = tickAnimation(dtMs) || gizmo.dragging || xrGrab !== null
   if (nodesMoved) nodeTable.refreshVisible()
 
   // Immersive mode drives the camera from the headset, so every desktop camera

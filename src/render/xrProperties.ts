@@ -22,6 +22,7 @@ import {
   CAP_X,
   DEFAULT_STEP,
   RATIO_STEP,
+  SELECT_CRITERIA,
   STEP_LADDER,
   STEP_VAL_W,
   STEP_VAL_X,
@@ -40,6 +41,7 @@ import {
   type XrPropVectorField,
   type XrPropWidget,
 } from '../ui/xrPropertiesModel'
+import type { SelectCriterion } from '../gv/selectionOps'
 import {
   SURFACE_ACCENT,
   SURFACE_BG,
@@ -90,10 +92,24 @@ export interface XrPropertiesActions {
   toggleShowText(): void
   /** Unclip onto the floating slab, or clip back to the wrist. */
   setPinned(pinned: boolean): void
+
+  // --- Select page. Every rule lives in gv/selectionOps.ts; these are the
+  // desktop's own Select By and Visibility commands, reached from a wrist.
+  /** Apply the current criterion + value, replacing or adding per the checkbox. */
+  selectMatching(criterion: SelectCriterion, value: number, add: boolean): void
+  selectAll(): void
+  selectNone(): void
+  invertSelection(): void
+  hideSelected(): void
+  showAll(): void
+  isolateSelected(): void
 }
 
-/** What main.ts supplies each frame; the panel owns page/axis/step/pinned. */
-export type XrPropertiesInput = Omit<XrPropState, 'page' | 'axis' | 'step' | 'pinned'>
+/** What main.ts supplies each frame; the panel owns everything else. */
+export type XrPropertiesInput = Omit<
+  XrPropState,
+  'page' | 'axis' | 'step' | 'pinned' | 'valueIndex' | 'addToSelection'
+>
 
 export class XrProperties extends XrSurface<XrPropWidget> {
   private readonly actions: XrPropertiesActions
@@ -106,6 +122,11 @@ export class XrProperties extends XrSurface<XrPropWidget> {
   private axis: XrPropAxis = 'x'
   private step = DEFAULT_STEP
   private pinned = false
+  /** Select page: which criterion, which of its values, and whether the Select
+   *  By rows add to the selection or replace it. */
+  private criterionIndex = 0
+  private valueIndex = 0
+  private addToSelection = false
 
   /** Scrub bookkeeping: where the press landed and how many notches of value
    *  have been applied so far, so each frame applies only the DIFFERENCE. */
@@ -122,10 +143,35 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     return this.pinned
   }
 
-  /** The page/axis/step the panel is showing — read by the drive harness,
-   *  which has no other way to see any of it. */
-  get uiState(): { page: XrPropPage; axis: XrPropAxis; step: number; pinned: boolean } {
-    return { page: this.page, axis: this.axis, step: stepSize(this.step), pinned: this.pinned }
+  /**
+   * The criterion the Select page is showing. The host reads this BEFORE
+   * calling `update`, so it only has to scan the scene for the one criterion
+   * that is on screen rather than all three every frame.
+   */
+  get criterion(): SelectCriterion {
+    return SELECT_CRITERIA[this.criterionIndex]
+  }
+
+  /** Panel-owned state — read by the drive harness, which has no other way to
+   *  see any of it. */
+  get uiState(): {
+    page: XrPropPage
+    axis: XrPropAxis
+    step: number
+    pinned: boolean
+    criterion: SelectCriterion
+    valueIndex: number
+    addToSelection: boolean
+  } {
+    return {
+      page: this.page,
+      axis: this.axis,
+      step: stepSize(this.step),
+      pinned: this.pinned,
+      criterion: this.criterion,
+      valueIndex: this.valueIndex,
+      addToSelection: this.addToSelection,
+    }
   }
 
   /** Clipping back to the wrist has to be reachable from outside too — leaving
@@ -145,12 +191,19 @@ export class XrProperties extends XrSurface<XrPropWidget> {
    */
   update(input: XrPropertiesInput): void {
     this.input = input
+    // A scene load, or a topo/geometry edit, can shorten the value list under
+    // a parked index; clamping here rather than at the press keeps the stepper
+    // from pointing at a value that no longer exists.
+    const count = input.select.values.length
+    this.valueIndex = count === 0 ? 0 : Math.min(this.valueIndex, count - 1)
     const state: XrPropState = {
       ...input,
       page: this.page,
       axis: this.axis,
       step: this.step,
       pinned: this.pinned,
+      valueIndex: this.valueIndex,
+      addToSelection: this.addToSelection,
     }
     const layout = propLayout(state)
     this.layout = layout
@@ -171,11 +224,38 @@ export class XrProperties extends XrSurface<XrPropWidget> {
       this.refresh()
       return
     }
-    if (id === 'page-shape' || id === 'page-move' || id === 'page-look') {
+    if (id.startsWith('page-')) {
       this.page = id.slice(5) as XrPropPage
       this.refresh()
       return
     }
+    // Select-page navigation is panel-local like the tabs and chips: it changes
+    // what the two steppers SHOW, and nothing happens to the scene until Select
+    // matching is pressed.
+    if (id === 'criterion-prev' || id === 'criterion-next') {
+      const step = id === 'criterion-next' ? 1 : -1
+      const n = SELECT_CRITERIA.length
+      this.criterionIndex = (((this.criterionIndex + step) % n) + n) % n
+      // The new criterion has its own values, and the host has not scanned for
+      // them yet; starting at 0 is the only index certain to exist.
+      this.valueIndex = 0
+      this.refresh()
+      return
+    }
+    if (id === 'value-prev' || id === 'value-next') {
+      const n = this.input?.select.values.length ?? 0
+      if (n === 0) return
+      const step = id === 'value-next' ? 1 : -1
+      this.valueIndex = (((this.valueIndex + step) % n) + n) % n
+      this.refresh()
+      return
+    }
+    if (id === 'select-add') {
+      this.addToSelection = !this.addToSelection
+      this.refresh()
+      return
+    }
+    if (this.applySelectPress(id)) return
     if (id === 'axis-x' || id === 'axis-y' || id === 'axis-z') {
       this.axis = id.slice(5) as XrPropAxis
       this.refresh()
@@ -191,6 +271,44 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     // Every field edit ends in the same rebuild the DOM inspector's commit
     // does, so the two cannot leave the scene in different states.
     this.actions.commit()
+  }
+
+  /**
+   * The Select page's scene commands. These do NOT go through `commit` — each
+   * one is a whole operation that reports and rebuilds for itself (the
+   * selection ones do not touch node data at all, and the visibility ones
+   * change `hide`, which needs its own rebuild and its own status count).
+   * Returns true when the press was one of them.
+   */
+  private applySelectPress(id: XrPropId): boolean {
+    const a = this.actions
+    switch (id) {
+      case 'select-apply': {
+        const value = this.input?.select.values[this.valueIndex]
+        if (value) a.selectMatching(this.criterion, value.value, this.addToSelection)
+        return true
+      }
+      case 'select-all':
+        a.selectAll()
+        return true
+      case 'select-none':
+        a.selectNone()
+        return true
+      case 'select-invert':
+        a.invertSelection()
+        return true
+      case 'vis-hide':
+        a.hideSelected()
+        return true
+      case 'vis-show':
+        a.showAll()
+        return true
+      case 'vis-only':
+        a.isolateSelected()
+        return true
+      default:
+        return false
+    }
   }
 
   private applyPress(id: XrPropId): void {
