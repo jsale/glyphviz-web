@@ -2403,10 +2403,13 @@ something to decide now).
          the left Menu and right Meta buttons never reach the page at all — the
          runtime keeps both — so the real budget is trigger, squeeze, stick,
          stick-CLICK (still unused on both hands) and two face buttons per hand.
-       - SCOPE: everything except `text` and `link`, which is the platform
-         rather than a choice — a headset browser cannot raise a keyboard into
-         a running immersive session. The panel shows the tag text so you know
-         which node you have; it cannot let you retype it.
+       - SCOPE: everything except `text` and `link`. The reason recorded here
+         at the time — that a headset browser cannot raise a keyboard into a
+         running immersive session — **was wrong**, corrected 2026-08-16 when
+         Jeff pointed out that he can already point and click the Quest's own
+         keyboard. See the keyboard entry in the XR pending list below: the
+         panel shows the tag text so you know which node you have, and typing
+         it is an open item rather than a platform limit.
        - NOT direct grab-to-move: that stays with the pending authoring-
          gestures phase, which has to settle the topology inverse in VR, undo,
          and how a glyph grab shares the squeeze with grabbing the WORLD.
@@ -2616,6 +2619,32 @@ something to decide now).
        SCENE and cleared the selection, making every later check nonsense. It
        now throws, and asserts the hover actually landed before pressing.
      - Driven in Chrome, **100 measured checks** (P3's 54 + P4's 26 + 20).
+   - **TEXT ENTRY — open, and NOT blocked by the platform** (raised by Jeff
+     2026-08-16, deferred by him the same day: "the VR implementation is so new
+     and currently I am the only one testing it, so there is no urgency").
+     - P3 recorded that `text`/`link` were read-only because a headset browser
+       cannot raise a keyboard in a session. That is FALSE and was corrected on
+       the spot. `XRSession.isSystemKeyboardSupported` is a standard property —
+       `node_modules/@types/webxr/index.d.ts` carries it on `XRSession`, and
+       iwer's `metaQuest3` profile declares it `true`. Focusing a real DOM input
+       during a session lets the browser raise the SYSTEM keyboard as a
+       compositor overlay: the same one the wearer already points at and clicks,
+       drawn by the runtime, delivering ordinary `input`/`keydown` events. The
+       page draws nothing.
+     - The mistake to avoid repeating: "the DOM HUD is invisible in a session,
+       therefore DOM text entry is unreachable" — true of the panel, false in
+       general, and the system keyboard is precisely the exception. Do not
+       generalise from the HUD's invisibility again.
+     - Two things the EMULATOR cannot settle, because it reports the flag and
+       implements nothing behind it — both need Jeff's Quest:
+       - whether the Quest Browser raises the keyboard for a hidden/offscreen
+         focused input, or insists on a visible one (if visible, a 1px focused
+         input is the fix, not a redesign);
+       - where the in-progress string is echoed, since the DOM input cannot be
+         seen — the panel would have to draw it as it is typed.
+     - Shape when it happens: a "type…" affordance on the row, focusing a
+       hidden input, the panel echoing the string, and a clean fallback when
+       `isSystemKeyboardSupported` is false. Do NOT start it unprompted.
    - PENDING, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
      small once the rig exists, and the demo that impresses people) — Jeff
      deferred it 2026-08-14 in favour of the desktop-feature catch-up; then

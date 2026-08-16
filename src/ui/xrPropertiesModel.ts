@@ -2,8 +2,9 @@
 // and no DOM, so it runs in plain node like xrPanelModel.ts beside it.
 //
 // This is the inspector (ui/inspector.ts) re-expressed for a headset, and
-// almost none of the DOM controls survive the trip: there is no keyboard in an
-// immersive session, no colour dialog, no combo box worth pointing a laser at.
+// almost none of the DOM controls survive the trip: no colour dialog, no combo
+// box worth pointing a laser at, and no text field this build types into (see
+// the note on `text`/`link` below — that one is a gap, not a platform limit).
 // What is left is three widget shapes —
 //
 //   stepper   ‹ value ›   every enum-ish field. These already HAVE desktop
@@ -16,10 +17,20 @@
 //             serve all three rows, because nine live number fields on a
 //             19 cm quad is not something a laser can hit.
 //
-// `text` and `link` are READ-ONLY here, and that is the platform rather than a
-// choice: a headset browser cannot raise a keyboard into a running immersive
-// session. The panel shows the tag text so you know which node you have; it
-// cannot let you retype it.
+// `text` and `link` are READ-ONLY here — for now, and NOT because the platform
+// forbids it. That was the reason given when this shipped and it was wrong:
+// `XRSession.isSystemKeyboardSupported` is a standard property (it is in
+// @types/webxr, on XRSession itself) and the Quest 3 profile declares it true.
+// Focusing a real DOM input during a session lets the browser raise the SYSTEM
+// keyboard as a compositor overlay — which is exactly the one the wearer can
+// already point at and click. The page never has to draw it.
+//
+// What is actually unsettled is two device questions the emulator cannot
+// answer, since it reports the flag and implements nothing behind it: whether
+// the Quest Browser raises the keyboard for a HIDDEN input or insists on a
+// visible one, and where the in-progress string is echoed (the panel would have
+// to draw it, the DOM input being invisible in-session). See the XR pending
+// list in CLAUDE.md.
 //
 // PAGES, not one long list. The quad is about the size of a large phone, and
 // the fields group the way the desktop's own form does: what the node IS
