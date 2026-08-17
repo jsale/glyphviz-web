@@ -682,7 +682,7 @@ hud.innerHTML = `
       <input id="hud-fog-start" type="number" min="0" max="1000000" step="10" value="20" disabled>
       <input id="hud-fog-end" type="number" min="0" max="1000000" step="10" value="200" disabled>
     </div>
-    <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;Orbit and zoom stay live while following; panning is overridden.">
+    <label id="hud-follow" class="sel-check" title="Keep the camera centred on the selected node as it moves  [F]&#10;The pivot is re-pinned instantly (never smoothed); orbit and zoom stay live, panning is overridden.">
       <input type="checkbox">Follow Selected (F)
     </label>
     <div class="hud-create-row" id="hud-camera-row" title="Saved camera views — Main is the free orbit camera; +X/+Y/+Z are fixed reference views onto the world origin (zoom only, no orbit or pan).&#10;[Shift+C] cycles through them.">
@@ -1366,9 +1366,14 @@ function cameraActualRig(): OrbitRig | null {
 
 /** Point the goal at wherever the rendered camera now is (desktop
  *  `_snap_camera_goal`): every PROGRAMMATIC move — camera presets, scene
- *  framing, double-click focus, Follow Selected, flight, the exit from an
- *  immersive session — is a jump, not a glide, and would otherwise be dragged
- *  straight back toward the pre-jump goal. */
+ *  framing, double-click focus, flight, the exit from an immersive session —
+ *  is a jump, not a glide, and would otherwise be dragged straight back toward
+ *  the pre-jump goal.
+ *
+ *  Follow Selected is the one exception, and must NOT call this: it runs every
+ *  frame from the animation loop, so snapping the whole goal onto the lagging
+ *  actual erased an in-progress drag's aim before the filter could chase it.
+ *  It pins the goal's pivot alone — see `applyFollowTarget`. */
 function snapCameraGoal() {
   const actual = cameraActualRig()
   if (actual) camSmoothing.snap(actual)
@@ -4942,8 +4947,16 @@ function applyFollowTarget() {
   // Following re-centres every frame from the node's own animation, so
   // smoothing it would fight the source rather than a hand tremor — and would
   // leave the camera permanently trailing a moving node (desktop
-  // _apply_follow_target). A glide in progress is landed by the same rule.
-  snapCameraGoal()
+  // _apply_follow_target). So the pivot still JUMPS: actual and goal are put on
+  // the same point, leaving the filter nothing to chase.
+  //
+  // But follow owns the PIVOT ONLY. A snapCameraGoal() here would re-point the
+  // azimuth/elevation/distance goals at the LAGGING actual — and since this runs
+  // every frame from the animation loop, before applyCameraSmoothing, it erased
+  // an in-progress drag's aim on the very next frame and the camera did not move
+  // at all (desktop bug, fixed b156103). The delta above moved eye and pivot
+  // together, so those three quantities are untouched here by construction.
+  camSmoothing.goal.target = [pos.x, pos.y, pos.z] // fresh array: goal must never alias
 }
 
 function setFollowSelected(value: boolean) {

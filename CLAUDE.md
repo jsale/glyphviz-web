@@ -1333,7 +1333,8 @@ something to decide now).
         lands on it exactly.
       - Everything PROGRAMMATIC snaps (`snapCameraGoal`, the desktop's
         `_snap_camera_goal`): scene framing, camera presets, double-click
-        focus, Follow Selected, flight, the exit from an immersive session.
+        focus, flight, the exit from an immersive session. Follow Selected is
+        the one exception — see the fix in 6cc.
         Switching cameras or entering Camera Mode RECONCILES instead (a direct
         write wins if nothing was gliding, otherwise the glide lands), so a
         saved viewpoint records where the user aimed. Camera Mode is excluded
@@ -1632,6 +1633,50 @@ something to decide now).
           spheres cover its midpoint, so a click there correctly selects the
           sphere in front. The pick check had to frame a limb close up before
           it meant anything.
+   cc. Follow Selected no longer vetoes navigation (fixed 2026-08-17, Jeff's
+      bug report — a port of desktop `b156103`, the same bug there). With
+      camera smoothing on (6y) and Follow on (6g), an orbit/zoom/pan drag moved
+      the camera not at all; only a sliver landed at the release.
+      - Cause: `applyFollowTarget` ended with `snapCameraGoal()`, which points
+        the WHOLE goal — azimuth, elevation, distance and target — at wherever
+        the rendered camera currently is. Follow runs every frame from the
+        animation loop, BEFORE `applyCameraSmoothing`, and under smoothing the
+        rendered camera is deliberately behind its goal. So every frame
+        re-pointed the goal at the lagging actual and erased the drag's aim
+        before the filter could chase it.
+      - Fix: follow owns the PIVOT only — `camSmoothing.goal.target = [...]`
+        instead of the snap. It stays UNSMOOTHED (following a moving node
+        tracks a source, not a hand tremor; easing it would leave the camera
+        permanently trailing), and it can be: the delta above already moved eye
+        and pivot together, so the actual rig's azimuth/elevation/distance are
+        untouched and matching the goal's target to the same point leaves both
+        rigs' aim and zoom intact. A fresh array, never an alias — `copyRig`'s
+        own rule. Panning stays overridden while following, as documented.
+      - Web-only: the lockup needed a MOVING followed node. `applyFollowTarget`
+        returns early on a zero delta, so a static pivot never reached the snap
+        at all — which is why an orbit drag on a still scene looked fine and
+        the same drag on a Channels-animated one was dead. That is precisely
+        the case Follow exists for, and it is what the drive had to reproduce.
+      - The desktop's second-order effect does NOT apply here: the same snap
+        made `_camera_settled()` read true mid-glide and released the
+        continuous-repaint timer the glide depends on. This app renders from an
+        unconditional `renderer.setAnimationLoop`, and `settled()` is read
+        nowhere outside `cameraSmoothing.ts` itself.
+      - Tests: `cameraSmoothing.test.ts` gains the desktop's
+        `test_camera_smoothing_viewport.py` shape — 30 frames of a held drag
+        (orbit, orbit+zoom, wheel zoom) asserting the final azimuth/elevation/
+        distance are EXACTLY equal with Follow on and off, plus the narrow
+        goal-level rules. Follow itself lives in main.ts wired to a THREE
+        camera, so what the test drives is the two rig operations
+        `applyFollowTarget` performs; verified to FAIL (5 tests) with the snap
+        put back.
+      - Driven in Chrome, 11 measured checks on the Sine wave example with
+        Channels playing and a moving node followed: the bug reproduced first
+        at **0.000° of orbit with Follow on against −54.000° with it off**, and
+        a zoom ratio of 1.0000 (dead), then the fix measured at −54.000° /
+        13.500° / 0.6912 with Follow on — identical to Follow off — with the
+        pivot still tracking the animating node, the Left+Right combo drag
+        orbiting and zooming under the default scope, and a clean console.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

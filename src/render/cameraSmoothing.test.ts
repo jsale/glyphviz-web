@@ -347,7 +347,9 @@ describe('CameraSmoothing', () => {
     // This is what keeps every direct camera write working with smoothing off
     // — the default. With it ON, a programmatic move is a JUMP and must call
     // snap() itself, or the filter would drag it back (main.ts does, at every
-    // such site: framing, presets, focus, follow, flight, the XR exit).
+    // such site: framing, presets, focus, flight, the XR exit). Follow Selected
+    // is the one exception — it moves eye and pivot by the same delta and so
+    // owns the PIVOT alone; see the Follow Selected block below.
     const s = new CameraSmoothing()
     s.goal.azimuth = 90
     s.adopt(rig())
@@ -360,6 +362,110 @@ describe('CameraSmoothing', () => {
     s.snap(actual)
     actual.target[0] = 99
     expect(s.goal.target[0]).toBe(0)
+  })
+})
+
+// --- Follow Selected, which must not veto navigation -------------------------
+//
+// Desktop `tests/test_camera_smoothing_viewport.py`. Follow lives in main.ts,
+// wired to a THREE camera and OrbitControls, so what is driven here is the two
+// operations `applyFollowTarget` performs on the rig, once per animation frame:
+//
+//   1. eye and pivot translate by the SAME delta, so the rig's target lands on
+//      the node while azimuth, elevation and distance are untouched;
+//   2. the goal's target is pinned to the same point — and NOTHING else.
+//
+// Step 2 used to be `snapCameraGoal()`, which re-pointed the whole goal at the
+// lagging actual every frame and so erased an in-progress drag's aim before the
+// filter could chase it: the camera did not move at all while Follow was on
+// (desktop bug, fixed b156103). Following pins the pivot; it does not veto
+// navigation.
+
+describe('Follow Selected under smoothing', () => {
+  /** `applyFollowTarget`, expressed on the rig. */
+  function followPivot(s: CameraSmoothing, actual: OrbitRig, point: [number, number, number]) {
+    s.goal.target = [...point]
+    return { ...actual, target: [...point] as [number, number, number] }
+  }
+
+  // The held drags, as main.ts writes them: OrbitControls' own orbit and wheel
+  // zoom land in the goal through SmoothOrbitControls.update(), the Left+Right
+  // combo through manualDragMove. All three are "adopt the actual, then move a
+  // goal field", which is the only shape that matters here.
+  const gestures: Record<string, (goal: OrbitRig) => void> = {
+    orbit: (g) => {
+      g.azimuth -= 1.2
+      g.elevation = Math.min(89, g.elevation + 0.6)
+    },
+    'orbit + zoom (the combo drag)': (g) => {
+      g.azimuth -= 1.2
+      g.distance *= 1.01
+    },
+    'wheel zoom': (g) => {
+      g.distance *= 0.98
+    },
+  }
+
+  function drive(gesture: (goal: OrbitRig) => void, follow: boolean): OrbitRig {
+    const s = new CameraSmoothing()
+    s.tau = TAU_ANTZ
+    s.scope = SCOPE_ALL // so a plain orbit or wheel is covered, not just the combo
+    let actual = rig()
+    s.snap(actual)
+    for (let frame = 0; frame < 30; frame++) {
+      // The animation loop's order: follow first (the node has already moved
+      // this frame), then the gesture, then one filter step.
+      if (follow) actual = followPivot(s, actual, [frame * 0.5, -frame * 0.25, 3])
+      s.adopt(actual)
+      gesture(s.goal)
+      actual = s.step(actual, 1000 / 60) ?? actual
+    }
+    return actual
+  }
+
+  it.each(Object.keys(gestures))(
+    'a held %s drives the camera identically with Follow on and off',
+    (name) => {
+      const on = drive(gestures[name], true)
+      const off = drive(gestures[name], false)
+      // Exactly equal, not merely close: each rig quantity eases independently,
+      // so pinning the pivot changes the target and nothing else.
+      expect(on.azimuth).toBe(off.azimuth)
+      expect(on.elevation).toBe(off.elevation)
+      expect(on.distance).toBe(off.distance)
+      // And the pivot IS pinned to the node, every frame, unsmoothed.
+      expect(on.target).toEqual([14.5, -7.25, 3])
+    },
+  )
+
+  it('moves the camera at all while following — the bug, measured', () => {
+    // The regression itself: 0.000° of motion over 30 frames of orbit drag with
+    // Follow on, against −34.97° with it off, is what the desktop measured.
+    const on = drive(gestures.orbit, true)
+    expect(Math.abs(on.azimuth - rig().azimuth)).toBeGreaterThan(10)
+  })
+
+  it('leaves the aim and zoom goals alone, mid-glide', () => {
+    const s = new CameraSmoothing()
+    s.tau = TAU_ANTZ
+    s.snap(rig())
+    s.goal.azimuth = 90 // a drag aims elsewhere
+    s.goal.distance = 250
+    s.goal.elevation = 40
+    followPivot(s, rig(), [1, 2, 3])
+    expect(s.goal.azimuth).toBe(90)
+    expect(s.goal.distance).toBe(250)
+    expect(s.goal.elevation).toBe(40)
+    expect(s.goal.target).toEqual([1, 2, 3])
+  })
+
+  it('gives the goal its own target array — goal and actual must never alias', () => {
+    const s = new CameraSmoothing()
+    const point: [number, number, number] = [1, 2, 3]
+    const actual = followPivot(s, rig(), point)
+    point[0] = 99
+    actual.target[1] = 99
+    expect(s.goal.target).toEqual([1, 2, 3])
   })
 })
 
