@@ -1677,6 +1677,114 @@ something to decide now).
         13.500° / 0.6912 with Follow on — identical to Follow off — with the
         pivot still tracking the animating node, the Left+Right combo drag
         orbiting and zooming under the default scope, and a clean console.
+   dd. Save Selection As… (shipped 2026-08-17, Jeff's request — a port of
+      desktop `7ed0b55`, the second of the two scene-file features section 11
+      lists; File ▸ Merge is still unstarted). **Ctrl+Alt+S** and a Save
+      Selection… button in the Scene panel's save row write the selected nodes
+      to a node CSV of their own, leaving the open scene untouched.
+      - THE PROBLEM IT SOLVES, and the whole reason it is not "save the
+        highlighted rows": a node whose `parent_id` names a row the file does
+        not contain is treated as a ROOT (buildScene's `effectiveParent`, the
+        desktop's `_resolve_hierarchy`) — and a root's translate IS its world
+        position, with no topology offset. A Sphere child authored at
+        (30, 45, 5) meaning longitude/latitude/altitude reloads as literal world
+        (30, 45, 5); a World Grid child's lon/lat lands off the map. A naive
+        subset save relocates and reorients everything in it.
+      - Three detach policies, defaulting to BAKING the world placement in:
+        translate takes the world position, rotate/scale come from decomposing
+        `world_basis` into R · diag(s). That is exact rather than approximate,
+        because world_basis is what every descendant composes off — for its own
+        basis and, through the offset, for its position — so preserving it pins
+        the ENTIRE SUBTREE, rod cap offsets and World Grid footprints included.
+        Measured through a real writer → parser → buildScene round trip: every
+        element of every frame's matrixWorld within 4.6e-7, which is the CSV's
+        6-decimal formatting rather than the maths (the desktop reports 4.4e-7).
+      - `src/gv/selectionExport.ts` is the whole rule set and is THREE-free —
+        membership, re-rooting, branch levels, `decomposeBasis`,
+        `eulerXyzFromMatrix`, the filenames. Where the renderer actually PUT
+        each node is INJECTED as a `Map<id, WorldPlacement>`, which
+        `src/render/selectionPlacement.ts` derives from `applyFrameTransform`
+        itself rather than from a second copy of the placement math — the
+        promise is that a fragment reopens where THIS app drew it, so the
+        transform baked has to be the one this app composed. That is the
+        desktop's `scene` argument read the other way round, and the same split
+        basemap.ts/basemapFetch.ts and drawMode.ts/drawPlane.ts already make.
+      - `_nearest_rotation` is an SVD on the desktop and JavaScript ships none,
+        so the web runs HIGHAM'S POLAR ITERATION (`R ← (R + R⁻ᵀ)/2`), which
+        converges to the same orthogonal factor, returns an already-orthonormal
+        input unchanged on the first comparison (the case every unsheared export
+        takes), and is the reason this feature has a parity harness at all. A
+        rank-deficient basis — a collapsed axis — is completed to a right-handed
+        orthonormal frame first rather than handed to a singular inverse; the
+        invented direction is multiplied by a zero scale either way, which is
+        the desktop's own reasoning for letting numpy invent one.
+      - Membership is the house rule Copy and Delete already set: a node brings
+        its descendants, plus links with both ends inside (auto-added even when
+        unselected), minus links with one end outside, plus the World row at the
+        head of the file. Ids are PRESERVED, unlike a merge's rebasing, so
+        `record_id` and channel bindings stay coherent for free; branch levels
+        are restated (`recomputeBranchLevels`, the desktop's
+        `scene_merge.recompute_branch_levels`, which lands here first and should
+        be shared when Merge is ported).
+      - Two limits reported rather than hidden, in the desktop's own wording: a
+        rotated, non-uniformly scaled ancestor SHEARS the basis, which no
+        rotate+scale pair can express (counted as approximated), and motion
+        rates change frame of reference when a node is re-rooted.
+      - A third that cannot be reported per node, and is the one thing the drive
+        turned up that no unit test would have: a WORLD GRID detached from a
+        SCALED ancestor. A grid's own scale re-spaces its children without
+        stretching them (the ANTz Grid rule) and a root grid's frame carries
+        scale (1, 1, 1) by construction, so the ancestor's scale has nowhere to
+        go but the grid's own scale field. Its plate and its direct children's
+        positions come out identical; their SHAPES, and everything below them,
+        divide by that factor. The desktop does the same thing value for value —
+        its own test uses an unscaled parent and never meets it — and "Save its
+        parent nodes too" is the way out.
+      - Companions, all under the node file's own derived stem
+        (`Cyclone_gv_node.csv` → `Cyclone_gv_selection_node.csv` + `_tag` /
+        `_ch-map` / `_ch-tracks`, save stamp stripped): the Channels pair is
+        filtered at the FILE level (`src/gv/channelExport.ts`, the desktop's
+        `export_channel_subset`) so a column neither parser reads still
+        round-trips, and writes NOTHING when no channel matches — an empty
+        ch-map would be found as the fragment's companion and shadow a real one
+        sharing the folder. `currentChannelFiles` keeps the loaded scene's two
+        files as text for exactly this.
+      - Web-side divergences, both platform rather than behaviour: the files
+        arrive as DOWNLOADS, like Save gv_node.csv and Save PNG, so the "give
+        the fragment its own folder" advice in the desktop's docs is the user's
+        to follow; and the tag companion is written only when the node CSV does
+        NOT carry labels inline. The desktop always inlines text/link AND writes
+        the tag file, so its fragment carries labels twice; this app preserves
+        the scene's own authoring style (the rule the Save button already
+        follows), so exactly one of the two files holds them and neither style
+        can lose them.
+      - Parity: `tools/dump_selection_exports.py` runs the REAL desktop
+        `build_selection` over 28 cases across four fixtures — a new synthetic
+        `selection_export_gv_node.csv` modelled on the desktop test's own
+        `_deep_scene` + `_grid_scene` (four levels, HTR and Euler rotations, a
+        rod, links reaching in and out, a flat grid under a rotated + scaled
+        parent, a globe grid, a topo_scale parent, a collapsed axis, a sheared
+        ancestor, rates) plus the real Topology_Example, World_Grid_Example and
+        topo_scale scenes. `selectionExport.parity.test.ts` diffs the plan's
+        counts and every written row field for field, and pins `decomposeBasis`
+        and `eulerXyzFromMatrix` separately so a failure can name which half
+        disagreed. Those two blocks are dumped UNROUNDED — rounding a basis to
+        12 places invents ~1e-12 of shear in it, and near gimbal lock moves an
+        angle by 3e-7. Verified to FAIL three ways: without the grid-scale
+        re-application, without the reflection fold, and without the link
+        auto-add.
+      - Driven in Chrome, 41 measured checks over three scenes: the button's
+        size, placement and disabled-with-no-selection behaviour; the window
+        fitting on screen with nothing overflowing and every option labelled;
+        the preview moving with all four controls (7 → 2 rows on descendants,
+        → 9 with parents, → 6 without scene settings); the saved CSV holding
+        exactly the promised rows with the World row leading it, ids preserved
+        and branch levels restated; the fragment REOPENED and its world matrix
+        measured at 4.58e-7; the Channels pair filtered to one track with
+        `cyclecount` intact; a tag-file scene's 18 labels reaching the tag
+        companion; and the empty-selection message. The picture caught the one
+        thing the numbers did not: the disabled channels row read as an ordinary
+        enabled one, so its wording greys with it now.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -2758,8 +2866,8 @@ something to decide now).
       after building the Hyperglyph Tree Designer; the link-as-any-geometry
       renderer came with them as the prerequisite that makes a Designer tree
       draw as limbs rather than hairlines.
-    - **NEXT SESSION, Jeff 2026-08-15**, the two scene-file features this app
-      still lacks — take them in this order, both unsurveyed here:
+    - **The two scene-file features (Jeff 2026-08-15).** The second shipped
+      2026-08-17 (roadmap 6dd); the first is still open:
       - **File ▸ Merge** (desktop `1bf847d`, Ctrl+M): merge a second node CSV
         into the loaded scene. Qt-free in `glyphviz_core/scene_merge.py`
         (`merge_nodes` + `recompute_branch_levels`, with a `MergeResult`
@@ -2767,15 +2875,11 @@ something to decide now).
         meet this app's own file layer — a merge is a second `bundle.ts`
         scene, so companion tag files, `media/` and the Channels companions
         are all questions the desktop's single-CSV merge does not face.
-      - **File ▸ Save Selection As…** (desktop `7ed0b55`): a standalone scene
-        written from the current selection, world placement baked into the
-        detached roots. Qt-free in `glyphviz_core/selection_export.py`
-        (`build_selection`, whose report counts descendants/ancestors/links
-        added and links dropped), tested by `test_selection_export.py` +
-        `test_selection_export_gui.py`. The selection rules it walks are ones
-        this app already has (subtree closure, links with both ends inside —
-        see `clipboard.ts`), and saving is a download here, as every other
-        save is.
+        `recomputeBranchLevels` already exists here, in
+        `src/gv/selectionExport.ts`, and should move somewhere both can share
+        when this lands — it is scene_merge's function on the desktop.
+      - ~~**File ▸ Save Selection As…**~~ (desktop `7ed0b55`) — **shipped
+        2026-08-17, see roadmap 6dd.**
     - **Hyperglyph Tree Designer** (desktop `418569c`) — a self-contained
       browser page in `hyperglyph_lab/`, shipped twice (there and under
       `glyphviz-docs/docs/hyperglyph_lab/`, pinned byte-identical by a test).

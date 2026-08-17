@@ -1132,6 +1132,48 @@ canvas {
   gap: 8px;
 }
 
+/* --- Save Selection window -------------------------------------------------
+   Form-shaped like the basemap window rather than a tool window: four options,
+   a live preview of what they would write, and the write. Height follows
+   content — the desktop's dialog does the same. */
+
+#save-selection-window {
+  width: 340px;
+  height: auto;
+  min-height: 0;
+  resize: horizontal;
+}
+
+/* The detach radios, boxed as the desktop's QGroupBox is: the three are one
+   choice, and reading them as a group is what makes the default legible. */
+.save-sel-group {
+  margin-top: 4px;
+  padding: 0 8px 4px;
+  border: 1px solid #2a3040;
+  border-radius: 6px;
+}
+
+.save-sel-group .sel-section {
+  margin-top: 6px;
+  padding-top: 0;
+  border-top: none;
+}
+
+.save-sel-preview {
+  margin: 10px 0 2px;
+  color: #aeb6c8;
+  user-select: text;
+}
+
+/* A disabled checkbox alone is not legible at this size — the channels row is
+   off for a scene with no Channels loaded, and its wording has to say so too.
+   (Scoped to this window rather than to `.sel-check` at large, which would
+   restyle the shipped Selection panel.) */
+#save-selection-window .sel-check:has(input:disabled) {
+  color: #6c7488;
+  cursor: default;
+}
+
 /* --- Glyph Composer ------------------------------------------------------
    Wider than the Generator and taller: it carries a parameter form as well as
    a preview, where the desktop has a 900x700 dialog to spread them across.

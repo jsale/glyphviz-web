@@ -45,6 +45,9 @@ import {
 } from './gv/meshFile'
 import type { MeshData } from './gv/meshFile'
 import { parseGvNodeCsv } from './gv/nodeCsv'
+import { channelIdsForNodes, exportChannelSubset } from './gv/channelExport'
+import { buildSelection, selectionExportNames } from './gv/selectionExport'
+import type { ExportOptions, SelectionExport } from './gv/selectionExport'
 import { applyTags, deriveTagFilename, parseGvTagCsv } from './gv/tagCsv'
 import { hasAnyLabel, writeGvTagCsv } from './gv/writeTagCsv'
 import { expandZips, filesFromDataTransfer, filesFromInput } from './io/browserFiles'
@@ -162,6 +165,7 @@ import {
 } from './render/cameraSmoothing'
 import type { SmoothingScope } from './render/cameraSmoothing'
 import { SmoothOrbitControls } from './render/smoothOrbitControls'
+import { worldPlacements } from './render/selectionPlacement'
 import { parentTopoScale } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { BasemapWindow } from './ui/basemapWindow'
@@ -174,6 +178,7 @@ import { Inspector } from './ui/inspector'
 import { NodeTable } from './ui/nodeTable'
 import { PANEL_MODE_EVENT, Panel } from './ui/panel'
 import type { PanelModeChangeDetail } from './ui/panel'
+import { SaveSelectionWindow } from './ui/saveSelectionWindow'
 import { SelectionPanel } from './ui/selectionPanel'
 import cartesianCsv from './examples/cartesian_example_gv_node.csv?raw'
 import linkCsv from './examples/link_example_gv_node.csv?raw'
@@ -593,6 +598,7 @@ hud.innerHTML = `
   <div id="hud-save-row">
     <button id="hud-save">Save gv_node.csv</button>
     <button id="hud-save-tags" hidden title="Write the companion label file alongside the node CSV.">Save gv_tag.csv</button>
+    <button id="hud-save-selection" disabled title="Write the selected nodes (and, by default, their descendants) to a node CSV of their own  [Ctrl+Alt+S]&#10;A node whose parent is left behind keeps its world placement, so the saved fragment reopens looking exactly as it does here.&#10;The open scene is not changed.">Save Selection…</button>
   </div>
   <div id="hud-modes">
     <button data-mode="translate">Move (W)</button>
@@ -741,6 +747,7 @@ const sceneSelect = hud.querySelector<HTMLSelectElement>('#hud-scenes')!
 const exampleSelect = hud.querySelector<HTMLSelectElement>('#hud-examples')!
 const saveButton = hud.querySelector<HTMLButtonElement>('#hud-save')!
 const saveTagsButton = hud.querySelector<HTMLButtonElement>('#hud-save-tags')!
+const saveSelectionButton = hud.querySelector<HTMLButtonElement>('#hud-save-selection')!
 const newNodeButton = hud.querySelector<HTMLButtonElement>('#hud-new-node')!
 const newChildButton = hud.querySelector<HTMLButtonElement>('#hud-new-child')!
 const newGridButton = hud.querySelector<HTMLButtonElement>('#hud-new-grid')!
@@ -859,6 +866,96 @@ saveTagsButton.addEventListener('click', () => {
   if (!tagFilename || !hasAnyLabel(currentNodes)) return
   download(writeGvTagCsv(currentNodes), tagFilename)
 })
+
+// --- Save Selection As… (Ctrl+Alt+S) -----------------------------------------
+// Ported from the desktop's File ▸ Save Selection As…. The rules — membership,
+// re-rooting and the world-placement bake that makes the fragment reopen where
+// it sits — are src/gv/selectionExport.ts, which explains why a naive subset
+// save is wrong; the options window is src/ui/saveSelectionWindow.ts. What is
+// here is only the wiring the desktop's MainWindow owns too: which nodes, which
+// filenames, and the write itself.
+
+const saveSelectionWindow = new SaveSelectionWindow({ onSave: writeSelectionFiles })
+app.appendChild(saveSelectionWindow.element)
+
+function openSaveSelection() {
+  if (selection.size === 0) return status('Select one or more nodes first.')
+  saveSelectionWindow.open(currentNodes, selection.asSet(), currentChannelFiles !== null)
+}
+
+/**
+ * Write the export as downloads — a browser's answer to the desktop's save
+ * dialog, and the same one Save gv_node.csv and Save PNG already give.
+ *
+ * Divergence, and the reason it is not data loss: the desktop always inlines
+ * text/link into its node CSV and writes the tag companion as well, so the
+ * fragment carries its labels twice (inline wins on reload). This app preserves
+ * the scene's own authoring style instead — the rule the Save button already
+ * follows — so exactly one of the two files carries the labels and neither
+ * style can lose them.
+ */
+function writeSelectionFiles(options: ExportOptions, includeChannels: boolean) {
+  if (selection.size === 0) return status('Select one or more nodes first.')
+  // Where the renderer put each node: the one input the bake cannot read off
+  // the CSV. Computed from the rows rather than the live graph, so a node past
+  // the \ draw limit still exports where it would have been drawn.
+  const exported = buildSelection(
+    currentNodes,
+    selection.asSet(),
+    options,
+    worldPlacements(currentNodes),
+  )
+  if (exported.nodes.length === 0) {
+    return status('Nothing to save — the selection holds no exportable nodes.')
+  }
+
+  const names = selectionExportNames(currentFilename)
+  const inlineLabels = !labelsFromTagFile
+  download(writeGvNodeCsv(exported.nodes, { inlineLabels }), names.node)
+  let message = `Saved ${exported.nodes.length} node(s) to ${names.node}`
+  if (!inlineLabels && hasAnyLabel(exported.nodes)) {
+    download(writeGvTagCsv(exported.nodes), names.tag)
+    message += ` (+ tags to ${names.tag})`
+  }
+  if (includeChannels && currentChannelFiles) {
+    const subset = exportChannelSubset(
+      currentChannelFiles.mapText,
+      currentChannelFiles.tracksText,
+      channelIdsForNodes(exported.nodes),
+    )
+    if (subset) {
+      download(subset.mapText, names.chMap)
+      download(subset.tracksText, names.chTracks)
+      message += ` (+ ${subset.channels} channel(s), ${subset.tracks} track(s))`
+    }
+  }
+  status(message + selectionSaveNotes(exported))
+}
+
+/**
+ * Everything the export had to decide on the user's behalf, in one trailing
+ * clause — re-rooting, dropped links, and the two cases the bake cannot carry
+ * across faithfully (see selectionExport.ts). The desktop's own wording.
+ */
+function selectionSaveNotes(exported: SelectionExport): string {
+  const notes: string[] = []
+  if (exported.plan.detachedIds.length > 0) {
+    notes.push(`${exported.plan.detachedIds.length} re-rooted`)
+  }
+  if (exported.plan.droppedLinks > 0) notes.push(`${exported.plan.droppedLinks} link(s) dropped`)
+  if (exported.approximatedIds.length > 0) {
+    notes.push(
+      `${exported.approximatedIds.length} approximated ` +
+        "(stretched parent — shape can't be carried exactly)",
+    )
+  }
+  if (exported.animatedDetached.length > 0) {
+    notes.push(`${exported.animatedDetached.length} with motion rates now moving in world space`)
+  }
+  return notes.length > 0 ? ` — ${notes.join(', ')}.` : '.'
+}
+
+saveSelectionButton.addEventListener('click', openSaveSelection)
 
 function showMessages(errors: string[], warnings: string[]) {
   const MAX = 8
@@ -2531,6 +2628,13 @@ let parseWarningLines: string[] = []
 let labelsFromTagFile = false
 /** Resolved media for the loaded scene — texture_id → file. */
 let currentMedia: { index: MediaIndex; fileById: Map<number, File> } | null = null
+/**
+ * The loaded scene's Channels companions, verbatim. Kept as TEXT because Save
+ * Selection filters them at the file level (src/gv/channelExport.ts), the way
+ * the desktop does — so a column neither parser reads still round-trips into
+ * the fragment.
+ */
+let currentChannelFiles: { mapText: string; tracksText: string } | null = null
 let labelNote = ''
 /** Decoded textures for the loaded scene, keyed by texture_id. */
 let currentTextures: TextureLibrary = emptyTextureLibrary()
@@ -2611,8 +2715,11 @@ function loadScene(source: SceneSource) {
   // The texture row offers this scene's media, so it has to know before the
   // first selection lands in the panel.
   inspector.setMedia(currentMedia?.index ?? null)
-  // A basemap window left open belongs to the previous scene's grid.
+  // A basemap window left open belongs to the previous scene's grid, and a Save
+  // Selection window to the previous scene's selection — both are pointed at
+  // their data when opened, so neither can be left showing another file's.
   basemapWindow.close()
+  saveSelectionWindow.close()
 
   // Draw immediately, untextured; media decodes asynchronously and triggers a
   // second, camera-preserving rebuild when it lands.
@@ -2636,8 +2743,13 @@ function loadChannels(source: SceneSource) {
   channels = emptyChannelAnimation()
   channelAudio.unload()
   channelNote = ''
+  currentChannelFiles = null
 
   if (source.channelMapText !== undefined && source.channelTracksText !== undefined) {
+    currentChannelFiles = {
+      mapText: source.channelMapText,
+      tracksText: source.channelTracksText,
+    }
     const map = parseGvChMap(source.channelMapText)
     const tracks = parseGvChTracks(source.channelTracksText)
     parseWarningLines.push(
@@ -3383,6 +3495,10 @@ window.addEventListener('keydown', (e) => {
     else if (key === 'h') hyperglyphWindow.toggle()
     else if (key === 'g') composerWindow.toggle()
     else if (typing) return
+    // The desktop's own File ▸ Save Selection As… chord. Ctrl+S (plain Save) is
+    // the browser's Save Page and is not worth fighting for; Ctrl+Alt+S is free
+    // and is what the other app teaches.
+    else if (key === 's' && e.altKey) openSaveSelection()
     else if (key === 'a') selectAllToggle()
     else if (key === 'i') selectionCommands.invertSelection()
     // Copy/Paste are the desktop's own chords. They only preventDefault away
@@ -4393,6 +4509,11 @@ function pasteClipboard() {
 function refreshClipboardUi() {
   copyButton.disabled = selection.size !== 1
   pasteButton.disabled = clipboard === null || selection.size > 1
+  // The desktop greys its File ▸ Save Selection As… action the same way, off
+  // the same signal (_on_table_selection). Unlike the gizmo modes there is no
+  // sticky state to preserve here — the command needs a selection to have a
+  // meaning at all.
+  saveSelectionButton.disabled = selection.size === 0
 }
 
 copyButton.addEventListener('click', copySelection)
