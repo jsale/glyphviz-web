@@ -67,6 +67,21 @@ export const TAG_TEXT_ALPHA = 230
 export const TAG_SHADOW_RGBA: Readonly<Rgba> = { r: 0, g: 0, b: 0, a: 200 }
 
 /**
+ * Point size of tag label text, read off the World row like the colours above.
+ * Labels were painted at a hardcoded 9 pt until 2026-08-18, which read a
+ * little small at a normal working camera distance; 11 pt is that same look
+ * two points up, and a file with no `tag_font_size` column loads as this
+ * value, so every existing scene simply gets the larger default.
+ *
+ * The range is what the slider offers and what a Channels track bound to this
+ * attribute clamps to: below ~6 pt antialiased text stops resolving, and past
+ * ~36 pt a handful of labels cover the scene they annotate.
+ */
+export const TAG_DEFAULT_FONT_SIZE = 11
+export const TAG_FONT_SIZE_MIN = 6
+export const TAG_FONT_SIZE_MAX = 36
+
+/**
  * Colour of the procedural reference grid drawn under a scene that has no
  * World Grid node — the desktop's REF_GRID_DEFAULT_RGB. Like the background it
  * is read from the World (type 0) row (`ref_grid_color_r/g/b`), so it is scene
@@ -300,6 +315,8 @@ export interface GvNode {
   tagColorMode: number
   /** World-node-only: the label colour used under TagColorMode.Uniform. */
   tagColor: Rgb
+  /** World-node-only: point size of every tag label in the scene. */
+  tagFontSize: number
   /** World-node-only: the procedural backdrop grid's colour. */
   refGridColor: Rgb
 

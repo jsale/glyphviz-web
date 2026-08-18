@@ -11,6 +11,7 @@ import {
   DEFAULT_TOPO_SCALE,
   GEOMETRY_MAX,
   REF_GRID_DEFAULT_RGB,
+  TAG_DEFAULT_FONT_SIZE,
   TAG_DEFAULT_TEXT_RGB,
   TagColorMode,
   TOPO_MAX,
@@ -72,6 +73,7 @@ const OPTIONAL_TRACKED_COLUMNS = [
   'tag_color_r',
   'tag_color_g',
   'tag_color_b',
+  'tag_font_size',
   'ref_grid_color_r',
   'ref_grid_color_g',
   'ref_grid_color_b',
@@ -255,6 +257,11 @@ export function parseGvNodeCsv(text: string): GvNodeParseResult {
         g: opt('tag_color_g', TAG_DEFAULT_TEXT_RGB.g, true),
         b: opt('tag_color_b', TAG_DEFAULT_TEXT_RGB.b, true),
       },
+      // A file with no tag_font_size column predates the setting, so it loads
+      // at the current default rather than the 9 pt labels were hardcoded to —
+      // the point of raising the default is that old scenes get the bigger
+      // type too.
+      tagFontSize: opt('tag_font_size', TAG_DEFAULT_FONT_SIZE, true),
       refGridColor: {
         r: opt('ref_grid_color_r', REF_GRID_DEFAULT_RGB.r, true),
         g: opt('ref_grid_color_g', REF_GRID_DEFAULT_RGB.g, true),

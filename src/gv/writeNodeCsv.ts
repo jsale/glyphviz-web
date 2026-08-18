@@ -14,6 +14,7 @@ import {
   DEFAULT_TOPO_SCALE,
   REF_GRID_DEFAULT_RGB,
   RotationMode,
+  TAG_DEFAULT_FONT_SIZE,
   TAG_DEFAULT_TEXT_RGB,
   TagColorMode,
 } from './types'
@@ -200,6 +201,13 @@ export function writeGvNodeCsv(nodes: GvNode[], options: WriteNodeCsvOptions = {
         { name: 'tag_color_g', value: (n) => fmtInt(n.tagColor.g) },
         { name: 'tag_color_b', value: (n) => fmtInt(n.tagColor.b) },
       ],
+    },
+    {
+      // Written only when someone actually changed the size, which is what
+      // keeps every scene that never touched it column-stable through a
+      // load/save round trip.
+      when: any((n) => n.tagFontSize !== TAG_DEFAULT_FONT_SIZE),
+      cols: [{ name: 'tag_font_size', value: (n) => fmtInt(n.tagFontSize) }],
     },
     {
       // The backdrop grid's colour, World-row data like the tag styling above.

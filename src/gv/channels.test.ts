@@ -11,6 +11,7 @@ import {
 } from './channels'
 import { parseGvNodeCsv } from './nodeCsv'
 import type { GvNode } from './types'
+import { TAG_DEFAULT_FONT_SIZE, TAG_FONT_SIZE_MAX, TAG_FONT_SIZE_MIN } from './types'
 
 const NODE_HEADER =
   'id,type,parent_id,branch_level,translate_x,translate_y,translate_z,rotate_x,rotate_y,' +
@@ -367,6 +368,27 @@ describe('the expanded bindable set', () => {
     expect(anim.appearanceBoundNodeIds.size).toBe(0)
     expect([...anim.hideBoundNodeIds]).toEqual([1])
     expect([...anim.showTextBoundNodeIds]).toEqual([1])
+  })
+
+  // tag_font_size is a World-row scene setting like render_mode and the fog
+  // fields: it changes what is drawn, never where anything sits, so it is in
+  // none of the fast-path sets — main.ts picks it up through the World row's
+  // own per-frame sync.
+  it('binds tag_font_size as a rounded, clamped World-row setting', () => {
+    const { rows, anim } = boundScene([mapRow(1, 1, 'tag_font_size')], 'ch1\n2\n40\n18.5\n')
+    expect(anim.transformBoundNodeIds.size).toBe(0)
+    expect(anim.placementBoundNodeIds.size).toBe(0)
+    expect(anim.shapeBoundNodeIds.size).toBe(0)
+    expect(anim.appearanceBoundNodeIds.size).toBe(0)
+
+    applyChannelFrame(anim, 0)
+    expect(rows[0].tagFontSize).toBe(TAG_FONT_SIZE_MIN)
+    applyChannelFrame(anim, 1)
+    expect(rows[0].tagFontSize).toBe(TAG_FONT_SIZE_MAX)
+    applyChannelFrame(anim, 2)
+    expect(rows[0].tagFontSize).toBe(18) // 18.5 rounds half-to-even
+    resetChannels(anim)
+    expect(rows[0].tagFontSize).toBe(TAG_DEFAULT_FONT_SIZE)
   })
 
   it('classifies palette bindings as appearance and lists the palette nodes once', () => {

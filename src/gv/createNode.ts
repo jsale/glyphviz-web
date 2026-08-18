@@ -17,6 +17,7 @@ import {
   NodeType,
   REF_GRID_DEFAULT_RGB,
   RotationMode,
+  TAG_DEFAULT_FONT_SIZE,
   TAG_DEFAULT_TEXT_RGB,
   TagColorMode,
   Topo,
@@ -101,6 +102,7 @@ export function blankNode(id: number, d: NewObjectDefaults): GvNode {
     fogEnd: 0,
     tagColorMode: TagColorMode.Uniform,
     tagColor: { ...TAG_DEFAULT_TEXT_RGB },
+    tagFontSize: TAG_DEFAULT_FONT_SIZE,
     refGridColor: { ...REF_GRID_DEFAULT_RGB },
     extras: {},
   }

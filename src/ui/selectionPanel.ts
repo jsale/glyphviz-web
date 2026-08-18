@@ -3,7 +3,13 @@
 // matching and hide-flag rules live in src/gv/selectionOps.ts.
 
 import type { GvNode, Rgb } from '../gv/types'
-import { TAG_DEFAULT_TEXT_RGB, TagColorMode } from '../gv/types'
+import {
+  TAG_DEFAULT_FONT_SIZE,
+  TAG_DEFAULT_TEXT_RGB,
+  TAG_FONT_SIZE_MAX,
+  TAG_FONT_SIZE_MIN,
+  TagColorMode,
+} from '../gv/types'
 import type { CriterionValue, SelectCriterion } from '../gv/selectionOps'
 import { CRITERION_LABELS, criterionValues } from '../gv/selectionOps'
 import { MAX_TAGS_PER_FRAME } from '../render/labelOverlay'
@@ -30,6 +36,8 @@ export interface SelectionPanelHost {
   setTagColor(rgb: Rgb): void
   /** Same, for tag_color_mode (Uniform ↔ Node). */
   setTagColorMatchesNode(match: boolean): void
+  /** Same, for tag_font_size — the point size of every label in the scene. */
+  setTagFontSize(pointSize: number): void
   setAudioMode(mode: AudioMode): void
 }
 
@@ -83,6 +91,15 @@ export class SelectionPanel {
   private tagColor = el('input')
   private tagColorRow: HTMLLabelElement
   private tagColorMatchesNode: HTMLInputElement
+  private tagFontCaption = el('div', { className: 'sel-slider-caption' })
+  private tagFontSlider = el('input', {
+    type: 'range',
+    className: 'sel-slider',
+    min: String(TAG_FONT_SIZE_MIN),
+    max: String(TAG_FONT_SIZE_MAX),
+    step: '1',
+    value: String(TAG_DEFAULT_FONT_SIZE),
+  })
   private tagCount = el('div', { className: 'sel-hint' })
   private tagKeyword = el('input', { type: 'text', placeholder: 'keyword…' })
   private tagSearchButton: HTMLButtonElement
@@ -182,6 +199,26 @@ export class SelectionPanel {
       host.setTagColorMatchesNode(this.tagColorMatchesNode.checked)
       this.refreshTagColorEnabled()
     })
+
+    // Tag text size — World-row scene data too, so a scene's labels are the
+    // size its author chose. A slider rather than a list of point sizes: what
+    // reads well depends on the scene, the label lengths and the distance you
+    // work at, and a slider lets you find that against the live labels instead
+    // of committing to a number blind. Captioned above rather than beside, the
+    // desktop's own layout — "Tag Text Size" does not fit the 44px label
+    // column the rows above it use.
+    const fontTitle =
+      'Point size of every tag label in the scene.\n' +
+      `Default ${TAG_DEFAULT_FONT_SIZE} pt; saved with the file, like Tag Color\n` +
+      '(the World row’s tag_font_size).'
+    this.tagFontCaption.title = fontTitle
+    this.tagFontSlider.title = fontTitle
+    this.tagFontSlider.addEventListener('input', () => {
+      const pt = Number(this.tagFontSlider.value)
+      this.tagFontCaption.textContent = `Tag Text Size: ${pt} pt`
+      host.setTagFontSize(pt)
+    })
+    this.tagFontCaption.textContent = `Tag Text Size: ${TAG_DEFAULT_FONT_SIZE} pt`
 
     // Video soundtracks. The desktop plays every loaded video's audio by
     // default; browsers refuse audible autoplay, so this starts muted and
@@ -290,6 +327,8 @@ export class SelectionPanel {
       tagSelectedCheck.row,
       this.tagColorRow,
       tagMatchCheck.row,
+      this.tagFontCaption,
+      this.tagFontSlider,
       this.tagCount,
       this.audioRow,
       el('div', {
@@ -337,6 +376,11 @@ export class SelectionPanel {
     this.showTags.disabled = labelled === 0
     this.tagsSelectedOnly.disabled = labelled === 0
     this.tagColorMatchesNode.disabled = labelled === 0
+    // Greyed with its neighbours for a scene with no labels at all, where a
+    // size change could not show anything. The desktop leaves the slider live,
+    // as it leaves the tag colour button live — the same small divergence the
+    // rest of this section already makes.
+    this.tagFontSlider.disabled = labelled === 0
     this.refreshTagColorEnabled()
     // Small divergence: the desktop leaves the tag search live and answers
     // "No nodes tagged with …". A scene with no labels at all can never
@@ -358,9 +402,14 @@ export class SelectionPanel {
    * file that carries its own tag colour must show that colour, not the last
    * one someone picked.
    */
-  setTagStyle(mode: number, rgb: Rgb): void {
+  setTagStyle(mode: number, rgb: Rgb, fontSize: number): void {
     this.tagColorMatchesNode.checked = mode === TagColorMode.Node
     this.tagColor.value = hexOfRgb(rgb)
+    // Writing `value` fires no input event, so this cannot loop back through
+    // the host — which matters here, because that handler synthesizes a World
+    // row and merely opening a file must not add one.
+    this.tagFontSlider.value = String(fontSize)
+    this.tagFontCaption.textContent = `Tag Text Size: ${fontSize} pt`
     this.refreshTagColorEnabled()
   }
 

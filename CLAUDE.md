@@ -1785,6 +1785,66 @@ something to decide now).
         companion; and the empty-selection message. The picture caught the one
         thing the numbers did not: the disabled channels row read as an ordinary
         enabled one, so its wording greys with it now.
+   ee. Adjustable tag text size (shipped 2026-08-18, Jeff's request — a port of
+      desktop `aadae11`). Tag labels painted at a hardcoded size, which reads
+      small at a normal working camera distance. `tag_font_size` is now a
+      World-row scene setting on the same pattern as `tag_color_*`, so the size
+      travels with the scene FILE rather than being a viewer preference, driven
+      by a 6–36 pt slider with a live readout.
+      - `TAG_DEFAULT_FONT_SIZE = 11`, two points up from the old hardcoded 9 pt,
+        and it is also the LOAD default — so every existing scene picks up the
+        larger type with no file change. The column is written only when it
+        differs, which is what keeps every example scene column-stable through a
+        load/save round trip.
+      - The clamp lives at the READ point (`clampTagFontSize` in
+        `src/gv/worldNode.ts`, the desktop's `Viewport._tag_font_size`), not
+        only in the slider: a Channels track or a hand-edited CSV can put
+        anything in the field, and the overlay must never be asked to paint at a
+        size no slider position reproduces. `tagTextStyle` returns it beside the
+        colour pair it already carried, and gained a `tagTextStyleOf(world)`
+        variant for the animated path, which already holds the row.
+      - Qt sizes tag text in POINTS and canvas in px. The old hardcoded `12px`
+        WAS the desktop's 9 pt at Qt's assumed 96 dpi, so `TAG_PT_TO_PX = 4/3`
+        is the conversion that keeps a number set here the same SIZE as the same
+        number set there. Kept as an exact ratio rather than rounded per size —
+        a canvas font size may be fractional, and rounding would make several
+        slider steps draw identically.
+      - Bindable as a Channels attribute (36 now), a World-row setting like
+        `render_mode` and the fog fields: it changes what is drawn, never where
+        anything sits, so it is in none of the fast-path sets. It reaches the
+        screen through `syncAnimatedWorld`, which now refreshes the cached tag
+        style — deliberately WITHOUT writing the panel slider, since a playing
+        scene would otherwise drag the control out from under the user (the
+        desktop's slider likewise syncs only on load). Stop re-syncs both.
+      - GUI placement is the Selection panel's Labels section, this app's home
+        for the desktop's Display group since 6i — under "Tag Text Matches Node
+        Color", where the desktop puts it. A slider rather than a list of point
+        sizes, the desktop's own reasoning: what reads well depends on the
+        scene, the label lengths and the distance you work at, and that wants
+        live feedback against the labels themselves. Captioned ABOVE rather than
+        beside (the desktop's layout too) because "Tag Text Size: 11 pt" does
+        not fit the 44px label column the rows above it use. Writing `value` on
+        the input fires no event, so the load-time sync cannot loop back through
+        the handler that synthesizes a World row — merely opening a file must
+        not add one.
+      - Divergence: the slider greys for a scene with no labels at all, with the
+        tag colour and label checkboxes around it, where the desktop leaves it
+        live. The same small divergence that section already makes.
+      - The XR billboard label (`render/xrLabel.ts`) deliberately does NOT
+        follow it: that label is sized in METRES on a 0.6 m quad, so a screen
+        point size has nothing to say about it. The desktop's own XR spike has
+        no such setting either.
+      - Driven in Chrome, 22 measured checks: the row's size, order and that it
+        fits the 300px panel; the range and default; and the setting pinned to
+        REAL INK rather than to a number moving between objects — one label
+        isolated by tag search plus Labels of Selected Only measures 7 / 12 / 35
+        px tall and 24 / 42 / 135 px wide at 6 / 11 / 36 pt (a width ratio of
+        3.21 against the point ratio 3.27, the rest being whole-pixel
+        quantisation), with the whole-scene ink returning EXACTLY to its
+        default count when the slider does. Plus the arrow keys stepping it, the
+        saved CSV growing the column only once changed and carrying 24 on the
+        World row with every glyph row still at 11, and a reload syncing the
+        slider to 30.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -2880,6 +2940,13 @@ something to decide now).
         when this lands — it is scene_merge's function on the desktop.
       - ~~**File ▸ Save Selection As…**~~ (desktop `7ed0b55`) — **shipped
         2026-08-17, see roadmap 6dd.**
+    - ~~**Adjustable tag text size**~~ (desktop `aadae11`, 2026-08-18) —
+      **shipped 2026-08-18, see roadmap 6ee.**
+    - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
+      2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
+      with two collaboration-network examples and a Trust Network scene that
+      "builds itself"; read those commits before planning anything, and expect
+      it to be a Tools-window port rather than a renderer change.
     - **Hyperglyph Tree Designer** (desktop `418569c`) — a self-contained
       browser page in `hyperglyph_lab/`, shipped twice (there and under
       `glyphviz-docs/docs/hyperglyph_lab/`, pinned byte-identical by a test).

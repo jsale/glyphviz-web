@@ -4,7 +4,7 @@ import { LABEL_OFFSET_X, MAX_TAGS_PER_FRAME, pinnedTagNodes, placeLabels } from 
 import type { LabelOverlayState } from './labelOverlay'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
 import { applyTags, parseGvTagCsv } from '../gv/tagCsv'
-import { NodeType, TAG_DEFAULT_TEXT_RGB, TagColorMode } from '../gv/types'
+import { NodeType, TAG_DEFAULT_FONT_SIZE, TAG_DEFAULT_TEXT_RGB, TagColorMode } from '../gv/types'
 import type { GvNode } from '../gv/types'
 import topologyNodeCsv from '../gv/fixtures/topology_example_gv_node.csv?raw'
 import topologyTagCsv from '../gv/fixtures/topology_example_gv_tag.csv?raw'
@@ -47,6 +47,7 @@ const SHOW_ALL: LabelOverlayState = {
   pinned: [],
   tagColorMode: TagColorMode.Uniform,
   tagColor: TAG_DEFAULT_TEXT_RGB,
+  tagFontSize: TAG_DEFAULT_FONT_SIZE,
 }
 
 function place(

@@ -22,7 +22,13 @@ import { roundHalfToEven } from './pythonRound'
 // still reach it through here.
 export { roundHalfToEven }
 import type { GvNode, GvParseIssue, Rgba } from './types'
-import { GEOMETRY_MAX, RENDER_MODE_COUNT, TOPO_MAX } from './types'
+import {
+  GEOMETRY_MAX,
+  RENDER_MODE_COUNT,
+  TAG_FONT_SIZE_MAX,
+  TAG_FONT_SIZE_MIN,
+  TOPO_MAX,
+} from './types'
 
 /**
  * Column names carrying a node's channel number.
@@ -245,11 +251,12 @@ const NONNEGATIVE = { min: 0, max: Infinity }
 const FLAG = { min: 0, max: 1 }
 
 /**
- * The complete bindable set — 35 attributes, matching desktop `77d6361` plus
- * `topo_scale` (desktop `55928c0`).
+ * The complete bindable set — 36 attributes, matching desktop `77d6361` plus
+ * `topo_scale` (desktop `55928c0`) and `tag_font_size` (desktop `aadae11`).
  * Anything else in a ch-map is silently skipped (and counted, below).
  *
- * render_mode / fog_* are scene-wide settings read only off the World row
+ * render_mode / fog_* / tag_font_size are scene-wide settings read only off
+ * the World row
  * (type 0) — binding them means giving that row a ch_input_id like any other
  * node; on any other node they are inert stores. The World row's own
  * color_r/g/b is the scene background, so it animates through the ordinary
@@ -380,6 +387,16 @@ const ATTRIBUTES: Record<string, AttributeSpec> = {
     write: (n, v) => {
       n.fogEnd = v
     },
+  },
+  tag_font_size: {
+    read: (n) => n.tagFontSize,
+    write: (n, v) => {
+      n.tagFontSize = v
+    },
+    // Point sizes are whole numbers, and the clamp is the same range the
+    // slider offers — the overlay clamps again on the way to the paint, so a
+    // hand-edited CSV cannot draw at a size no slider position reproduces.
+    int: { min: TAG_FONT_SIZE_MIN, max: TAG_FONT_SIZE_MAX },
   },
 }
 

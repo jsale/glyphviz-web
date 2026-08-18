@@ -21,11 +21,23 @@ import type { GvNode, Rgb } from '../gv/types'
  */
 export const MAX_TAGS_PER_FRAME = 500
 
-// Desktop paint constants. Qt's 9pt at 96 dpi is 12 device-independent px;
-// drawStaticText anchors top-left and the desktop subtracts the font ascent to
-// land on the old drawText baseline — canvas fillText is baseline-anchored, so
-// the offsets apply directly.
-const FONT = '12px system-ui, "Segoe UI", sans-serif'
+// Desktop paint constants. drawStaticText anchors top-left and the desktop
+// subtracts the font ascent to land on the old drawText baseline — canvas
+// fillText is baseline-anchored, so the offsets apply directly.
+const FONT_FAMILY = 'system-ui, "Segoe UI", sans-serif'
+/**
+ * Qt sizes tag text in POINTS and canvas in px: at Qt's assumed 96 dpi a point
+ * is 4/3 of a device-independent pixel, which is where the old hardcoded
+ * `12px` came from (the desktop's 9 pt). Kept as an exact ratio rather than
+ * rounded per size, so every step of the slider is a visible one — a canvas
+ * font size may be fractional.
+ */
+export const TAG_PT_TO_PX = 4 / 3
+
+/** The canvas font string for a tag point size (already clamped). */
+export function tagFontCss(pointSize: number): string {
+  return `${pointSize * TAG_PT_TO_PX}px ${FONT_FAMILY}`
+}
 const SHADOW_COLOR = `rgba(${TAG_SHADOW_RGBA.r}, ${TAG_SHADOW_RGBA.g}, ${TAG_SHADOW_RGBA.b}, ${
   TAG_SHADOW_RGBA.a / 255
 })`
@@ -55,6 +67,12 @@ export interface LabelOverlayState {
   /** World-row tag styling — TagColorMode.Uniform paints every label `tagColor`. */
   tagColorMode: number
   tagColor: Rgb
+  /**
+   * Point size for every label in the scene, World-row data like the colours
+   * above. Already clamped by `tagTextStyle` — the paint pass trusts it, the
+   * way the desktop's `_tag_painter` trusts `_tag_font_size()`.
+   */
+  tagFontSize: number
 }
 
 /** The scene's pinned-label nodes, in file order. Recompute on scene rebuild. */
@@ -278,7 +296,7 @@ export class LabelOverlay {
 
     // Two single-colour passes, shadow then face — the desktop's own trick for
     // avoiding a pen switch per label.
-    this.ctx.font = FONT
+    this.ctx.font = tagFontCss(state.tagFontSize)
     this.ctx.textBaseline = 'alphabetic'
     this.ctx.fillStyle = SHADOW_COLOR
     for (const p of placed) {

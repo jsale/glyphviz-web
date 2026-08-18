@@ -11,7 +11,10 @@ import type { GvNode, Rgb } from './types'
 import {
   NodeType,
   REF_GRID_DEFAULT_RGB,
+  TAG_DEFAULT_FONT_SIZE,
   TAG_DEFAULT_TEXT_RGB,
+  TAG_FONT_SIZE_MAX,
+  TAG_FONT_SIZE_MIN,
   TagColorMode,
   WORLD_DEFAULT_BG,
 } from './types'
@@ -38,16 +41,40 @@ export function backgroundRgb(nodes: readonly GvNode[]): { r: number; g: number;
   return { r, g, b }
 }
 
+export interface TagTextStyle {
+  mode: number
+  rgb: Rgb
+  /** Point size, already clamped to the settable range. */
+  fontSize: number
+}
+
+/**
+ * The point size labels actually paint at. Clamped here rather than trusted,
+ * exactly as the desktop's `Viewport._tag_font_size` does it: a Channels track
+ * bound to `tag_font_size` or a hand-edited CSV can put any number in the
+ * field, and a non-integer one would draw at a size no slider position can
+ * reproduce.
+ */
+export function clampTagFontSize(value: number): number {
+  if (!Number.isFinite(value)) return TAG_DEFAULT_FONT_SIZE
+  return Math.max(TAG_FONT_SIZE_MIN, Math.min(TAG_FONT_SIZE_MAX, Math.trunc(value)))
+}
+
 /**
  * The scene's tag-text styling, falling back to the defaults when the file has
  * no World row. Read once per scene build and cached: the label overlay needs
  * this every frame, and `worldNodeOf` is a full scan.
  */
-export function tagTextStyle(nodes: readonly GvNode[]): { mode: number; rgb: Rgb } {
-  const world = worldNodeOf(nodes)
+export function tagTextStyle(nodes: readonly GvNode[]): TagTextStyle {
+  return tagTextStyleOf(worldNodeOf(nodes))
+}
+
+/** Same, for a caller that already holds the World row (the animated path). */
+export function tagTextStyleOf(world: GvNode | null): TagTextStyle {
   return {
     mode: world?.tagColorMode ?? TagColorMode.Uniform,
     rgb: world ? { ...world.tagColor } : { ...TAG_DEFAULT_TEXT_RGB },
+    fontSize: world ? clampTagFontSize(world.tagFontSize) : TAG_DEFAULT_FONT_SIZE,
   }
 }
 

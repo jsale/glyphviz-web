@@ -83,9 +83,11 @@ import { GRID_GLOBE_RADIUS, gridCenter, gridIsGlobe } from './gv/worldGrid'
 import { gridHit } from './render/drawPlane'
 import {
   backgroundRgb,
+  clampTagFontSize,
   ensureWorldNode,
   refGridRgb,
   tagTextStyle,
+  tagTextStyleOf,
   toggledBwBackground,
   worldNodeOf,
 } from './gv/worldNode'
@@ -2316,6 +2318,11 @@ const selectionCommands = {
     })
     status(match ? 'Tag text follows each node’s colour.' : 'Tag text uses one colour.')
   },
+  setTagFontSize(pointSize: number) {
+    writeTagStyle((world) => {
+      world.tagFontSize = clampTagFontSize(pointSize)
+    })
+  },
   setAudioMode(mode: AudioMode) {
     audioMode = mode
     refreshAudio()
@@ -2415,6 +2422,7 @@ const channelCommands = {
     syncBackgroundInput()
     syncFogInputs()
     syncRenderMode()
+    syncTagStyle() // ditto an animated tag_font_size and the slider showing it
     // The animation loop repaints the table only while frames are ticking;
     // the restore just happened outside one.
     nodeTable.refreshVisible()
@@ -2482,14 +2490,20 @@ function pushAnimationFrame() {
 
 /**
  * An animated World row reaches the screen through renderer state, not through
- * any Object3D — background clear colour, fog, and the scene-wide blend mode.
- * The desktop reads all three off the row in paintGL every frame; this applies
- * them when a frame lands. (The desktop documents the World row's color_r/g/b
- * as the way to animate the background, and its fog colour follows it.)
+ * any Object3D — background clear colour, fog, the scene-wide blend mode, and
+ * the tag-label point size. The desktop reads all of them off the row in
+ * paintGL every frame; this applies them when a frame lands. (The desktop
+ * documents the World row's color_r/g/b as the way to animate the background,
+ * and its fog colour follows it.)
  */
 function syncAnimatedWorld() {
   const world = worldNodeOf(currentNodes)
   if (!world || !channels.boundNodeIds.has(world.id)) return
+  // The label overlay paints from this cache, so an animated tag_font_size
+  // needs it refreshed. Deliberately not pushed at the panel slider: a
+  // playing scene would drag the control out from under the user, and the
+  // desktop's slider likewise only syncs on load.
+  tagStyle = tagTextStyleOf(world)
   const r = world.color.r / 255
   const g = world.color.g / 255
   const b = world.color.b / 255
@@ -4868,7 +4882,7 @@ function setBackground(r: number, g: number, b: number) {
 /** Mirror the scene's tag styling into the panel and the per-frame cache. */
 function syncTagStyle() {
   tagStyle = tagTextStyle(currentNodes)
-  selectionPanel.setTagStyle(tagStyle.mode, tagStyle.rgb)
+  selectionPanel.setTagStyle(tagStyle.mode, tagStyle.rgb, tagStyle.fontSize)
 }
 
 function writeTagStyle(mutate: (world: GvNode) => void) {
@@ -5224,6 +5238,7 @@ renderer.setAnimationLoop(() => {
     pinned: animatedPinnedTags ?? pinnedTags,
     tagColorMode: tagStyle.mode,
     tagColor: tagStyle.rgb,
+    tagFontSize: tagStyle.fontSize,
   }
   // Labels are painted after each render pass, so the world matrices they
   // project are the ones just drawn (gizmo drags move frames between rebuilds).

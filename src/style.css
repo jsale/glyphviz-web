@@ -755,6 +755,22 @@ canvas {
   color: #6c7488;
 }
 
+/* A slider captioned above rather than beside it: the caption carries its own
+   live readout, which no 44px label column would fit. */
+.sel-slider-caption {
+  margin-top: 4px;
+  color: #9aa3b5;
+  font-variant-numeric: tabular-nums;
+}
+.sel-slider {
+  width: 100%;
+  margin: 1px 0 2px;
+  accent-color: #4db3ff;
+}
+.sel-slider:disabled {
+  accent-color: #4a5164;
+}
+
 /* --- Channels panel ------------------------------------------------------ */
 
 .ch-frame {
