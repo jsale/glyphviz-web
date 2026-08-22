@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { applyRateAnimation, hasActiveRates, rateCandidates, RATE_CYCLE_MS } from './rates'
+import {
+  applyRateAnimation,
+  hasActiveRates,
+  rateCandidates,
+  restoreRates,
+  snapshotAndZeroRates,
+  RATE_CYCLE_MS,
+} from './rates'
 import { parseGvNodeCsv } from './nodeCsv'
 import type { GvNode } from './types'
 
@@ -110,5 +117,70 @@ describe('applyRateAnimation', () => {
     const moved = applyRateAnimation(nodes, RATE_CYCLE_MS)
     expect([...moved]).toEqual([1])
     expect(nodes[1].translate.x).toBe(0)
+  })
+})
+
+// --- Pause / resume (desktop View ▸ Pause Rate Animation [P]) -----------------
+
+const byId = (nodes: GvNode[]) => new Map(nodes.map((n) => [n.id, n]))
+
+describe('snapshotAndZeroRates', () => {
+  it('zeroes every rate field and hands back what it took', () => {
+    const nodes = scene({ translate_rate_x: 2, rotate_rate_z: 30, scale_rate_x: 0.5 })
+    const snapshot = snapshotAndZeroRates(nodes)
+    expect(snapshot.get(1)).toEqual({
+      translateRate: { x: 2, y: 0, z: 0 },
+      rotateRate: { x: 0, y: 0, z: 30 },
+      scaleRate: { x: 0.5, y: 0, z: 0 },
+    })
+    expect(nodes[0].translateRate).toEqual({ x: 0, y: 0, z: 0 })
+    expect(nodes[0].rotateRate).toEqual({ x: 0, y: 0, z: 0 })
+    expect(nodes[0].scaleRate).toEqual({ x: 0, y: 0, z: 0 })
+  })
+
+  it('is what makes a paused scene genuinely static', () => {
+    const nodes = scene({ rotate_rate_z: 10 })
+    snapshotAndZeroRates(nodes)
+    expect(applyRateAnimation(rateCandidates(nodes), RATE_CYCLE_MS).size).toBe(0)
+    expect(nodes[0].rotate.z).toBe(0)
+  })
+
+  it('skips nodes that carry no rate at all', () => {
+    const nodes = scene({ rotate_rate_z: 1 }, {}, { translate_rate_x: -3 })
+    expect([...snapshotAndZeroRates(nodes).keys()]).toEqual([1, 3])
+  })
+
+  it('takes a FROZEN node too — the desktop tests the nine fields, not freeze', () => {
+    const nodes = scene({ rotate_rate_z: 7, freeze: 1 })
+    expect(snapshotAndZeroRates(nodes).has(1)).toBe(true)
+    expect(nodes[0].rotateRate.z).toBe(0)
+  })
+
+  it('snapshots by value, so a later edit cannot rewrite what resume restores', () => {
+    const nodes = scene({ rotate_rate_z: 4 })
+    const snapshot = snapshotAndZeroRates(nodes)
+    nodes[0].rotateRate.z = 99
+    restoreRates(snapshot, byId(nodes))
+    expect(nodes[0].rotateRate.z).toBe(4)
+  })
+})
+
+describe('restoreRates', () => {
+  it('puts every rate back exactly and counts the nodes it reached', () => {
+    const nodes = scene({ translate_rate_x: 2, rotate_rate_z: -30 }, { scale_rate_x: 0.25 })
+    const rates = (n: GvNode) => ({ t: { ...n.translateRate }, r: { ...n.rotateRate }, s: { ...n.scaleRate } })
+    const before = nodes.map(rates)
+    const snapshot = snapshotAndZeroRates(nodes)
+    expect(restoreRates(snapshot, byId(nodes))).toBe(2)
+    expect(nodes.map(rates)).toEqual(before)
+    expect(rateCandidates(nodes).map((n) => n.id)).toEqual([1, 2])
+  })
+
+  it('skips a node deleted while paused rather than failing', () => {
+    const nodes = scene({ rotate_rate_z: 1 }, { rotate_rate_z: 2 })
+    const snapshot = snapshotAndZeroRates(nodes)
+    const survivors = nodes.filter((n) => n.id !== 1)
+    expect(restoreRates(snapshot, byId(survivors))).toBe(1)
+    expect(survivors[0].rotateRate.z).toBe(2)
   })
 })

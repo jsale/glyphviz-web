@@ -60,6 +60,12 @@ export interface InspectorHost {
   onNodesEdited(nodes: GvNode[], notes?: EditNotes): void
   /** Fetch Basemap… pressed with a single flat World Grid selected. */
   onFetchBasemap(grid: GvNode): void
+  /**
+   * "Lock X/Y/Z together" was ticked or cleared. The same checkbox governs
+   * Scale-mode gizmo drags (desktop `_on_scale_lock_toggled` → `Viewport.
+   * uniform_scale`), so the host has to hear about it.
+   */
+  onScaleLockChanged(locked: boolean): void
 }
 
 export interface WorldPos {
@@ -113,6 +119,12 @@ export class Inspector {
   /** Values the translate/rotate fields are currently showing (see header). */
   private anchorTranslate: Vec3 = { x: 0, y: 0, z: 0 }
   private anchorRotate: Vec3 = { x: 0, y: 0, z: 0 }
+  /**
+   * "Lock X/Y/Z together" (desktop `_insp_scale_lock`). A panel-wide setting,
+   * not a per-node one, so it lives here and survives the rebuild every edit
+   * triggers — and the selection changing under it.
+   */
+  private scaleLocked = false
 
   constructor(host: InspectorHost) {
     this.host = host
@@ -212,11 +224,66 @@ export class Inspector {
     return row(label, axisInput('x'), axisInput('y'), axisInput('z'))
   }
 
-  /** scale and the other vectors: the typed value lands on every node as-is. */
-  private absoluteVec3Row(label: string, field: VectorField): HTMLDivElement {
+  /**
+   * scale: the typed value lands on every selected node as-is (unlike
+   * translate/rotate, which shift by the delta), plus the Lock X/Y/Z rule —
+   * with the lock on, a value typed into ANY of the three boxes lands on all
+   * three, on every selected node.
+   *
+   * The panel equalizes where a drag can only share a FACTOR (see
+   * `uniformScaleFactor`): a spin box states an absolute size, and "make it
+   * 2.0" honestly means all three. Desktop `_on_insp_scale_changed`, whose
+   * locked branch pushes the sender's value into the other two boxes before
+   * writing all three out.
+   */
+  private scaleRow(): HTMLDivElement {
     const axisInput = (axis: 'x' | 'y' | 'z') =>
-      this.numberInput(field(this.nodes[0])[axis], (v) => this.commit((n) => (field(n)[axis] = v)))
-    return row(label, axisInput('x'), axisInput('y'), axisInput('z'))
+      this.numberInput(this.nodes[0].scale[axis], (v) =>
+        this.commit((n) => {
+          if (this.scaleLocked) {
+            n.scale.x = n.scale.y = n.scale.z = v
+          } else {
+            n.scale[axis] = v
+          }
+        }),
+      )
+    return row('scale', axisInput('x'), axisInput('y'), axisInput('z'))
+  }
+
+  /**
+   * "Lock X/Y/Z together", the desktop's one checkbox for one idea — these
+   * three move as a unit. It governs BOTH the boxes above and Scale-mode gizmo
+   * drags, which is why the host hears about it (`onScaleLockChanged`); a
+   * second checkbox on the gizmo buttons meaning nearly the same thing is what
+   * the desktop deliberately avoided.
+   *
+   * Ticking it deliberately does NOT equalize what is already there (desktop
+   * `_on_scale_lock_toggled` only records the flag, as does the Glyph
+   * Composer's copy of this control): the next edit is what pulls the other
+   * two along, so arming the lock can never silently reshape a glyph.
+   */
+  private scaleLockRow(): HTMLLabelElement {
+    const box = el('input', { type: 'checkbox', checked: this.scaleLocked })
+    box.addEventListener('change', () => {
+      this.scaleLocked = box.checked
+      this.host.onScaleLockChanged(box.checked)
+    })
+    const label = el('label', {
+      className: 'ins-check',
+      title:
+        'Keep the three scale axes tied together.\n' +
+        'In the boxes above: editing one axis sets all three to the same value.\n' +
+        'In Scale mode (R): dragging any handle applies the same factor to all\n' +
+        'three, so the glyph keeps its proportions rather than being flattened.\n' +
+        'Ticking it changes nothing on its own — the next edit is what ties them.',
+    })
+    label.append(box, document.createTextNode('Lock X/Y/Z together'))
+    return label
+  }
+
+  /** Whether Scale-mode drags share one factor across all three axes. */
+  get isScaleLocked(): boolean {
+    return this.scaleLocked
   }
 
   /**
@@ -547,7 +614,7 @@ export class Inspector {
           (n, v) => (n.rotationMode = v),
         ),
       ),
-      this.absoluteVec3Row('scale', (n) => n.scale),
+      this.scaleRow(),
       this.rateRow(
         'scale rate',
         (n) => n.scaleRate,
@@ -556,6 +623,8 @@ export class Inspector {
           'at nonzero values — the glyph will continuously grow or shrink ' +
           'without bound.',
       ),
+      // Under the scale group it applies to, the desktop's own placement.
+      this.scaleLockRow(),
     )
 
     // Palette / Color Index sit directly above the colour picker, the desktop's

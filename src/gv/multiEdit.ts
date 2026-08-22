@@ -56,6 +56,29 @@ export type DragMode = 'translate' | 'rotate' | 'scale'
 export const MIN_DRAG_SCALE = 0.001
 
 /**
+ * The single factor a locked ("Lock X/Y/Z together") size drag applies to all
+ * three axes — desktop `_apply_axis_deltas`' size branch, whose locked path
+ * takes `next(iter(deltas.values()))`: the FIRST axis the drag produced a
+ * change for, spread onto the other two.
+ *
+ * A drag shares its factor rather than forcing the three fields equal, which is
+ * what keeps a deliberately 3:1:1 glyph from snapping to a cube on the first
+ * pixel — the panel's spin boxes are where an honest "make them all 2.0" lives.
+ *
+ * An axis that started at zero has no recoverable ratio, so it is passed over
+ * in favour of one that has; a drag that changed nothing returns 1.
+ */
+export function uniformScaleFactor(start: Vec3, dragged: Vec3): number {
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const was = start[axis]
+    if (Math.abs(was) < 1e-12) continue
+    const ratio = dragged[axis] / was
+    if (Math.abs(ratio - 1) > 1e-12) return ratio
+  }
+  return 1
+}
+
+/**
  * Gizmo rule: give `follower` the same change the primary node has taken
  * since the drag began.
  *

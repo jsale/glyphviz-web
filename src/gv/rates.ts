@@ -12,7 +12,7 @@
 // It also runs for scenes with no Channels at all — a CSV can simply author
 // rotate_rate_z on a node and expect it to spin (RSS_News_Example does).
 
-import type { GvNode } from './types'
+import type { GvNode, Vec3 } from './types'
 
 /** Nominal cycle length: rates are per-cycle deltas at 60 cycles/second. */
 export const RATE_CYCLE_MS = 1000 / 60
@@ -91,4 +91,76 @@ export function applyRateAnimation(candidates: readonly GvNode[], dtMs: number):
     }
   }
   return moved
+}
+
+// --- Pausing rate animation (desktop View ▸ Pause Rate Animation [P]) ---------
+//
+// The desktop's `_toggle_rates_paused` does NOT just stop integrating: it ZEROES
+// the nine rate fields, keeping the originals in a snapshot, and puts them back
+// on resume. That is the whole point of the feature — a Save made while paused
+// writes a genuinely static file (the rate columns are omitted entirely, since
+// writeNodeCsv only emits a group some node is nonzero in), not a file that
+// merely looked still on screen. Freezing a Hyperglyph mid-evolution and saving
+// the pose is the case it was built for.
+//
+// The snapshot is keyed by node id, as there, because a paused node can be
+// deleted before the resume.
+
+/** One node's nine rate values, held while paused. */
+export interface RateSnapshot {
+  translateRate: Vec3
+  rotateRate: Vec3
+  scaleRate: Vec3
+}
+
+/**
+ * Zero every nonzero rate in `nodes`, returning what was taken away.
+ *
+ * Matches the desktop's `if any(rates)` test, which reads the nine fields and
+ * ignores `freeze` — a frozen node's rates are stored data like any other, and
+ * a static save should not keep them either. Resume puts them back untouched.
+ */
+export function snapshotAndZeroRates(nodes: readonly GvNode[]): Map<number, RateSnapshot> {
+  const snapshot = new Map<number, RateSnapshot>()
+  for (const node of nodes) {
+    const { translateRate: t, rotateRate: r, scaleRate: s } = node
+    const any =
+      t.x !== 0 || t.y !== 0 || t.z !== 0 ||
+      r.x !== 0 || r.y !== 0 || r.z !== 0 ||
+      s.x !== 0 || s.y !== 0 || s.z !== 0
+    if (!any) continue
+    snapshot.set(node.id, { translateRate: { ...t }, rotateRate: { ...r }, scaleRate: { ...s } })
+    t.x = t.y = t.z = 0
+    r.x = r.y = r.z = 0
+    s.x = s.y = s.z = 0
+  }
+  return snapshot
+}
+
+/**
+ * Put a snapshot back, returning how many nodes actually took their rates.
+ *
+ * A node the snapshot names that no longer exists is skipped, not an error:
+ * deleting a paused node is a legitimate edit, and its rates go with it.
+ */
+export function restoreRates(
+  snapshot: ReadonlyMap<number, RateSnapshot>,
+  byId: ReadonlyMap<number, GvNode>,
+): number {
+  let restored = 0
+  for (const [id, rates] of snapshot) {
+    const node = byId.get(id)
+    if (!node) continue
+    node.translateRate.x = rates.translateRate.x
+    node.translateRate.y = rates.translateRate.y
+    node.translateRate.z = rates.translateRate.z
+    node.rotateRate.x = rates.rotateRate.x
+    node.rotateRate.y = rates.rotateRate.y
+    node.rotateRate.z = rates.rotateRate.z
+    node.scaleRate.x = rates.scaleRate.x
+    node.scaleRate.y = rates.scaleRate.y
+    node.scaleRate.z = rates.scaleRate.z
+    restored += 1
+  }
+  return restored
 }

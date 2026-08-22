@@ -1845,6 +1845,110 @@ something to decide now).
         saved CSV growing the column only once changed and carrying 24 on the
         World row with every glyph row still at 11, and a reload syncing the
         slider to 30.
+   ff. Pause Rate Animation [P] + Lock X/Y/Z together (shipped 2026-08-22,
+      Jeff's request — two desktop controls this app was missing, neither of
+      them from a recent commit: both predate the survey in section 11 and were
+      simply never noticed as gaps).
+      - PAUSE RATE ANIMATION, desktop View ▸ Pause Rate Animation with its P
+        shortcut (`MainWindow._toggle_rates_paused`). **P** freezes every
+        rate-animated node where it stands and P again resumes it.
+        - The load-bearing part is that the desktop does NOT merely stop
+          integrating: it ZEROES the nine rate fields, keeping the originals in
+          a snapshot keyed by node id, and puts them back on resume. That is
+          the whole feature — a Save made while paused writes a genuinely
+          static file, not one that only looked still on screen. Freezing a
+          Hyperglyph mid-evolution and saving the pose is the case it exists
+          for, and the desktop's Hyperglyph Generator docstring points at it by
+          name.
+        - This app already had a Rate Motion checkbox in the Channels panel
+          that stopped the integration in place — the same idea done half way,
+          and recorded as such when Channels shipped ("Not done: the desktop's
+          rate-pause snapshot restore"). So the checkbox and the key are now
+          ONE state, and it is the desktop's: a second control meaning nearly
+          the same thing is the trap the desktop's own scale-lock comment warns
+          about. Its label reads `Rate Motion  [P]` and its sense is kept
+          (checked = moving) rather than inverted to the desktop's menu wording,
+          the checkbox having shipped first and being muscle memory here.
+        - `snapshotAndZeroRates` / `restoreRates` in `src/gv/rates.ts`, pure and
+          DOM-free like the integrator beside them. The snapshot test is the
+          desktop's `if any(rates)` — the nine fields, ignoring `freeze`, so a
+          frozen node's stored rates are zeroed for the save too and restored
+          untouched. A node deleted while paused is skipped on resume rather
+          than being an error, which is why the snapshot is keyed by id on both
+          sides.
+        - Divergence, an improvement rather than a difference of opinion: the
+          integration is ALSO gated on the paused flag. Zeroing alone is enough
+          for a CSV-authored rate, but a CHANNEL bound to a rate field writes it
+          back every frame, and a pause a channel can undo is not one. It costs
+          one boolean.
+        - Web-side consequence with no desktop counterpart: `rateCandidates`
+          reads the fields the pause just zeroed, so the very press that pauses
+          would have reported "0 rate nodes", hidden the Rate Motion row and —
+          in a channel-less scene — the whole Channels panel, leaving P as the
+          only way back. `rateNodeCount()` counts the frozen ones, and the
+          panel's note says `press P to resume` while paused.
+        - A new scene resets the pause (its snapshot names ids that mean nothing
+          in another file). Small divergence: the desktop leaves its menu item
+          checked across a load, pointing at the previous file's snapshot.
+        - Alt+P stays Save PNG (the desktop's F12, which a browser keeps); the
+          two are unrelated and the BARE key is the one the other app teaches.
+      - LOCK X/Y/Z TOGETHER, the desktop's `_insp_scale_lock`: a checkbox under
+        the Properties panel's scale group (its own placement, below Scale Rate)
+        that ties the three scale axes.
+        - It is ONE control for one idea, governing both the panel boxes and
+          Scale-mode gizmo drags — the desktop's own reasoning for not putting a
+          second checkbox on the Manipulate toolbar. The two act differently
+          only because a drag has to: the boxes state an absolute size and can
+          honestly equalize all three, while a drag shares its FACTOR
+          (`uniformScaleFactor` in `src/gv/multiEdit.ts`, the desktop's
+          `next(iter(deltas.values()))`), because equalizing mid-drag would snap
+          a deliberately 3:1:1 glyph to a cube on the first pixel. Measured in
+          Chrome: an X-handle drag took all three axes ×4.001589 and the 3:1
+          proportion came out at 3.000000:1.
+        - Ticking it deliberately changes nothing on its own (desktop
+          `_on_scale_lock_toggled` / the Composer's `_on_lock_toggled` both only
+          record the flag) — the next edit is what ties them, so arming the lock
+          can never silently reshape a glyph.
+        - Off by default, and panel-wide rather than per node, so it lives on
+          the Inspector and survives both the rebuild every edit triggers and
+          the selection changing under it. Arming Scale mode reports which way
+          it is set, and toggling it while Scale is armed says so, both in the
+          desktop's wording.
+        - The desktop's SECOND scale lock, on New Object Defaults, has no
+          counterpart because this app's Create panel has one Scale field for
+          all three axes — already locked, by construction. The Glyph Composer's
+          copy shipped with the Composer in 6x.
+        - Divergence: the desktop draws a tie-line between the three handle tips
+          while locked (`gizmo_mode == MODE_SIZE and uniform_scale`).
+          TransformControls' handles are three's, not ours; the status line and
+          the checkbox carry the state instead.
+        - Fixed in passing, because the locked path had to write `frame.scale`
+          itself: a Scale drag never re-derived the GLYPH's draw scale, which is
+          where the opt-in minimum size, the Global Scale and a Rod's
+          proportions live — so a glyph dragged past the minimum kept shrinking
+          until the release committed. The immersive grab (`xrGrabApplySize`)
+          had always done this; both paths do now.
+      - Found by DRIVING it, and invisible to every other check: a focused HUD
+        checkbox was swallowing every single-key command. The keydown handler's
+        `typing` guard treats any INPUT as a text field, so clicking a panel
+        checkbox killed J/T/H/P and the Ctrl chords until something else took
+        focus — at its worst here, where the checkbox and the key are one
+        control (click Rate Motion, press P, nothing happens). A checkbox has
+        nothing to type into, so it is no longer `typing` — except for Space and
+        Enter, which ACTIVATE the control and whose preventDefault would take
+        that away. Tool-window controls keep the old rule, which is what they
+        were given it for.
+      - Driven in Chrome, 47 measured checks: both rows' size, wording, order
+        and that they fit the 300px panels; rates integrating, then frozen at
+        exactly the three carrying nodes with every field at zero and nothing
+        moving over 600 ms; a Save while paused emitting 22 columns and NO rate
+        group at all; resume restoring 0.5 / 3 / 0.01 exactly and motion
+        resuming; the key and the checkbox driving each other in both
+        directions; Space still belonging to the focused checkbox; a scene load
+        dropping the pause; the lock off by default, changing nothing when
+        ticked, equalizing on the next typed value, surviving the rebuild; and a
+        REAL gizmo drag on the X handle (found by hovering along the projected
+        axis until `gizmo.axis` reads 'X') measured locked and unlocked.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

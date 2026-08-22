@@ -20,7 +20,7 @@ import type { PlacementSettings } from './gv/placement'
 import { generateNodes, recipeFromJson } from './gv/glyphRecipe'
 import type { GlyphRecipe } from './gv/glyphRecipe'
 import { buildHyperglyphNodes } from './gv/hyperglyph'
-import { applyDragDelta, snapshotTransform } from './gv/multiEdit'
+import { applyDragDelta, MIN_DRAG_SCALE, snapshotTransform, uniformScaleFactor } from './gv/multiEdit'
 import type { DragMode, DragSnapshot } from './gv/multiEdit'
 import { findScenes, normalizePath, resolveRelative } from './gv/bundle'
 import type { SceneCandidate } from './gv/bundle'
@@ -34,7 +34,8 @@ import {
   resetChannels,
 } from './gv/channels'
 import type { ChannelAnimation } from './gv/channels'
-import { applyRateAnimation, rateCandidates } from './gv/rates'
+import { applyRateAnimation, rateCandidates, restoreRates, snapshotAndZeroRates } from './gv/rates'
+import type { RateSnapshot } from './gv/rates'
 import { buildMediaIndex } from './gv/media'
 import type { MediaIndex } from './gv/media'
 import {
@@ -1008,6 +1009,16 @@ const inspector = new Inspector({
   onFetchBasemap(grid) {
     basemapWindow.open(grid, currentNodes)
   },
+  onScaleLockChanged(locked) {
+    // Desktop `_on_scale_lock_toggled`: the panel's checkbox IS the Size-drag
+    // setting, and says so the moment it changes while that mode is armed.
+    if (gizmoMode !== 'scale') return
+    status(
+      locked
+        ? 'Scale drags scale X/Y/Z together.'
+        : 'Scale drags scale each axis on its own.',
+    )
+  },
 })
 app.appendChild(inspector.element)
 
@@ -1640,6 +1651,11 @@ renderer.domElement.addEventListener(
   },
   get channelState() {
     return { playing, frame: channelFrame, frames: channels.frameCount }
+  },
+  // Rate pause (P): the checkbox shows the flag, but how many nodes the pause
+  // is actually holding at zero exists only in the snapshot.
+  get rateState() {
+    return { paused: ratesPaused, frozen: pausedRates.size, ticking: rateNodes.length }
   },
 }
 
@@ -2394,7 +2410,21 @@ let playing = false
 let channelFrame = 0
 let channelFps = DEFAULT_CHANNEL_FPS
 let channelLoop = true
-let rateMotion = true
+
+// --- Rate-animation pause (desktop View ▸ Pause Rate Animation [P]) ------------
+//
+// The desktop does not merely stop integrating: `_toggle_rates_paused` ZEROES
+// the nine rate fields and keeps the originals, so a Save made while paused
+// writes a genuinely static file rather than one that only looked still. That
+// is the feature — freezing a Hyperglyph mid-evolution and saving the pose.
+//
+// This app already had a Rate Motion checkbox that stopped the integration in
+// place, which is the same idea done half way (and was recorded as such when
+// Channels shipped). Rather than grow a second control meaning nearly the same
+// thing — the trap the desktop's own scale-lock comment warns about — the
+// checkbox and the P key are ONE state, and it is now the desktop's.
+let ratesPaused = false
+let pausedRates = new Map<number, RateSnapshot>()
 /** Fractional frames carried between ticks, so a 7 fps setting isn't quantised
  *  to the display's refresh rate. */
 let frameCarry = 0
@@ -2445,8 +2475,52 @@ const channelCommands = {
     channelLoop = value
   },
   setMotion(value: boolean) {
-    rateMotion = value
+    setRatesPaused(!value)
   },
+}
+
+/**
+ * Freeze (or unfreeze) every rate in the scene — the P key and the Channels
+ * panel's Rate Motion checkbox, which are the same state.
+ *
+ * `announce` is off for the reset a scene load performs, which has nothing to
+ * report; every user-driven path says what happened, in the desktop's wording.
+ */
+function setRatesPaused(paused: boolean, announce = true) {
+  if (paused === ratesPaused) return
+  ratesPaused = paused
+  if (paused) {
+    pausedRates = snapshotAndZeroRates(currentNodes)
+    if (announce) {
+      status(
+        pausedRates.size === 0
+          ? 'Rate animation paused — no node in this scene carries a rate.  [P]'
+          : `Rate animation paused (${pausedRates.size} node(s) frozen) — ` +
+              'Save now to write a static snapshot.  [P]',
+      )
+    }
+  } else {
+    // Restore by id: a paused node can be deleted before the resume, and its
+    // rates go with it rather than being an error.
+    const restored = restoreRates(pausedRates, nodesById)
+    pausedRates = new Map()
+    if (announce) status(`Rate animation resumed (${restored} node(s)).  [P]`)
+  }
+  channelsPanel.setMotionChecked(!paused)
+  // The rate fields just changed for real, so everything derived from them has
+  // to follow: the tick list, the dynamic registration, the Node Table's nine
+  // rate columns and the inspector's three rate rows. That is a rebuild.
+  rebuildScene(false)
+}
+
+/**
+ * How many nodes carry a rate, counting the ones the pause is holding at zero
+ * — otherwise the Rate Motion checkbox (and, in a channel-less scene, the whole
+ * Channels panel) would vanish on the very press that paused them, leaving the
+ * P key as the only way back.
+ */
+function rateNodeCount(): number {
+  return pausedRates.size + rateNodes.filter((n) => !pausedRates.has(n.id)).length
 }
 
 const channelsPanel = new ChannelsPanel(channelCommands)
@@ -2588,7 +2662,11 @@ function tickAnimation(dtMs: number): boolean {
   // Rates keep integrating whether or not a channel is playing — that is what
   // they are. Suspended mid-gizmo-drag so the integrator and the drag are not
   // both writing the same fields.
-  if (rateMotion && rateNodes.length > 0 && !gizmo.dragging) {
+  //
+  // The paused check is belt and braces where the fields are concerned (they
+  // are zero) but not where CHANNELS are: a track bound to a rate field writes
+  // it back every frame, and a pause that a channel could undo is not one.
+  if (!ratesPaused && rateNodes.length > 0 && !gizmo.dragging) {
     if (applyRateAnimation(rateNodes, dtMs).size > 0) changed = true
   }
 
@@ -2782,6 +2860,14 @@ function loadChannels(source: SceneSource) {
     channelAudio.load(source.audio.blob, source.audio.name)
   }
 
+  // A new scene resets the pause. Its snapshot is a set of node ids that mean
+  // nothing here, so there is nothing left to resume — the state is dropped
+  // rather than carried (a small divergence: the desktop leaves its menu item
+  // checked over a load, pointing at a snapshot from the previous file).
+  ratesPaused = false
+  pausedRates = new Map()
+  channelsPanel.setMotionChecked(true)
+
   rateNodes = rateCandidates(currentNodes, channels.rateBoundNodeIds)
   channelsPanel.setScene({
     frames: channels.frameCount,
@@ -2950,7 +3036,7 @@ function rebuildScene(fitCamera: boolean) {
   // with no rates would otherwise have no way to stop the motion it just
   // acquired. Narrower than setScene, which would reset the transport.
   rateNodes = rateCandidates(currentNodes, channels.rateBoundNodeIds)
-  channelsPanel.setRateNodes(rateNodes.length)
+  channelsPanel.setRateNodes(rateNodeCount(), ratesPaused)
   dynamic = new DynamicNodes(
     currentNodes,
     built.frames,
@@ -3480,11 +3566,21 @@ window.addEventListener('keydown', (e) => {
   // on click, so a Space or Enter meant to re-press it would otherwise also
   // reach the viewport and toggle Channels playback. Panels do not need this —
   // their buttons act on the scene, which is where those keys belong.
-  const typing =
-    tag === 'INPUT' ||
-    tag === 'SELECT' ||
-    tag === 'TEXTAREA' ||
-    (focused instanceof HTMLElement && focused.closest('.float-window') !== null)
+  const inToolWindow = focused instanceof HTMLElement && focused.closest('.float-window') !== null
+  // A focused HUD CHECKBOX is not a text field — there is nothing to type into
+  // it, so the viewport's single-key commands still belong to the viewport.
+  // Without this, clicking a panel checkbox silently kills every one of them
+  // until something else takes focus, which is at its most confusing for Rate
+  // Motion, where the checkbox and the P key are one control: click it, press P,
+  // nothing happens. Space and Enter are the exceptions on purpose — those
+  // activate the control itself, and preventDefault here would take that away.
+  const onCheckbox =
+    !inToolWindow &&
+    focused instanceof HTMLInputElement &&
+    (focused.type === 'checkbox' || focused.type === 'radio')
+  const typing = onCheckbox
+    ? e.key === ' ' || e.key === 'Enter'
+    : tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || inToolWindow
 
   // Panel cycling is a window command and fires even mid-edit; the selection
   // chords stand down while a field has focus, so Ctrl+A there still means
@@ -3562,6 +3658,10 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'j' || e.key === 'J') cycleAttribute('topo', e.shiftKey ? -1 : 1)
   else if (e.key === 'o' || e.key === 'O') cycleAttribute('geometry', e.shiftKey ? -1 : 1)
   else if (e.key === 'f' || e.key === 'F') setFollowSelected(!followSelected)
+  // Desktop View ▸ Pause Rate Animation [P]. Alt+P is Save PNG (the desktop's
+  // F12, which a browser keeps) — the two are unrelated and the bare key is the
+  // one the other app teaches.
+  else if (e.key === 'p' || e.key === 'P') setRatesPaused(!ratesPaused)
   // The desktop's own pairing: plain C toggles Camera Mode (free flight),
   // Shift+C steps through the saved camera views — ANTz put cycling on the
   // bare key, and Camera Mode displaced it.
@@ -3853,12 +3953,16 @@ function setGizmoMode(mode: GizmoMode | null, announce = true) {
   updateGizmoAttachment()
   if (!announce || !changed) return
   if (mode === null) return status('Gizmo off — camera only.')
+  // Scale mode is the one the Properties panel's Lock X/Y/Z checkbox also
+  // governs, so arming it says which way that is set (desktop `_set_gizmo_mode`
+  // appends "; X/Y/Z locked together" for the same reason).
+  const locked = mode === 'scale' && inspector.isScaleLocked ? ' — X/Y/Z locked together' : ''
   // The buttons are disabled without a selection, but W/E/R can still arm a
   // mode ahead of one, so say what is still missing.
   status(
     selection.size === 0
-      ? `${MODE_LABELS[mode]} gizmo on — select a node to use it.`
-      : `${MODE_LABELS[mode]} gizmo on.`,
+      ? `${MODE_LABELS[mode]} gizmo on${locked} — select a node to use it.`
+      : `${MODE_LABELS[mode]} gizmo on${locked}.`,
   )
 }
 
@@ -4026,9 +4130,32 @@ gizmo.addEventListener('objectChange', () => {
   }
 
   if (gizmo.mode === 'scale') {
-    node.scale.x = frame.scale.x
-    node.scale.y = frame.scale.y
-    node.scale.z = frame.scale.z
+    if (inspector.isScaleLocked && primaryStart) {
+      // Locked: whichever bar was grabbed, its factor goes on all three, so a
+      // non-uniform glyph keeps its proportions (desktop `_apply_axis_deltas`,
+      // whose size branch spreads the first delta over x/y/z, clamping each
+      // result at 0.001). Re-derived from the drag-start scale every tick, like
+      // the followers, so a long drag cannot drift.
+      const factor = uniformScaleFactor(primaryStart.scale, frame.scale)
+      for (const axis of ['x', 'y', 'z'] as const) {
+        node.scale[axis] = Math.max(MIN_DRAG_SCALE, primaryStart.scale[axis] * factor)
+      }
+      // Snap the handles to what was actually written — TransformControls
+      // recomputes from its own drag-start copy each move, so overwriting the
+      // frame here is safe and is what makes the lock visible while dragging.
+      frame.scale.set(node.scale.x, node.scale.y, node.scale.z)
+    } else {
+      node.scale.x = frame.scale.x
+      node.scale.y = frame.scale.y
+      node.scale.z = frame.scale.z
+    }
+    // The glyph's own draw scale is DERIVED from node.scale — the opt-in
+    // minimum size, the Global Scale and a Rod's proportions all live there —
+    // so re-derive it rather than let it ride the frame we just wrote. The
+    // immersive grab (`xrGrabApplySize`) has always done this; without it a
+    // glyph dragged past the minimum keeps shrinking until the release commits.
+    const glyph = frame.children.find((c) => c.userData.isGlyph)
+    if (glyph) applyGlyphDrawScale(glyph, node)
     showDragged()
     return
   }

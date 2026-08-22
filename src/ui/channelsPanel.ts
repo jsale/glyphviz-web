@@ -93,13 +93,17 @@ export class ChannelsPanel {
     this.motionRow = el('label', {
       className: 'sel-check',
       title:
-        'Integrate translate_rate / rotate_rate / scale_rate.\n' +
+        'Integrate translate_rate / rotate_rate / scale_rate.  [P]\n' +
         'These are velocities, not values: the scene keeps moving while this is on,\n' +
-        'with or without Channels. Turning it off freezes the motion in place.',
+        'with or without Channels.\n\n' +
+        'Turning it off freezes every rate-animated node where it stands, by setting\n' +
+        'the rate fields themselves to zero — so a Save made while paused writes a\n' +
+        'genuinely static file (e.g. to keep a Hyperglyph mid-evolution), not one\n' +
+        'that merely looked still. Turning it back on restores the original rates.',
     })
     this.motion = el('input', { type: 'checkbox', checked: true })
     this.motion.addEventListener('change', () => host.setMotion(this.motion.checked))
-    this.motionRow.append(this.motion, document.createTextNode('Rate Motion'))
+    this.motionRow.append(this.motion, document.createTextNode('Rate Motion  [P]'))
 
     this.panel.body.append(
       this.frameLabel,
@@ -158,11 +162,23 @@ export class ChannelsPanel {
    * to frame 0, which a scene playing at the time must not lose; hence the
    * narrow entry point, with setScene delegating to it.
    */
-  setRateNodes(count: number): void {
+  setRateNodes(count: number, paused = false): void {
     const hasChannels = this.frameCount > 0
     this.panel.element.hidden = !hasChannels && count === 0
     this.motionRow.hidden = count === 0
-    if (!hasChannels) this.note.textContent = `${count} node(s) with a nonzero rate.`
+    if (!hasChannels) {
+      this.note.textContent = paused
+        ? `${count} node(s) with a rate, frozen at zero — press P to resume.`
+        : `${count} node(s) with a nonzero rate.`
+    }
+  }
+
+  /**
+   * Show the pause state the P key just set, without re-running the change
+   * handler that would bounce it straight back to the host.
+   */
+  setMotionChecked(enabled: boolean): void {
+    this.motion.checked = enabled
   }
 
   setFrame(frame: number): void {

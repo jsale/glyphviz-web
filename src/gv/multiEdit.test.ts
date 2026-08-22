@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { applyDragDelta, MIN_DRAG_SCALE, shiftAxis, snapshotTransform } from './multiEdit'
+import {
+  applyDragDelta,
+  MIN_DRAG_SCALE,
+  shiftAxis,
+  snapshotTransform,
+  uniformScaleFactor,
+} from './multiEdit'
 import type { GvNode } from './types'
 import { Geometry, NodeType, Topo } from './types'
 
@@ -147,5 +153,54 @@ describe('applyDragDelta (gizmo across a selection)', () => {
       applyDragDelta('translate', primary, primaryStart, follower, followerStart)
     }
     expect(follower.translate.x).toBe(43) // 3 + 40, not a sum of every tick
+  })
+})
+
+describe('uniformScaleFactor', () => {
+  it('reads the factor off the one axis a handle drag moved', () => {
+    expect(uniformScaleFactor({ x: 2, y: 3, z: 4 }, { x: 5, y: 3, z: 4 })).toBeCloseTo(2.5, 12)
+    expect(uniformScaleFactor({ x: 2, y: 3, z: 4 }, { x: 2, y: 3, z: 1 })).toBeCloseTo(0.25, 12)
+  })
+
+  it("takes the FIRST changed axis, the desktop's next(iter(deltas))", () => {
+    expect(uniformScaleFactor({ x: 1, y: 1, z: 1 }, { x: 2, y: 4, z: 8 })).toBe(2)
+  })
+
+  it('is 1 when the drag has not moved yet', () => {
+    expect(uniformScaleFactor({ x: 2, y: 3, z: 4 }, { x: 2, y: 3, z: 4 })).toBe(1)
+  })
+
+  it('passes over an axis that started at zero, which has no recoverable ratio', () => {
+    expect(uniformScaleFactor({ x: 0, y: 2, z: 2 }, { x: 0, y: 6, z: 2 })).toBe(3)
+    expect(uniformScaleFactor({ x: 0, y: 0, z: 0 }, { x: 1, y: 2, z: 3 })).toBe(1)
+  })
+
+  it('shares one factor, so a locked drag keeps a non-uniform glyph in proportion', () => {
+    // A 3:1:1 glyph grabbed by its X bar and pulled to 6 — the desktop's own
+    // reason for sharing a FACTOR rather than equalizing the three fields, which
+    // would snap it to a cube on the first pixel.
+    const start = { x: 3, y: 1, z: 1 }
+    const factor = uniformScaleFactor(start, { x: 6, y: 1, z: 1 })
+    const after = {
+      x: Math.max(MIN_DRAG_SCALE, start.x * factor),
+      y: Math.max(MIN_DRAG_SCALE, start.y * factor),
+      z: Math.max(MIN_DRAG_SCALE, start.z * factor),
+    }
+    expect(after).toEqual({ x: 6, y: 2, z: 2 })
+  })
+
+  it('leaves the followers taking the same factor the primary just took', () => {
+    // The locked primary ends uniformly scaled, so every ratio applyDragDelta
+    // reads off it is the same one — a group drag stays a group.
+    const primary = makeNode({ id: 1, scale: { x: 3, y: 1, z: 1 } })
+    const follower = makeNode({ id: 2, scale: { x: 2, y: 4, z: 8 } })
+    const primaryStart = snapshotTransform(primary)
+    const followerStart = snapshotTransform(follower)
+    const factor = 2
+    primary.scale.x = primaryStart.scale.x * factor
+    primary.scale.y = primaryStart.scale.y * factor
+    primary.scale.z = primaryStart.scale.z * factor
+    applyDragDelta('scale', primary, primaryStart, follower, followerStart)
+    expect(follower.scale).toEqual({ x: 4, y: 8, z: 16 })
   })
 })
