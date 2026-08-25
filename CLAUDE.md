@@ -2072,9 +2072,17 @@ something to decide now).
           reversed from the centre but COMPLETELY INVISIBLE — every ray out of
           the centre meets exactly one wall, which back-face culling then
           discards. Three checks went red.
+      - **CONFIRMED IN VR ON HARDWARE** by Jeff, 2026-08-24, the same day it
+        shipped: "I tested the build, especially in VR, and it worked
+        beautifully." Which is the test that mattered — a headset viewer stands
+        at the centre of the shape, so the mirror, the unlit brightness and the
+        near-plane clearance are all being judged at once, in the one place the
+        feature exists for.
       - Known follow-ups, the desktop's own: stereoscopic 360 (top/bottom or
         side-by-side footage) needs per-eye UV offsets and is mono-only here;
-        and the interior globe World Grid above.
+        and the interior globe World Grid above. With mono confirmed in the
+        headset, STEREOSCOPIC 360 is now the obvious next step for this feature
+        — the desktop names it as such too. Do not start it unprompted.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
