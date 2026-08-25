@@ -536,6 +536,13 @@ canvas {
   cursor: pointer;
 }
 
+/* A disabled checkbox alone is not legible at this size — End caps is off for
+   every shape that has none, and its wording has to grey with it. */
+.ins-check:has(input:disabled) {
+  color: #6c7488;
+  cursor: default;
+}
+
 .ins-value {
   flex: 1;
   word-break: break-word;

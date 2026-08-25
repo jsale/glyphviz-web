@@ -289,6 +289,119 @@ export function zPinGeometry(
   return buildGeometry(positions, normals, uvs, indices)
 }
 
+// --- Interior variants -------------------------------------------------------
+// The shape seen from WITHIN, culled from without (gv/interiorGeometry.ts).
+
+/**
+ * Reflect a geometry through the plane x = 0, IN PLACE.
+ *
+ * That one reflection does both of the things an interior surface needs, to
+ * whatever an existing builder emitted — so an interior variant is the same
+ * shape, tessellation and UV layout as its exterior twin rather than a second
+ * implementation that has to be kept in step with it:
+ *
+ *   * every face's winding flips, so `side: FrontSide` now keeps the INSIDE
+ *     surface and discards the outside;
+ *   * the image is mirrored in the surface's angular direction, cancelling the
+ *     mirroring inherent in viewing any surface from behind — so text in a
+ *     texture or video reads FORWARDS from inside.
+ *
+ * MIRROR THE GEOMETRY, NOT THE OBJECT'S SCALE. three.js compensates for a
+ * negative-determinant matrixWorld (WebGLState.setMaterial flips
+ * gl.frontFace), so `mesh.scale.x = -1` gives a mirrored but still EXTERIOR
+ * shape — the opposite of what is wanted. Baked into the BufferGeometry the
+ * determinant stays positive, no compensation kicks in, and the faces genuinely
+ * become back-facing from outside. This is also three's own canonical
+ * 360-video idiom (webgl_video_panorama_equirectangular).
+ *
+ * Normals survive the reflection still pointing OUTWARD — the inverse
+ * transpose of diag(−1,1,1) is itself, so a sphere's outward normal maps to the
+ * outward normal at the mirrored point. That is not a defect to fix by flipping
+ * them: interiors draw unlit (glyphGeometry.ts), for the reason recorded there.
+ *
+ * Exact only for shapes with no face perpendicular to x — which covers the
+ * sphere and the cylinder, both surfaces of revolution about z. A cube's ±x
+ * faces would come back mirrored, so it gets zCubeInteriorGeometry instead.
+ */
+export function mirroredGeometry(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  geometry.scale(-1, 1, 1)
+  return geometry
+}
+
+/**
+ * Each interior cube face as [outward axis, which way is UP on it].
+ *
+ * The four walls stand upright (+Z up). Floor and ceiling have no intrinsic up,
+ * so they take OPPOSITE y — AND THAT IS NOT A TYPO. An orbit camera looking
+ * down has screen-up pointing away from its azimuth and one looking up has it
+ * pointing along; giving both faces the same y would leave one of the two 180°
+ * round from the other (measured on the desktop, then fixed). As set here, a
+ * viewer at the centre facing +Y reads the wall ahead, the floor and the
+ * ceiling all the same way up.
+ */
+const CUBE_INTERIOR_FACES: ReadonlyArray<
+  readonly [readonly [number, number, number], readonly [number, number, number]]
+> = [
+  [[1, 0, 0], [0, 0, 1]],
+  [[-1, 0, 0], [0, 0, 1]],
+  [[0, 1, 0], [0, 0, 1]],
+  [[0, -1, 0], [0, 0, 1]],
+  [[0, 0, 1], [0, 1, 0]], // ceiling, looked up at
+  [[0, 0, -1], [0, -1, 0]], // floor, looked down at
+]
+
+/** The cube's four quad corners in UV space, the desktop's _CUBE_UVS order. */
+const CUBE_INTERIOR_UVS: ReadonlyArray<readonly [number, number]> = [
+  [0, 0],
+  [1, 0],
+  [1, 1],
+  [0, 1],
+]
+
+/**
+ * The cube's six faces turned inward, each mapping the whole texture upright
+ * and unmirrored as seen from the centre.
+ *
+ * Built face by face rather than by mirroring the box, because ONE REFLECTION
+ * CANNOT UN-MIRROR ALL SIX FACES: the two perpendicular to the mirror axis swap
+ * places without their own UVs turning over, and would read backwards. (This
+ * cost real time on the desktop; it is worth not rediscovering.)
+ *
+ * Each face gets a screen-space basis for a viewer at the origin looking at it
+ * — `right = axis × up` — which lays u to the viewer's right and v upward and,
+ * being right-handed, winds the quad CCW from inside for free. Normals are
+ * −axis: the viewer is on the other side of the surface.
+ */
+export function zCubeInteriorGeometry(halfExtent: number): THREE.BufferGeometry {
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  for (const [axis, up] of CUBE_INTERIOR_FACES) {
+    const right: [number, number, number] = [
+      axis[1] * up[2] - axis[2] * up[1],
+      axis[2] * up[0] - axis[0] * up[2],
+      axis[0] * up[1] - axis[1] * up[0],
+    ]
+    const base = positions.length / 3
+    for (const [u, v] of CUBE_INTERIOR_UVS) {
+      // u,v in {0,1} → corner offsets in {−1,+1} along right/up.
+      const su = 2 * u - 1
+      const sv = 2 * v - 1
+      for (let k = 0; k < 3; k++) {
+        positions.push((axis[k] + su * right[k] + sv * up[k]) * halfExtent)
+      }
+      normals.push(-axis[0], -axis[1], -axis[2])
+      uvs.push(u, v)
+    }
+    // The quad, as GL_QUADS would fan it.
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
+  }
+
+  return buildGeometry(positions, normals, uvs, indices)
+}
+
 /**
  * Give every flat face of a solid the whole texture, 0–1.
  *

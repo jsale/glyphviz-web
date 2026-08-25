@@ -823,6 +823,38 @@
     -1.0,
     1.0
    ]
+  },
+  {
+   "geometry": 29,
+   "is_glyph_link": true,
+   "local_z_span": [
+    -1.0,
+    1.0
+   ]
+  },
+  {
+   "geometry": 30,
+   "is_glyph_link": true,
+   "local_z_span": [
+    -1.0,
+    1.0
+   ]
+  },
+  {
+   "geometry": 31,
+   "is_glyph_link": true,
+   "local_z_span": [
+    -1.0,
+    1.0
+   ]
+  },
+  {
+   "geometry": 32,
+   "is_glyph_link": true,
+   "local_z_span": [
+    -1.0,
+    1.0
+   ]
   }
  ]
 }

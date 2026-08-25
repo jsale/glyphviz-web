@@ -166,9 +166,25 @@ export const Geometry = {
   Star: 26,
   Line: 27,
   TexturedPrism: 28,
+  /**
+   * GlyphViz extensions (no ANTz/GaiaViz equivalent), desktop 2ba3c4c: the
+   * three shapes that enclose a volume, drawn INSIDE-OUT so a texture or video
+   * can be viewed from within — a 360° video sphere, a cylindrical panorama, a
+   * video room. See src/gv/interiorGeometry.ts for why the mode rides in
+   * `geometry` rather than in a flag of its own.
+   */
+  CubeInterior: 29,
+  SphereInterior: 30,
+  CylinderInterior: 31,
+  CylinderInteriorOpen: 32,
 } as const
 
-export const GEOMETRY_MAX = 28
+/**
+ * Highest valid geometry id. NOTE the desktop counts the other way — its
+ * `GEO_COUNT` is the COUNT (33), this is the MAX (32) — so the two numbers
+ * never match and neither is wrong.
+ */
+export const GEOMETRY_MAX = 32
 
 // Display names matching the desktop app's NODE_TYPE/TOPO/GEO name tables.
 export const NODE_TYPE_NAMES: Record<number, string> = {
@@ -230,6 +246,10 @@ export const GEOMETRY_NAMES: Record<number, string> = {
   [Geometry.Star]: 'Star',
   [Geometry.Line]: 'Line',
   [Geometry.TexturedPrism]: 'Textured Prism',
+  [Geometry.CubeInterior]: 'Cube (Interior)',
+  [Geometry.SphereInterior]: 'Sphere (Interior)',
+  [Geometry.CylinderInterior]: 'Cylinder (Interior)',
+  [Geometry.CylinderInteriorOpen]: 'Cylinder (Interior, Open)',
 }
 
 /**

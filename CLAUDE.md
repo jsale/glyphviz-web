@@ -1949,6 +1949,132 @@ something to decide now).
         ticked, equalizing on the next typed value, surviving the rebuild; and a
         REAL gizmo drag on the X handle (found by hovering along the projected
         axis until `gizmo.axis` reads 'X') measured locked and unlocked.
+   gg. Interior geometries (shipped 2026-08-24, Jeff's request — a port of
+      desktop `2ba3c4c`, which he had verified there against real GoPro Max2 360
+      footage, with a hand-off spec written from this repo's own `src/`):
+      **four new geometry ids that draw a shape's INSIDE surface**, so a texture
+      or video can be watched from within — a 360° video sphere, a cylindrical
+      panorama, a video room. Cube (Interior) 29, Sphere (Interior) 30, Cylinder
+      (Interior) 31, Cylinder (Interior, Open) 32; `GEOMETRY_MAX` 28 → 32. (The
+      desktop counts the other way — its `GEO_COUNT` is 33 — so the two numbers
+      never match and neither is wrong.)
+      - The ids ARE the contract, CSVs moving between the two apps. And riding
+        in `geometry` rather than in a flag or a node type is the whole
+        packaging decision: no new column, so the look saves, loads, O-cycles
+        and animates through Channels for free — the rule the link geometries
+        already set.
+      - THE DESIGN, and the part most likely to be got wrong: **an interior
+        shape is a MIRRORED shape, not a two-sided one.** Looking at the inside
+        of an outward-mapped surface is inherently a mirror view — the desktop
+        measured a texture reading "R" coming back as "Я" with culling simply
+        switched off — and the un-mirroring lives in the vertex and UV data,
+        which is why it is a geometry and not a state flag. Three consequences,
+        all deliberate: mirrored, still SINGLE-SIDED (one fragment per pixel,
+        and alpha on a translucent node keeps behaving — `DoubleSide` is the
+        reach that would undo it), and drawn UNLIT.
+      - `mirroredGeometry` (uvGeometry.ts) reflects through x = 0 IN THE
+        BUFFERGEOMETRY, not on the object's scale: three.js compensates for a
+        negative-determinant `matrixWorld` (`WebGLState.setMaterial` flips
+        `gl.frontFace`), so `mesh.scale.x = -1` gives a mirrored but still
+        EXTERIOR shape — the opposite of what is wanted. Baked into the geometry
+        the determinant stays positive, nothing compensates, and the faces
+        genuinely become back-facing from outside. It is also three's own
+        canonical 360-video idiom. The sphere and both cylinders therefore reuse
+        the EXISTING builders unchanged, so an interior variant is the same
+        shape, tessellation and UV layout as its exterior twin rather than a
+        second implementation to keep in step.
+      - The CUBE needs a bespoke builder, because **one reflection cannot
+        un-mirror all six faces** — the two perpendicular to the mirror axis
+        swap places without their own UVs turning over and read backwards.
+        `zCubeInteriorGeometry` builds each face from a screen-space basis for a
+        viewer at the centre (`right = axis × up`), which lays u to the viewer's
+        right and v upward and, being right-handed, winds the quad CCW from
+        inside for free. Floor and ceiling take OPPOSITE y, which is not a typo:
+        an orbit camera looking down has screen-up pointing away from its
+        azimuth and one looking up has it pointing along, so the same y would
+        leave one of the two 180° round from the other.
+      - UNLIT is `solidMaterial`'s new third argument, building a
+        MeshBasicMaterial — worldGridGeometry.ts's own call for a map, and the
+        desktop's `_unlit` for exactly these ids. The mirror leaves normals
+        pointing OUTWARD (the inverse transpose of diag(−1,1,1) is itself), so a
+        lit interior would render at the ambient terms alone; and flipping them
+        instead would light it with a key light bolted to the camera
+        (lighting.ts), giving a video a bright patch that slides across it as
+        the viewer turns — very unpleasant in VR. The cache key gained an
+        `|unlit` component so the two material classes cannot collide.
+      - END CAPS are TWO IDS, not a field (`src/gv/interiorGeometry.ts`, the
+        desktop's `CYLINDER_INTERIOR_BY_CAPS` / `has_caps` / `with_caps`): open
+        is a panorama you look along or a link you fly down, capped is a closed
+        room. `zTubeGeometry` had already parameterised the caps, so the open
+        one is both flags off. The Properties panel's **End caps** checkbox
+        swaps the id, sits directly under Geometry (the desktop's placement) and
+        the two controls follow each other in BOTH directions — without that,
+        the next edit anywhere in the panel would write the dropdown's stale id
+        back over this one. `withCaps` is a no-op for every other id, which is
+        what stops a mixed selection having its spheres turned into cylinders;
+        the row keys on the PRIMARY, as the desktop's does, so it greys out when
+        the primary is not one of the pair. A disabled checkbox alone is not
+        legible at this size, so `.ins-check:has(input:disabled)` greys the
+        wording with it — the lesson the Save Selection window already learned.
+      - Web-specific decision the desktop had no counterpart for: `PICK_MATERIAL`
+        is `DoubleSide`, which would stop a ray on the NEAR wall you cannot even
+        see, and a video room would then swallow every click meant for the scene
+        standing inside it. Interior proxies take a FrontSide pick material
+        instead, restoring the desktop invariant "the pick pass draws what the
+        visible pass draws": from outside you pick the far inner wall, so
+        whatever is in the room is nearer and still wins the click. Measured
+        both ways in the drive.
+      - Nothing else needed changing, and each is worth recording as a
+        non-change: links carry them (interiors span −1..1, so
+        `DEFAULT_LOCAL_Z_SPAN` is right, and an open interior cylinder is a tube
+        you can fly down); the O-cycle picks them up from `GEOMETRY_MAX`, on
+        both sides; every geometry menu builds from `GEOMETRY_NAMES`; and World
+        Grids are untouched, `gridIsGlobe` still keying on the plain sphere ids
+        — an interior globe grid (a planetarium with lon/lat children) is a
+        follow-up, not part of this. `dynamicNodes`' `mapped` list did widen to
+        Basic as well as Lambert, since a channel-animated `texture_id` is
+        exactly what a 360 video wants.
+      - FOG deliberately stays ON for interiors, unlike the halos and the gizmo:
+        the desktop's fog is global GL state that its `glDisable(GL_LIGHTING)`
+        does not touch, so a desktop interior fogs too. Unlit is about
+        BRIGHTNESS, not about opting out of the scene.
+      - Parity: the link fixture was regenerated against the real desktop module
+        (`dump_link_matrices.py`, now 33 ids) and came back with the four new
+        rows appended and NOTHING else moved — a check on the desktop's link
+        math being untouched. The count assertion is `GEOMETRY_MAX + 1` now, so
+        a new shape on either side shows up as a missing row rather than
+        silently going unchecked.
+      - Tests mirror the desktop's `test_interior_geometry.py`: every interior
+        face's geometric normal points AT the origin; UV HANDEDNESS — "not
+        mirrored" stated without pixels — recovers ∂p/∂u × ∂p/∂v per face and
+        checks it points inward, WITH THE EXTERIOR TWINS AS THE CONTROL, which
+        is the contrast back-face culling alone cannot produce; six quads, six
+        axis normals, the full [0,1]² per face, the walls upright and floor and
+        ceiling opposed; the open tube emitting no cap geometry and the capped
+        one two; separate cached geometries for the pair (shared, the checkbox
+        would do nothing on screen); and that mirroring in place never reaches
+        the shared exterior geometry.
+      - Driven in Chrome, 28 measured checks against a scene built for it (a
+        50-unit interior sphere and video room wearing generated
+        quartile-stripe textures): from inside the sphere u increases to the
+        viewer's RIGHT (blue → yellow) where an un-mirrored one would read
+        yellow → blue, at the texture's own 0,0,255 where the exterior control
+        varies 239 → 128 across its curvature; v runs north, white overhead and
+        black underfoot; the video room's wall, ceiling AND floor all read white
+        band up, red left, blue right; from outside the shape shows its far
+        inner wall rather than vanishing; a glyph inside the room still takes
+        the click and the room itself is still pickable; the End caps row's
+        size, placement, both directions of agreement, its greyed disabled
+        state and a mixed selection leaving a plain sphere alone; O stepping
+        28 → 29 → … → 32; and the ids saving in the geometry column with no new
+        column. Console clean.
+        - Verified to FAIL: with the mirror removed, the sphere is not merely
+          reversed from the centre but COMPLETELY INVISIBLE — every ray out of
+          the centre meets exactly one wall, which back-face culling then
+          discards. Three checks went red.
+      - Known follow-ups, the desktop's own: stereoscopic 360 (top/bottom or
+        side-by-side footage) needs per-eye UV offsets and is mono-only here;
+        and the interior globe World Grid above.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -3046,6 +3172,11 @@ something to decide now).
         2026-08-17, see roadmap 6dd.**
     - ~~**Adjustable tag text size**~~ (desktop `aadae11`, 2026-08-18) —
       **shipped 2026-08-18, see roadmap 6ee.**
+    - ~~**Interior geometries**~~ (desktop `2ba3c4c`, 2026-08-24) — **shipped
+      2026-08-24, see roadmap 6gg.** Jeff wrote the hand-off spec himself
+      (`INTERIOR_GEOMETRIES_PORT.md`, committed with the port), read from this
+      app's own `src/`; it is kept only as a record of the brief, the roadmap
+      entry now carrying everything it said and the measurements besides.
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

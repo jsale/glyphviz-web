@@ -20,6 +20,7 @@
 import { PALETTE_NAMES, paletteIndexCount, setColorIndex, setPalette } from '../gv/colorPalette'
 import { stepTextureId, textureChoices } from '../gv/media'
 import type { MediaIndex } from '../gv/media'
+import { hasCaps, isInteriorCylinder, withCaps } from '../gv/interiorGeometry'
 import { shiftAxis } from '../gv/multiEdit'
 import type { VectorField } from '../gv/multiEdit'
 import type { GvNode, Vec3 } from '../gv/types'
@@ -451,6 +452,49 @@ export class Inspector {
   }
 
   /**
+   * "End caps" — the interior cylinder's two ids, presented as one checkbox
+   * (desktop `_insp_caps`). NOT a node field: capped and open ARE two geometry
+   * ids and this only swaps between them, so the choice saves, loads, cycles on
+   * O and animates through Channels like any other geometry.
+   *
+   * Enabled only on that pair, since nothing else has caps to argue about. The
+   * checkbox and the Geometry dropdown follow each other in BOTH directions —
+   * the panel is rebuilt from the nodes after every edit, so picking the open
+   * cylinder above clears the tick and ticking the box re-selects the capped id
+   * in the dropdown. (Without that, the next edit anywhere in the panel would
+   * write the dropdown's stale id back over this one.)
+   *
+   * The toggle touches only the interior cylinders in the selection — `withCaps`
+   * is a no-op for every other id — so a mixed selection cannot be quietly
+   * reshaped.
+   */
+  private capsRow(primary: GvNode): HTMLLabelElement {
+    const applies = isInteriorCylinder(primary.geometry)
+    const box = el('input', { type: 'checkbox', checked: applies && hasCaps(primary.geometry) })
+    box.disabled = !applies
+    box.addEventListener('change', () => {
+      const targets = this.nodes.filter((n) => isInteriorCylinder(n.geometry))
+      if (targets.length === 0) return
+      for (const node of targets) node.geometry = withCaps(node.geometry, box.checked)
+      this.host.onNodesEdited(this.nodes)
+    })
+    const label = el('label', {
+      className: 'ins-check',
+      title: applies
+        ? 'Close the ends of a Cylinder (Interior).\n' +
+          'Off: an open tube — a cylindrical panorama you look along, or a link\n' +
+          'you fly through.\n' +
+          'On: a closed room, the texture also covering both ends.\n' +
+          'Stored as the geometry itself, not a separate field, so it saves with\n' +
+          'the scene.'
+        : 'Only Cylinder (Interior) has end caps to turn on and off.\n' +
+          'Pick one of the two interior cylinders above to use this.',
+    })
+    label.append(box, document.createTextNode('End caps'))
+    return label
+  }
+
+  /**
    * topo_scale: how far one unit of a CHILD's translate reaches on the axes
    * this node's topology reads as a distance. A number box for an exact value,
    * a log slider to feel for one, and the two preset buttons for the values
@@ -694,6 +738,9 @@ export class Inspector {
         }),
       ),
       this.geometryRow(primary),
+      // Directly under Geometry, the desktop's own placement — it names one of
+      // the two ids that row is showing.
+      this.capsRow(primary),
       row(
         'topo',
         this.idSelect(TOPO_NAMES, primary.topo, (n, v) => (n.topo = v), {

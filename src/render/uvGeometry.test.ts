@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
-import { applyPerFaceUV, fitPlanarUV, zPinGeometry, zSphereGeometry, zTubeGeometry } from './uvGeometry'
+import {
+  applyPerFaceUV,
+  fitPlanarUV,
+  mirroredGeometry,
+  zCubeInteriorGeometry,
+  zPinGeometry,
+  zSphereGeometry,
+  zTubeGeometry,
+} from './uvGeometry'
 import { PIN_HEIGHT, PIN_RADIUS, createGlyphObject } from './glyphGeometry'
 import { topoOffset } from './topology'
 import { Geometry, Topo } from '../gv/types'
@@ -355,6 +363,219 @@ describe('zPinGeometry', () => {
   })
 })
 
+// --- Interior geometries -----------------------------------------------------
+
+/**
+ * Walk a geometry's triangles, handing each one its three positions and UVs.
+ * Skips degenerate faces (the pole fans of a sphere).
+ */
+function eachTriangle(
+  geo: THREE.BufferGeometry,
+  visit: (p: THREE.Vector3[], uv: THREE.Vector2[]) => void,
+): number {
+  const pos = geo.getAttribute('position')
+  const uvAttr = geo.getAttribute('uv') as THREE.BufferAttribute
+  const index = geo.getIndex()
+  const count = index ? index.count : pos.count
+  let visited = 0
+  for (let t = 0; t < count; t += 3) {
+    const ids = index
+      ? [index.getX(t), index.getX(t + 1), index.getX(t + 2)]
+      : [t, t + 1, t + 2]
+    const p = ids.map((i) => new THREE.Vector3().fromBufferAttribute(pos, i))
+    const e1 = p[1].clone().sub(p[0])
+    const e2 = p[2].clone().sub(p[0])
+    if (e1.clone().cross(e2).lengthSq() < 1e-18) continue
+    const uv = ids.map((i) => new THREE.Vector2().fromBufferAttribute(uvAttr, i))
+    visited++
+    visit(p, uv)
+  }
+  return visited
+}
+
+/** Reference "outward" at a triangle: away from the origin, every glyph being
+ *  built centred on it. Deliberately geometric rather than the emitted vertex
+ *  normals, which the mirror leaves pointing outward on a sphere and the cube
+ *  builder writes pointing inward — the two would disagree. */
+function centroid(p: THREE.Vector3[]): THREE.Vector3 {
+  return p[0].clone().add(p[1]).add(p[2]).divideScalar(3)
+}
+
+/** Fraction of faces whose GEOMETRIC normal points at the origin — i.e. whose
+ *  winding survives FrontSide culling only when seen from inside. */
+function inwardWoundFraction(geo: THREE.BufferGeometry): number {
+  let inward = 0
+  const counted = eachTriangle(geo, (p) => {
+    const face = p[1].clone().sub(p[0]).cross(p[2].clone().sub(p[0]))
+    if (face.dot(centroid(p)) < 0) inward++
+  })
+  return counted === 0 ? 0 : inward / counted
+}
+
+/**
+ * Fraction of faces whose TEXTURE reads forwards from inside — "not mirrored"
+ * stated without pixels.
+ *
+ * The u and v directions on the surface are recovered from the UVs
+ * (T = ∂p/∂u, B = ∂p/∂v); T × B then points along the side the image reads
+ * correctly from. Pointing at the origin means a viewer inside sees u to their
+ * right and v upward, which is the whole feature — merely dropping back-face
+ * culling would leave this pointing the other way and play every video
+ * backwards.
+ */
+function inwardReadingFraction(geo: THREE.BufferGeometry): number {
+  let inward = 0
+  const counted = eachTriangle(geo, (p, uv) => {
+    const e1 = p[1].clone().sub(p[0])
+    const e2 = p[2].clone().sub(p[0])
+    const d1 = uv[1].clone().sub(uv[0])
+    const d2 = uv[2].clone().sub(uv[0])
+    const det = d1.x * d2.y - d2.x * d1.y
+    if (Math.abs(det) < 1e-12) return // a face whose UVs collapse says nothing
+    const tangent = e1.clone().multiplyScalar(d2.y).addScaledVector(e2, -d1.y).divideScalar(det)
+    const bitangent = e2.clone().multiplyScalar(d1.x).addScaledVector(e1, -d2.x).divideScalar(det)
+    if (tangent.cross(bitangent).dot(centroid(p)) < 0) inward++
+  })
+  return counted === 0 ? 0 : inward / counted
+}
+
+describe('interior geometries', () => {
+  const interiors: [string, THREE.BufferGeometry][] = [
+    ['cube', zCubeInteriorGeometry(1 / Math.sqrt(3))],
+    ['sphere', mirroredGeometry(zSphereGeometry(1, 32, 16))],
+    ['cylinder', mirroredGeometry(zTubeGeometry(1, 1, 2, { slices: 32, capBottom: true, capTop: true }))],
+    ['open cylinder', mirroredGeometry(zTubeGeometry(1, 1, 2, { slices: 32 }))],
+  ]
+
+  for (const [name, geo] of interiors) {
+    it(`${name}: every face's normal points at the origin`, () => {
+      expect(inwardWoundFraction(geo)).toBe(1)
+    })
+
+    it(`${name}: every face's texture reads forwards from inside`, () => {
+      expect(inwardReadingFraction(geo)).toBe(1)
+    })
+  }
+
+  // The control on both checks: the exterior twins come out the other way
+  // round. Without this the assertions above could be satisfied by a test that
+  // simply had its sign backwards — and the UV one is the contrast that
+  // back-face culling alone cannot produce.
+  it('the exterior twins score the opposite on both checks', () => {
+    const exteriors = [
+      new THREE.BoxGeometry(2 / Math.sqrt(3), 2 / Math.sqrt(3), 2 / Math.sqrt(3)),
+      zSphereGeometry(1, 32, 16),
+      zTubeGeometry(1, 1, 2, { slices: 32, capBottom: true, capTop: true }),
+    ]
+    for (const geo of exteriors) {
+      expect(inwardWoundFraction(geo)).toBe(0)
+      expect(inwardReadingFraction(geo)).toBe(0)
+    }
+  })
+
+  it('mirrors through x = 0 and leaves the shape’s extent alone', () => {
+    const geo = mirroredGeometry(zSphereGeometry(1, 8, 4))
+    geo.computeBoundingBox()
+    const box = geo.boundingBox!
+    expect(box.min.x).toBeCloseTo(-1, 6)
+    expect(box.max.x).toBeCloseTo(1, 6)
+    // Normals survive the reflection still pointing OUTWARD — which is why
+    // interiors draw unlit rather than being lit off flipped normals.
+    const pos = geo.getAttribute('position')
+    const normal = geo.getAttribute('normal')
+    for (let i = 0; i < pos.count; i++) {
+      const p = new THREE.Vector3().fromBufferAttribute(pos, i)
+      if (p.lengthSq() < 1e-12) continue
+      const n = new THREE.Vector3().fromBufferAttribute(normal, i)
+      expect(n.dot(p)).toBeGreaterThan(0)
+    }
+  })
+
+  describe('the cube, which cannot be built by mirroring', () => {
+    const cube = zCubeInteriorGeometry(1 / Math.sqrt(3))
+
+    it('is six quads', () => {
+      expect(cube.getIndex()!.count).toBe(6 * 6) // six faces, two triangles each
+      expect(cube.getAttribute('position').count).toBe(6 * 4)
+    })
+
+    it('faces the six axis directions, inward', () => {
+      const normal = cube.getAttribute('normal')
+      const seen = new Set<string>()
+      for (let i = 0; i < normal.count; i++) {
+        const n = [normal.getX(i), normal.getY(i), normal.getZ(i)]
+        expect(Math.abs(n[0]) + Math.abs(n[1]) + Math.abs(n[2])).toBeCloseTo(1, 6)
+        seen.add(n.join(','))
+      }
+      expect(seen.size).toBe(6)
+    })
+
+    it('maps the whole texture onto every face', () => {
+      const uv = cube.getAttribute('uv')
+      for (let face = 0; face < 6; face++) {
+        const corners = new Set<string>()
+        for (let k = 0; k < 4; k++) {
+          const i = face * 4 + k
+          corners.add(`${uv.getX(i)},${uv.getY(i)}`)
+        }
+        expect(corners).toEqual(new Set(['0,0', '1,0', '1,1', '0,1']))
+      }
+    })
+
+    /**
+     * The walls stand upright and the floor and ceiling take OPPOSITE y — the
+     * one asymmetry in the face table, and not a typo. A face has an intrinsic
+     * up only if it is a wall; for the two horizontal faces "upright" is
+     * whatever the camera says, and the two cameras that look at them disagree
+     * — an orbit camera looking down has screen-up pointing away from its
+     * azimuth and one looking up has it pointing along. Same y on both would
+     * leave one of the two 180° round from the other; which of the two takes
+     * +Y was measured on the desktop against a real render and is ported
+     * verbatim.
+     */
+    it('stands the walls upright and opposes the floor and the ceiling', () => {
+      const uv = cube.getAttribute('uv')
+      const pos = cube.getAttribute('position')
+      const vDirection = (face: number) => {
+        // p00 → p01 is the +v edge (the UV table's own corner order).
+        expect([uv.getX(face * 4), uv.getY(face * 4)]).toEqual([0, 0])
+        expect([uv.getX(face * 4 + 3), uv.getY(face * 4 + 3)]).toEqual([0, 1])
+        const a = new THREE.Vector3().fromBufferAttribute(pos, face * 4)
+        const b = new THREE.Vector3().fromBufferAttribute(pos, face * 4 + 3)
+        return b.sub(a).normalize()
+      }
+      // Faces 0–3 are the walls: v runs up the world.
+      for (const face of [0, 1, 2, 3]) {
+        expect(vDirection(face).toArray().map(Math.round)).toEqual([0, 0, 1])
+      }
+      // Ceiling then floor, opposed.
+      expect(vDirection(4).toArray().map(Math.round)).toEqual([0, 1, 0])
+      expect(vDirection(5).toArray().map(Math.round)).toEqual([0, -1, 0])
+    })
+
+    it('occupies the same corners as the exterior cube', () => {
+      const half = 1 / Math.sqrt(3)
+      cube.computeBoundingBox()
+      const box = cube.boundingBox!
+      for (const axis of ['x', 'y', 'z'] as const) {
+        expect(box.min[axis]).toBeCloseTo(-half, 6)
+        expect(box.max[axis]).toBeCloseTo(half, 6)
+      }
+    })
+  })
+
+  it('the open cylinder emits no cap geometry, and the capped one two', () => {
+    const slices = 32
+    const side = 2 * (slices + 1)
+    const open = zTubeGeometry(1, 1, 2, { slices })
+    const capped = zTubeGeometry(1, 1, 2, { slices, capBottom: true, capTop: true })
+    expect(open.getAttribute('position').count).toBe(side)
+    // Each cap is a centre vertex plus a closed ring.
+    expect(capped.getAttribute('position').count).toBe(side + 2 * (slices + 2))
+    expect(capped.getIndex()!.count - open.getIndex()!.count).toBe(2 * slices * 3)
+  })
+})
+
 describe('applyPerFaceUV', () => {
   it('gives each triangular face the whole image', () => {
     const tetra = applyPerFaceUV(new THREE.TetrahedronGeometry(1))
@@ -439,6 +660,12 @@ describe('every textured glyph carries usable UVs', () => {
     Geometry.Star,
     Geometry.TorusSolid,
     Geometry.PinSolid,
+    // The interior shapes exist to carry an image, so their UVs matter more
+    // here than anywhere else.
+    Geometry.CubeInterior,
+    Geometry.SphereInterior,
+    Geometry.CylinderInterior,
+    Geometry.CylinderInteriorOpen,
   ]
 
   const style = { color: new THREE.Color(1, 1, 1), opacity: 1, ratio: 0.1 }

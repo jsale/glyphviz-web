@@ -6,8 +6,17 @@
 // the desktop's glDisable(GL_LIGHTING) for those paths.
 
 import * as THREE from 'three'
+import { isInteriorGeometry } from '../gv/interiorGeometry'
 import { Geometry } from '../gv/types'
-import { applyPerFaceUV, fitPlanarUV, zPinGeometry, zSphereGeometry, zTubeGeometry } from './uvGeometry'
+import {
+  applyPerFaceUV,
+  fitPlanarUV,
+  mirroredGeometry,
+  zCubeInteriorGeometry,
+  zPinGeometry,
+  zSphereGeometry,
+  zTubeGeometry,
+} from './uvGeometry'
 
 // Desktop proportion constants (glyphviz_core/geometry_data.py).
 export const GRID_HALF_EXTENT = 1 / Math.SQRT2 // square corners reach radius 1
@@ -140,6 +149,29 @@ const SOLID_BUILDERS: Record<number, GeoBuilder> = {
   // four times; refit them to the outline's bounding box.
   [Geometry.Cross]: () => fitPlanarUV(new THREE.ShapeGeometry(crossShape())),
   [Geometry.Star]: () => fitPlanarUV(new THREE.ShapeGeometry(starShape())),
+  // Interior variants — the same shapes seen from within (see
+  // gv/interiorGeometry.ts and uvGeometry's mirroredGeometry). The sphere and
+  // both cylinders reuse the exterior builders and are mirrored; the cube
+  // cannot be (one reflection leaves two of its six faces backwards), so it is
+  // built face by face. Each occupies the same corners as its exterior twin, so
+  // scale, links and halos all behave identically.
+  [Geometry.CubeInterior]: () => zCubeInteriorGeometry(CUBE_HALF),
+  [Geometry.SphereInterior]: () => mirroredGeometry(zSphereGeometry(1, 32, 16)),
+  [Geometry.CylinderInterior]: () =>
+    mirroredGeometry(
+      zTubeGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, {
+        slices: 32,
+        capBottom: true,
+        capTop: true,
+      }),
+    ),
+  // The open tube: the caps question was already parameterised, so "no caps" is
+  // simply both flags off. It is meaningful only on an interior shape — from
+  // outside, an open tube just shows you its far inner wall through the hole.
+  [Geometry.CylinderInteriorOpen]: () =>
+    mirroredGeometry(
+      zTubeGeometry(CYLINDER_RADIUS, CYLINDER_RADIUS, CYLINDER_HEIGHT, { slices: 32 }),
+    ),
 }
 
 // Flat markers and the plate render double-sided on the desktop.
@@ -256,15 +288,42 @@ export function clearMaterialCache(): void {
   materialCache.clear()
 }
 
-function solidMaterial(style: GlyphStyle, doubleSided: boolean): THREE.Material {
-  return cachedMaterial(styleKey(style, 'solid', doubleSided ? 'ds' : 'fs'), () =>
-    new THREE.MeshLambertMaterial({
-      color: style.color,
-      map: style.map,
-      transparent: style.opacity < 1,
-      opacity: style.opacity,
-      side: doubleSided ? THREE.DoubleSide : THREE.FrontSide,
-    }),
+/**
+ * Solid glyph material.
+ *
+ * `unlit` builds a MeshBasicMaterial instead of the lit MeshLambertMaterial —
+ * the interior shapes, which exist to carry an image and must carry it at full
+ * brightness. It is the same call worldGridGeometry.ts already makes for a map,
+ * and the desktop's `_unlit` wrapper for exactly these ids.
+ *
+ * Lighting an interior would be worse than dim, not merely different. The
+ * mirror leaves normals pointing OUTWARD (uvGeometry's mirroredGeometry), so a
+ * lit interior sphere renders at the ambient terms alone — the desktop measured
+ * a white one at 0.505 grey — and flipping the normals to fix that would light
+ * it with a key light bolted to the camera (lighting.ts), giving a video a
+ * bright patch that slides across it as the viewer turns. In VR that would be
+ * very unpleasant.
+ *
+ * Interiors stay SINGLE-SIDED: one fragment per pixel, and alpha on a
+ * translucent node keeps behaving. `doubleSided` must never be passed for them.
+ */
+function solidMaterial(
+  style: GlyphStyle,
+  doubleSided: boolean,
+  unlit = false,
+): THREE.Material {
+  const params = {
+    color: style.color,
+    map: style.map,
+    transparent: style.opacity < 1,
+    opacity: style.opacity,
+    side: doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+  }
+  return cachedMaterial(
+    // The lit and unlit variants must not collide in the cache: they can share
+    // every other key component and are different material classes.
+    styleKey(style, 'solid', `${doubleSided ? 'ds' : 'fs'}${unlit ? '|unlit' : ''}`),
+    () => (unlit ? new THREE.MeshBasicMaterial(params) : new THREE.MeshLambertMaterial(params)),
   )
 }
 
@@ -343,7 +402,10 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
   const solidBuilder = SOLID_BUILDERS[geometryId]
   if (solidBuilder) {
     const geo = cached(solidCache, String(geometryId), solidBuilder)
-    return new THREE.Mesh(geo, solidMaterial(style, DOUBLE_SIDED.has(geometryId)))
+    return new THREE.Mesh(
+      geo,
+      solidMaterial(style, DOUBLE_SIDED.has(geometryId), isInteriorGeometry(geometryId)),
+    )
   }
 
   return null
@@ -372,6 +434,20 @@ export const WIRE_TO_SOLID: Record<number, number> = {
 
 // Double-sided so flat markers (and rays exiting solids) always hit.
 const PICK_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide })
+
+/**
+ * Pick material for the interior shapes, which are the one case where the
+ * two-sided default would be wrong rather than merely generous.
+ *
+ * The desktop invariant is "the pick pass draws what the visible pass draws",
+ * and its colour-ID pass inherits the interior's culling — so from outside you
+ * pick the FAR inner wall, exactly the wall you can see. Left double-sided
+ * here, the ray would instead stop on the near wall you cannot see, and a video
+ * room would swallow every click meant for the scene standing inside it.
+ * FrontSide restores the desktop's ordering: whatever is inside the room is
+ * nearer than its far wall, so it wins the click.
+ */
+const INTERIOR_PICK_MATERIAL = new THREE.MeshBasicMaterial({ side: THREE.FrontSide })
 
 /** Unit-space hit radius for Point glyphs (their sprite size is pixel-based). */
 const POINT_PICK_RADIUS = 0.15
@@ -406,7 +482,10 @@ export function createPickProxy(
   } else {
     const builder = SOLID_BUILDERS[solidId]
     if (!builder) return null
-    proxy = new THREE.Mesh(cached(solidCache, String(solidId), builder), PICK_MATERIAL)
+    proxy = new THREE.Mesh(
+      cached(solidCache, String(solidId), builder),
+      isInteriorGeometry(solidId) ? INTERIOR_PICK_MATERIAL : PICK_MATERIAL,
+    )
   }
 
   proxy.visible = false

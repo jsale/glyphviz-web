@@ -20,6 +20,7 @@ import {
   localZSpan,
   type Point3,
 } from './linkGeometry'
+import { GEOMETRY_MAX } from '../gv/types'
 import fixtureRaw from './fixtures/link_matrices.json?raw'
 
 interface MatrixCase {
@@ -81,7 +82,12 @@ describe('link glyph matrix parity with desktop GlyphViz', () => {
   }
 
   it('agrees on which geometries stay line-drawn, and on every z span', () => {
-    expect(fixture.geometries.length).toBe(29)
+    // Every id the desktop has (its GEO_COUNT, which is GEOMETRY_MAX + 1 here)
+    // — so a new shape on either side shows up as a missing row rather than
+    // silently going unchecked. The interior shapes span −1..1 like every
+    // other glyph, so they take the shared default span and a link carrying an
+    // open interior cylinder is a tube you can fly down.
+    expect(fixture.geometries.length).toBe(GEOMETRY_MAX + 1)
     for (const entry of fixture.geometries) {
       expect(isGlyphLink(entry.geometry), `is_glyph_link(${entry.geometry})`).toBe(
         entry.is_glyph_link,

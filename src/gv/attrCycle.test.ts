@@ -63,13 +63,23 @@ describe('cycleGeometry', () => {
     expect(back.geometry).toBe(Geometry.Point)
   })
 
-  it('steps a regular glyph over the link-only ids and wraps past them', () => {
-    // 26 Star → 27 Line and 28 Prism are link-only → wraps to 0 Cube Wire.
+  it('steps a regular glyph over the link-only ids', () => {
+    // 26 Star → 27 Line and 28 Prism are link-only → 29 Cube (Interior).
     const n = node({ geometry: Geometry.Star })
+    cycleGeometry([n], 1)
+    expect(n.geometry).toBe(Geometry.CubeInterior)
+    cycleGeometry([n], -1)
+    expect(n.geometry).toBe(Geometry.Star)
+  })
+
+  // The interior shapes are ordinary geometry ids, so they are in the cycle on
+  // both sides — the last of them is what wraps back to 0.
+  it('wraps off the end of the interior shapes', () => {
+    const n = node({ geometry: Geometry.CylinderInteriorOpen })
     cycleGeometry([n], 1)
     expect(n.geometry).toBe(Geometry.CubeWire)
     cycleGeometry([n], -1)
-    expect(n.geometry).toBe(Geometry.Star)
+    expect(n.geometry).toBe(Geometry.CylinderInteriorOpen)
   })
 
   // A Link used to toggle between the two line modes, which was its whole
@@ -80,7 +90,7 @@ describe('cycleGeometry', () => {
     cycleGeometry([link], 1)
     expect(link.geometry).toBe(Geometry.TexturedPrism)
     cycleGeometry([link], 1)
-    expect(link.geometry).toBe(Geometry.CubeWire) // 28 wraps to 0
+    expect(link.geometry).toBe(Geometry.CubeInterior) // 28 → 29
     cycleGeometry([link], -1)
     expect(link.geometry).toBe(Geometry.TexturedPrism)
   })

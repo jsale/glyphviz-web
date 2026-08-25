@@ -94,9 +94,16 @@ interface AppearanceEntry {
   frame: THREE.Object3D
   /** Private clones of this glyph's materials. */
   materials: THREE.Material[]
-  /** Materials that carry a map — only solid meshes are ever textured. */
-  mapped: THREE.MeshLambertMaterial[]
+  /**
+   * Materials that carry a map — only solid meshes are ever textured. Basic as
+   * well as Lambert, since the interior shapes draw unlit (glyphGeometry.ts)
+   * and a 360° video is exactly the case a channel-animated texture_id serves.
+   */
+  mapped: MappedMaterial[]
 }
+
+/** A solid glyph material with a `map` slot, lit or unlit. */
+type MappedMaterial = THREE.MeshLambertMaterial | THREE.MeshBasicMaterial
 
 interface ScaleEntry {
   node: GvNode
@@ -405,7 +412,7 @@ function privatiseMaterials(node: GvNode, frame: THREE.Object3D): AppearanceEntr
   if (!glyph) return null
 
   const materials: THREE.Material[] = []
-  const mapped: THREE.MeshLambertMaterial[] = []
+  const mapped: MappedMaterial[] = []
   glyph.traverse((object) => {
     if (object.userData.isPickProxy) return
     const drawable = object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }
@@ -414,7 +421,9 @@ function privatiseMaterials(node: GvNode, frame: THREE.Object3D): AppearanceEntr
     const clone = material.clone()
     drawable.material = clone
     materials.push(clone)
-    if (clone instanceof THREE.MeshLambertMaterial) mapped.push(clone)
+    if (clone instanceof THREE.MeshLambertMaterial || clone instanceof THREE.MeshBasicMaterial) {
+      mapped.push(clone)
+    }
   })
   if (materials.length === 0) return null
 
