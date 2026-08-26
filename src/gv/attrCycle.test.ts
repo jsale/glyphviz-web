@@ -72,14 +72,19 @@ describe('cycleGeometry', () => {
     expect(n.geometry).toBe(Geometry.Star)
   })
 
-  // The interior shapes are ordinary geometry ids, so they are in the cycle on
-  // both sides — the last of them is what wraps back to 0.
-  it('wraps off the end of the interior shapes', () => {
+  // The interior shapes and the flat ring pair are ordinary geometry ids, so
+  // they are in the cycle on both sides — the LAST id is what wraps back to 0,
+  // which is the ring wire since desktop 721b827.
+  it('wraps off the end of the range', () => {
     const n = node({ geometry: Geometry.CylinderInteriorOpen })
+    cycleGeometry([n], 1)
+    expect(n.geometry).toBe(Geometry.Ring)
+    cycleGeometry([n], 1)
+    expect(n.geometry).toBe(Geometry.RingWire)
     cycleGeometry([n], 1)
     expect(n.geometry).toBe(Geometry.CubeWire)
     cycleGeometry([n], -1)
-    expect(n.geometry).toBe(Geometry.CylinderInteriorOpen)
+    expect(n.geometry).toBe(Geometry.RingWire)
   })
 
   // A Link used to toggle between the two line modes, which was its whole

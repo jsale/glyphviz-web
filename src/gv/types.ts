@@ -177,14 +177,30 @@ export const Geometry = {
   SphereInterior: 30,
   CylinderInterior: 31,
   CylinderInteriorOpen: 32,
+  /**
+   * GlyphViz extension (no ANTz/GaiaViz equivalent), desktop 721b827: a torus
+   * whose cross-section is a RECTANGLE rather than a circle — a flat machined
+   * band, the kind of ring an armillary sphere, an astrolabe or a graduated
+   * dial is built from. Four real faces with crisp edges, where a torus reads
+   * as soft tubing with its highlight sliding round the tube; and only a flat
+   * face holds a legible texture (degree markings, a zodiac strip, a scale).
+   *
+   * Its two proportions come from fields that already exist, so there is no new
+   * column and every existing control works on it unchanged: `ratio` is the
+   * band's RADIAL width and `scale_z` its height. See `ringDims` in
+   * src/render/glyphGeometry.ts for why that is the torus's own meaning of
+   * `ratio` rather than a second one.
+   */
+  Ring: 33,
+  RingWire: 34,
 } as const
 
 /**
  * Highest valid geometry id. NOTE the desktop counts the other way — its
- * `GEO_COUNT` is the COUNT (33), this is the MAX (32) — so the two numbers
+ * `GEO_COUNT` is the COUNT (35), this is the MAX (34) — so the two numbers
  * never match and neither is wrong.
  */
-export const GEOMETRY_MAX = 32
+export const GEOMETRY_MAX = 34
 
 // Display names matching the desktop app's NODE_TYPE/TOPO/GEO name tables.
 export const NODE_TYPE_NAMES: Record<number, string> = {
@@ -250,6 +266,8 @@ export const GEOMETRY_NAMES: Record<number, string> = {
   [Geometry.SphereInterior]: 'Sphere (Interior)',
   [Geometry.CylinderInterior]: 'Cylinder (Interior)',
   [Geometry.CylinderInteriorOpen]: 'Cylinder (Interior, Open)',
+  [Geometry.Ring]: 'Flat Ring',
+  [Geometry.RingWire]: 'Flat Ring Wire',
 }
 
 /**

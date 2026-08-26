@@ -890,9 +890,10 @@ something to decide now).
         root survives the rebake); the pinned-label list re-derived per frame
         for the bound few (`refreshAnimatedPinnedTags` — three checks a
         frame, not 209k); and the torus geometry cache quantized to 1% ratio
-        steps (`quantizedTorusRatio`, Python rounding — the desktop's own
-        `ensure_torus_list` fix), bounding a swept ratio at ~50 entries where
-        it leaked one geometry per distinct float.
+        steps (`quantizedShapeRatio`, then named `quantizedTorusRatio` —
+        Python rounding, the desktop's own `ensure_ratio_list` fix), bounding
+        a swept ratio at ~50 entries where it leaked one geometry per distinct
+        float.
       - `roundHalfToEven` moved to `src/gv/pythonRound.ts`: channels ↔
         colorPalette became an ESM cycle, which the browser rejects with a
         TDZ ReferenceError while vitest's bundling tolerates it — the app
@@ -2083,6 +2084,118 @@ something to decide now).
         and the interior globe World Grid above. With mono confirmed in the
         headset, STEREOSCOPIC 360 is now the obvious next step for this feature
         — the desktop names it as such too. Do not start it unprompted.
+   hh. Flat Ring (shipped 2026-08-26, Jeff's request — a port of desktop
+      `721b827`, so that its companion example, the **Armillary World**
+      (`9d26323`, 991 nodes built out of rings), can be walked around in VR):
+      **two new geometry ids that draw a torus with a RECTANGULAR
+      cross-section** — Flat Ring 33 and Flat Ring Wire 34; `GEOMETRY_MAX`
+      32 → 34. (The desktop counts the other way — its `GEO_COUNT` is 35 — so
+      the two numbers never match and neither is wrong.)
+      - WHY IT IS A SHAPE and not a squashed torus: four real faces, each with
+        its own constant normal and its own corner vertices, so the edges stay
+        CRISP where a torus shades smoothly round its tube and slides its
+        highlight along it. That is the difference between soft tubing and a
+        machined band, which is what an armillary, an astrolabe or a graduated
+        dial is made of — and only a flat face holds a legible texture.
+      - The two proportions come from fields that ALREADY EXIST, so there is no
+        new column and every existing control — the panel row, the gizmo, the
+        Channels binding, the CSV writer — works on it unchanged: `ratio` is the
+        band's RADIAL width, `scale_z` its height.
+        - `ratio` reading as a radial width is not a second meaning for the
+          field, it is the one it already had. `torusRadii` puts a tube between
+          radius 1 − 2·ratio and 1 spanning z ±ratio — a torus's cross-section
+          is ALREADY a square with rounded corners — and `ringDims`
+          (glyphGeometry.ts, the desktop's `ring_dims`) restates those same
+          extents as a box. So Torus ↔ Flat Ring is a pure change of LOOK: same
+          silhouette, same bounding extents, and `topoOffset` places a
+          Torus-topology parent's children identically whichever the parent
+          wears. Measured live: a Torus and a Ring at ratio 0.14 and scale 4
+          both span 2.88–4 radially × ±0.56 in z.
+        - The alternative — `ratio` as a height:width ratio plus a new column
+          for the width — was rejected on the desktop for three reasons that
+          hold here too, one of them platform-specific: height would need a
+          column, a row, a gizmo and a binding that `scale_z` already has; the
+          per-ratio geometry cache stays ONE-dimensional, since height rides on
+          the node's scale outside the built geometry, where a second shape
+          parameter could mint ten thousand geometries on a Channels sweep and
+          nothing here ever evicts one; and an existing scene can swap the id
+          without moving anything. The cost is that local half-height is
+          `ratio`, so a thin band needs a large `scale_z` to stand tall.
+          Measured on a purpose-built scene: ratio 0.02 at scale_z 20 is a 5:1
+          upright hoop and ratio 0.4 at scale_z 0.4 a 10:1 flat dial, out of the
+          same field pair.
+      - TEXTURES are the point of the flat faces, and the rule is that EVERY
+        face carries a full 0–1 UV span of its OWN — v does not walk the
+        cross-section perimeter the way the torus's mapping does. So one
+        undistorted copy of a marking strip lands on the outer wall and another
+        on the dial face, and the aspect decides which one the viewer reads; a
+        perimeter-walking v would smear one image across all four faces and
+        break it at every corner. Each face's u runs in the direction that reads
+        FORWARDS from that face's natural viewing side — decreasing angle on the
+        inner wall, seen from within the hole, and on the underside.
+        Equivalently (∂p/∂u × ∂p/∂v) points along the face normal on all four,
+        which is the same handedness contract the interior geometries carry
+        (6gg) and pinned the same way, with the reversal verified to FAIL.
+      - `zRingGeometry` / `zRingWireGeometry` live in `uvGeometry.ts` with the
+        other hand-built primitives, taking their dimensions as ARGUMENTS rather
+        than importing `ringDims` — the split zPinGeometry already makes, and
+        what keeps the two modules acyclic. `RATIO_SHAPED_GEOMETRIES` (the
+        desktop's own set) is what routes both ids to the per-ratio cache, read
+        by the glyph factory and by `dynamicNodes`' shape key rather than named
+        twice; `quantizedTorusRatio` became `quantizedShapeRatio` with it,
+        mirroring the desktop's `ensure_torus_list` → `ensure_ratio_list`.
+      - DIVERGENCE, and the one place this leaves the app's own convention:
+        the wire ring is TRACED (four edge circles + 12 cross-section rungs, the
+        desktop's own `_draw_ring(solid=False)`) where every other wire glyph
+        here is a `WireframeGeometry` of its solid. That reading IS the shape: a
+        WireframeGeometry of a 48-station band is 400-odd edges of cross-hatch
+        that close into a solid mat at any distance, the opposite of an
+        instrument hoop. Drift is not the hazard it is for the pin (6aa) either,
+        since both forms are swept from the same `ringDims` rectangle.
+      - The PICK PROXY is per-ratio, unlike the torus's fixed one. The ring is
+        the shape whose `ratio` decides how much of its own footprint is solid
+        at all — a rail is a band 4% of its radius wide, a graduated dial is most
+        of a disc — so a fixed proxy would let clicks through the middle of a
+        wide dial and catch clicks aimed through a thin hoop's hole. It costs
+        nothing: at the same quantized ratio it IS the geometry the glyph draws,
+        which is why `createPickProxy` grew a `ratio` argument rather than a
+        second cache.
+      - Nothing else needed changing, and each is worth recording as a
+        non-change: O/Shift+O picks the pair up from `GEOMETRY_MAX` on both
+        sides (33 → 34 → wrap, driven); every geometry menu and the VR Shape
+        page build from `GEOMETRY_NAMES`; a Channels-bound `geometry` clamps to
+        the new max; and links carry them unchanged — the regenerated
+        `link_matrices.json` came back with the two new rows appended and
+        NOTHING else moved, which is a check on the desktop's link math being
+        untouched.
+      - The desktop's one GUI change came with it: the inspector's `ratio` row
+        gained that app's own tooltip, which is where the Flat Ring's reading of
+        the field is explained beside the four other things it means.
+      - Parity: `tools/dump_ring_geometry.py` runs the REAL desktop `_draw_ring`
+        with the GL entry points swapped for recorders — the trick
+        `dump_topology_overlays.py` already uses — over seven ratios including
+        both sides of the hole closing, and `ringGeometry.parity.test.ts` diffs
+        the position, normal AND texture coordinate of every emitted vertex in
+        order, plus the wire loops and `ringDims` against `torusRadii`. The web
+        emits in the desktop's own per-face, per-station order so the flat
+        arrays compare element for element; the builder's DEFAULT tessellation
+        is pinned separately, since a periodic shape that agrees at 8 stations
+        agrees at any count and could otherwise silently draw a 12-sided band.
+        Verified to FAIL against a flipped inner-wall u (5 cases) and against a
+        reversed winding.
+      - Driven in Chrome, 20 measured checks over two scenes: the real
+        Armillary World's 991 rows load with all 40 rings and 26 wire rings
+        drawn, 17 cached shapes between them, each spanning radius 1 and ±its
+        own quantized ratio, 11 wearing their textures, and a click on a band
+        selecting a ring; then a purpose-built five-ring scene measuring the
+        square cross-section, the rail, the dial, the hoop, the wire ring's
+        240 segments and the Torus-extents equivalence above. Console clean.
+        - The PICTURE is what settles this one, as it did for 6gg: the zodiac
+          ring's flat face reads CAPRICORN 270 deg, AQUARIUS 300 deg, TAURUS
+          30 deg the right way round and undistorted, the horizon dial's
+          azimuth numerals and tick marks with them — which is a mirrored UV,
+          a smeared one and a broken corner all ruled out at once, in the way
+          the feature actually gets used.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -3185,6 +3298,16 @@ something to decide now).
       (`INTERIOR_GEOMETRIES_PORT.md`, committed with the port), read from this
       app's own `src/`; it is kept only as a record of the brief, the roadmap
       entry now carrying everything it said and the measurements besides.
+    - ~~**Flat Ring**~~ (desktop `721b827`, 2026-08-26) — **shipped 2026-08-26,
+      see roadmap 6hh.** Its companion example, the **Armillary World**
+      (`9d26323`), is the scene Jeff asked for it for and it opens here as a
+      folder or a zip; it is NOT vendored as a built-in, since the built-in
+      scenes are CSV-only and this one is 991 nodes plus eleven textures.
+      Worth reading its README even so — three authoring rules generalise past
+      it (a ring that carries children must be scaled UNIFORMLY, since children
+      inherit a parent's per-axis scale; a ring's texture must be built at the
+      RING's aspect, which for a thin hoop is 150:1; and tilting a ring takes
+      two Euler angles, not one).
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

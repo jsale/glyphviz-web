@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import * as THREE from 'three'
+import { INTERIOR_GEOMETRIES } from '../gv/interiorGeometry'
 import { Geometry } from '../gv/types'
-import { WIRE_TO_SOLID, createGlyphObject, createPickProxy, quantizedTorusRatio } from './glyphGeometry'
+import { WIRE_TO_SOLID, createGlyphObject, createPickProxy, quantizedShapeRatio } from './glyphGeometry'
 
-describe('quantizedTorusRatio', () => {
+describe('quantizedShapeRatio', () => {
   it('quantizes to 1% steps with Python rounding, the desktop cache bound', () => {
-    expect(quantizedTorusRatio(0.14)).toBeCloseTo(0.14, 12) // the default, untouched
-    expect(quantizedTorusRatio(0.1234)).toBeCloseTo(0.12, 12)
-    expect(quantizedTorusRatio(0.1299)).toBeCloseTo(0.13, 12)
+    expect(quantizedShapeRatio(0.14)).toBeCloseTo(0.14, 12) // the default, untouched
+    expect(quantizedShapeRatio(0.1234)).toBeCloseTo(0.12, 12)
+    expect(quantizedShapeRatio(0.1299)).toBeCloseTo(0.13, 12)
     // Exact halves go to the even hundredth, like Python's round(x, 2).
-    expect(quantizedTorusRatio(0.125)).toBeCloseTo(0.12, 12)
-    expect(quantizedTorusRatio(0.135)).toBeCloseTo(0.14, 12)
+    expect(quantizedShapeRatio(0.125)).toBeCloseTo(0.12, 12)
+    expect(quantizedShapeRatio(0.135)).toBeCloseTo(0.14, 12)
   })
 
   it('bounds the torus geometry cache under a swept ratio', () => {
@@ -122,8 +123,10 @@ describe('interior geometries', () => {
   })
 
   it('has no wire twin to substitute in the pick pass', () => {
+    // An interior shape has no wire form on either side: a wireframe of an
+    // inside-out shell is the same set of lines as its exterior twin's.
     for (const id of Object.values(WIRE_TO_SOLID)) {
-      expect(id).toBeLessThan(Geometry.CubeInterior)
+      expect(INTERIOR_GEOMETRIES.has(id)).toBe(false)
     }
   })
 })

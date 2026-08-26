@@ -350,7 +350,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
         applyGlyphDrawScale(glyph, node)
         glyph.name = 'glyph'
         glyph.userData.isGlyph = true
-        const proxy = createPickProxy(node.geometry, mesh)
+        const proxy = createPickProxy(node.geometry, mesh, node.ratio)
         if (proxy) glyph.add(proxy)
         frame.add(glyph)
         drawnCount++

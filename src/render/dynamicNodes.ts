@@ -37,9 +37,10 @@ import { Geometry, NodeType, Topo } from '../gv/types'
 import { gridDrawScale } from '../gv/worldGrid'
 import { applyFrameTransform, applyGlyphDrawScale } from './buildScene'
 import {
+  RATIO_SHAPED_GEOMETRIES,
   createGlyphObject,
   createPickProxy,
-  quantizedTorusRatio,
+  quantizedShapeRatio,
 } from './glyphGeometry'
 import { setNaturalTransparency } from './renderMode'
 import { createWorldGridObject } from './worldGridGeometry'
@@ -117,8 +118,9 @@ interface ShapeEntry {
   geometry: number
   topo: number
   meshId: number
-  /** ratio, keyed the way the glyph consumes it (quantized for a torus, raw
-   *  for a Point, constant otherwise) so a sweep only rebuilds on real steps. */
+  /** ratio, keyed the way the glyph consumes it (quantized for the
+   *  ratio-shaped shapes, raw for a Point, constant otherwise) so a sweep only
+   *  rebuilds on real steps. */
   ratioKey: number
 }
 
@@ -135,9 +137,7 @@ function glyphOf(frame: THREE.Object3D): THREE.Object3D | undefined {
 
 /** The ratio value this node's glyph shape is actually built from. */
 function shapeRatioKey(node: GvNode): number {
-  if (node.geometry === Geometry.TorusSolid || node.geometry === Geometry.TorusWire) {
-    return quantizedTorusRatio(node.ratio)
-  }
+  if (RATIO_SHAPED_GEOMETRIES.has(node.geometry)) return quantizedShapeRatio(node.ratio)
   if (node.geometry === Geometry.Point) return node.ratio
   return 0 // every other shape ignores ratio
 }
@@ -362,7 +362,7 @@ export class DynamicNodes {
       })
       if (glyph) {
         applyGlyphDrawScale(glyph, node)
-        const proxy = createPickProxy(node.geometry, mesh)
+        const proxy = createPickProxy(node.geometry, mesh, node.ratio)
         if (proxy) glyph.add(proxy)
       }
     }

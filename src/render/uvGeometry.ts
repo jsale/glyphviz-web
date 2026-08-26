@@ -289,6 +289,193 @@ export function zPinGeometry(
   return buildGeometry(positions, normals, uvs, indices)
 }
 
+export interface RingOptions {
+  /** Stations around the circumference (the desktop's `rings`). */
+  rings?: number
+  /** Cross-section rectangles the WIRE ring draws (the desktop's `rungs`). */
+  rungs?: number
+}
+
+/**
+ * The four faces of a flat ring, in the desktop `_draw_ring`'s own emission
+ * order. Each is a quad strip around the circumference carrying its OWN full
+ * 0–1 UV span — see zRingGeometry.
+ *
+ * `nearFirst` names which of the two cross-section corners the strip emits
+ * first at each station; the winding of every quad follows from that, and each
+ * face is arranged so its emitted winding agrees with its declared normal.
+ */
+interface RingFace {
+  /** Constant normal, or 'outward'/'inward' for the two radial walls. */
+  normal: 'outward' | 'inward' | readonly [number, number, number]
+  /** Does u increase with the station index, or decrease? */
+  uForward: boolean
+  /** (radius, z-sign, v) for the first and second vertex of each station. */
+  first: readonly [number, number, number]
+  second: readonly [number, number, number]
+}
+
+/**
+ * A torus with a RECTANGULAR cross-section — a flat machined band, the ring an
+ * armillary sphere, an astrolabe or a graduated dial is built from (desktop
+ * 721b827, `_draw_ring`).
+ *
+ * Four faces, each with its own constant normal and its own corner vertices, so
+ * the edges stay CRISP instead of shading smoothly round the way a torus tube
+ * does. That is the whole difference between soft tubing and a machined band,
+ * and it is why this is a geometry rather than a squashed torus.
+ *
+ * TEXTURE RULE, the reason the shape exists: **every face carries a full 0–1 UV
+ * span of its own**, u running once around the ring and v across the band —
+ * rather than v walking once around the cross-section perimeter, which is what
+ * a torus's mapping does. So one undistorted copy of a marking strip lands on
+ * the outer wall AND another on the dial face, and the aspect decides which one
+ * the viewer reads (wide + thin = a dial read face-on; narrow + tall = a band
+ * read from outside). A perimeter-walking v would smear one image across all
+ * four faces and break it at every corner.
+ *
+ * Each face's u runs in the direction that reads FORWARDS from that face's
+ * natural viewing side — decreasing angle on the inner wall, seen from within
+ * the hole, and on the underside. Equivalently (∂p/∂u × ∂p/∂v) points along the
+ * face normal on all four, so no face is mirrored: the same handedness contract
+ * the interior geometries carry, and for the same reason.
+ *
+ * Dimensions are passed in (`ringDims` in glyphGeometry.ts, which is the
+ * desktop's own `ring_dims`) rather than derived here, so this module stays the
+ * one that knows about UVs and windings and that one stays the one that knows
+ * about GlyphViz proportions — the split zPinGeometry already makes.
+ *
+ * At `innerRadius` 0 the hole has closed: the inner wall is skipped entirely
+ * (it would be a degenerate strip down the axis) and the annulus faces become
+ * fans, as they do on the desktop.
+ */
+export function zRingGeometry(
+  outerRadius: number,
+  innerRadius: number,
+  halfHeight: number,
+  options: RingOptions = {},
+): THREE.BufferGeometry {
+  const rings = options.rings ?? 48
+  const hasHole = innerRadius > 1e-6
+
+  const faces: RingFace[] = [
+    // Outer wall — normals point away from the axis, v runs bottom to top.
+    { normal: 'outward', uForward: true, first: [outerRadius, 1, 1], second: [outerRadius, -1, 0] },
+  ]
+  if (hasHole) {
+    // Inner wall — normals point AT the axis, so it is what you see across the
+    // hole from outside and what surrounds you standing inside a large ring.
+    faces.push({
+      normal: 'inward',
+      uForward: false,
+      first: [innerRadius, -1, 0],
+      second: [innerRadius, 1, 1],
+    })
+  }
+  // Top and bottom annulus faces — v = 0 at the outer rim on both.
+  faces.push(
+    { normal: [0, 0, 1], uForward: true, first: [innerRadius, 1, 1], second: [outerRadius, 1, 0] },
+    { normal: [0, 0, -1], uForward: false, first: [outerRadius, -1, 0], second: [innerRadius, -1, 1] },
+  )
+
+  const positions: number[] = []
+  const normals: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+
+  for (const face of faces) {
+    const base = positions.length / 3
+    for (let i = 0; i <= rings; i++) {
+      const th = (TAU * i) / rings
+      const ct = Math.cos(th)
+      const st = Math.sin(th)
+      const u = face.uForward ? i / rings : 1 - i / rings
+      for (const [radius, zSign, v] of [face.first, face.second]) {
+        positions.push(radius * ct, radius * st, zSign * halfHeight)
+        if (face.normal === 'outward') normals.push(ct, st, 0)
+        else if (face.normal === 'inward') normals.push(-ct, -st, 0)
+        else normals.push(face.normal[0], face.normal[1], face.normal[2])
+        uvs.push(u, v)
+      }
+    }
+    // GL_QUAD_STRIP's own quad from two stations: (v0, v1, v3, v2), which is
+    // the order that decides front/back facing.
+    const degenerateFirst = face.first[0] <= 1e-6
+    const degenerateSecond = face.second[0] <= 1e-6
+    for (let i = 0; i < rings; i++) {
+      const a = base + 2 * i
+      const b = a + 2
+      // A zero-radius corner collapses the whole strip to a fan: one of the two
+      // triangles is then degenerate, exactly as at a sphere's pole.
+      if (!degenerateSecond) indices.push(a, a + 1, b + 1)
+      if (!degenerateFirst) indices.push(a, b + 1, b)
+    }
+  }
+
+  return buildGeometry(positions, normals, uvs, indices)
+}
+
+/**
+ * The wire flat ring: four edge circles and a rectangle at every `rungs`th
+ * station, as line segment pairs.
+ *
+ * DIVERGENCE from this module's usual rule, deliberate. Every other wire glyph
+ * here is a `WireframeGeometry` of its own solid, so the two cannot drift apart
+ * (see zPinGeometry). The desktop's wire ring is instead a sparse, deliberate
+ * TRACING — four circles and twelve rungs — and that reading is the point of
+ * it: a WireframeGeometry of a 48-station band is 400-odd edges of cross-hatch
+ * that closes into a solid mat at any distance, which is the opposite of an
+ * instrument hoop. Drift is not the hazard it is for the pin either, since both
+ * shapes are swept from the same `ringDims` rectangle.
+ */
+export function zRingWireGeometry(
+  outerRadius: number,
+  innerRadius: number,
+  halfHeight: number,
+  options: RingOptions = {},
+): THREE.BufferGeometry {
+  const rings = options.rings ?? 48
+  const rungs = options.rungs ?? 12
+  const positions: number[] = []
+
+  const push = (r: number, th: number, z: number) => {
+    positions.push(r * Math.cos(th), r * Math.sin(th), z)
+  }
+
+  for (const [radius, z] of [
+    [outerRadius, halfHeight],
+    [outerRadius, -halfHeight],
+    [innerRadius, halfHeight],
+    [innerRadius, -halfHeight],
+  ]) {
+    if (radius <= 1e-6) continue
+    for (let i = 0; i < rings; i++) {
+      push(radius, (TAU * i) / rings, z)
+      push(radius, (TAU * ((i + 1) % rings)) / rings, z)
+    }
+  }
+
+  for (let j = 0; j < rungs; j++) {
+    const th = (TAU * j) / rungs
+    const corners: Array<[number, number]> = [
+      [innerRadius, -halfHeight],
+      [outerRadius, -halfHeight],
+      [outerRadius, halfHeight],
+      [innerRadius, halfHeight],
+    ]
+    for (let k = 0; k < corners.length; k++) {
+      const [r0, z0] = corners[k]
+      const [r1, z1] = corners[(k + 1) % corners.length]
+      push(r0, th, z0)
+      push(r1, th, z1)
+    }
+  }
+
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  return geo
+}
+
 // --- Interior variants -------------------------------------------------------
 // The shape seen from WITHIN, culled from without (gv/interiorGeometry.ts).
 

@@ -512,7 +512,7 @@ export function buildLinkOverlay(
       // Pick-solid across the whole body, where a line link is only clickable
       // near its centre line (desktop `_draw_link_pick_targets`). Wire ids swap
       // to their solid equivalent inside createPickProxy, as everywhere else.
-      const proxy = createPickProxy(node.geometry, mesh)
+      const proxy = createPickProxy(node.geometry, mesh, node.ratio)
       if (proxy) object.add(proxy)
       glyphs.push(new GlyphLink(spec, node, object))
       continue

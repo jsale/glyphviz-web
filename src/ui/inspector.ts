@@ -194,13 +194,20 @@ export class Inspector {
   private numberInput(
     value: number,
     apply: (v: number) => void,
-    opts: { min?: number; max?: number; integer?: boolean; width?: string } = {},
+    opts: {
+      min?: number
+      max?: number
+      integer?: boolean
+      width?: string
+      title?: string
+    } = {},
   ): HTMLInputElement {
     const input = el('input', { type: 'number', value: fmt(value) })
     input.step = 'any'
     if (opts.min !== undefined) input.min = String(opts.min)
     if (opts.max !== undefined) input.max = String(opts.max)
     if (opts.width) input.style.width = opts.width
+    if (opts.title) input.title = opts.title
     input.addEventListener('change', () => {
       let v = Number(input.value)
       if (!Number.isFinite(v)) {
@@ -752,7 +759,27 @@ export class Inspector {
       this.topoScaleRow(primary),
       row(
         'ratio',
-        this.numberInput(primary.ratio, (v) => this.commit((n) => (n.ratio = v)), { width: '70px' }),
+        this.numberInput(primary.ratio, (v) => this.commit((n) => (n.ratio = v)), {
+          width: '70px',
+          // The desktop's own tooltip: the field doubles up on several shapes,
+          // and the Flat Ring's reading is the one most likely to look like a
+          // new meaning when it is the torus's existing one.
+          title:
+            'Torus minor-radius proportion (GaiaViz/ANTz “ratio”): the tube radius as a\n' +
+            'fraction of the torus’s overall radius. Also used to place children riding\n' +
+            'on a Torus-topology parent’s surface.\n' +
+            'On a Flat Ring it is the same proportion read as the band’s RADIAL width;\n' +
+            'the band’s height is the node’s scale z, so equal values give a square\n' +
+            'cross-section. Small ratio + large scale z is a tall hoop; large ratio +\n' +
+            'small scale z is a flat dial.\n' +
+            'On other glyphs this field doubles up: Point geometry uses it as an\n' +
+            'on-screen sprite size, and Plot-parent nodes as line width (ratio × 20, in\n' +
+            'pixels).\n' +
+            'On a Link it is the connector’s THICKNESS, whatever geometry the link\n' +
+            'carries: line width in pixels for Line, and the world-space half-width on\n' +
+            'both cross-axes for Prism (Textured) or any glyph stretched between the\n' +
+            'link’s two ends (the link’s own scale fields play no part).',
+        }),
       ),
       row(
         'facet',

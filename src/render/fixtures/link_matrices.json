@@ -855,6 +855,22 @@
     -1.0,
     1.0
    ]
+  },
+  {
+   "geometry": 33,
+   "is_glyph_link": true,
+   "local_z_span": [
+    -1.0,
+    1.0
+   ]
+  },
+  {
+   "geometry": 34,
+   "is_glyph_link": true,
+   "local_z_span": [
+    -1.0,
+    1.0
+   ]
   }
  ]
 }

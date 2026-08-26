@@ -30,8 +30,9 @@ describe('the four interior ids', () => {
       expect(GEOMETRY_NAMES[id]).toBeTruthy()
       expect(id).toBeLessThanOrEqual(GEOMETRY_MAX)
     }
-    // GEOMETRY_MAX is the highest id (the desktop's GEO_COUNT is the count).
-    expect(GEOMETRY_MAX).toBe(Geometry.CylinderInteriorOpen)
+    // GEOMETRY_MAX is the highest id (the desktop's GEO_COUNT is the count),
+    // which the Flat Ring pair took over from these four in 721b827.
+    expect(GEOMETRY_MAX).toBe(Geometry.RingWire)
   })
 
   it('recognises exactly those four as interior', () => {

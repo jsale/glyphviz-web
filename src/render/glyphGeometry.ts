@@ -14,6 +14,8 @@ import {
   mirroredGeometry,
   zCubeInteriorGeometry,
   zPinGeometry,
+  zRingGeometry,
+  zRingWireGeometry,
   zSphereGeometry,
   zTubeGeometry,
 } from './uvGeometry'
@@ -204,6 +206,17 @@ const WIRE_BUILDERS: Record<number, GeoBuilder> = {
 const solidCache = new Map<string, THREE.BufferGeometry>()
 const wireCache = new Map<string, THREE.BufferGeometry>()
 
+/**
+ * The solid flat ring at a node's ratio, shared by the visible glyph and the
+ * pick proxy — which is why it is a function rather than two call sites: at the
+ * same quantized ratio they are the SAME geometry, so an accurate hit volume
+ * costs nothing.
+ */
+function ringSolidGeometry(ratio: number): THREE.BufferGeometry {
+  const quantized = quantizedShapeRatio(ratio)
+  return cached(solidCache, `ring:${quantized}`, () => zRingGeometry(...ringDims(quantized)))
+}
+
 function cached(
   cache: Map<string, THREE.BufferGeometry>,
   key: string,
@@ -226,18 +239,65 @@ function torusGeometry(ratio: number): THREE.BufferGeometry {
 }
 
 /**
- * Torus ratios are quantized to 1% steps before they reach the geometry cache
- * — the desktop's own fix (`ensure_torus_list`, desktop 77d6361): nothing ever
- * evicts a torus geometry, so a Channels animation sweeping `ratio`
- * continuously would otherwise mint one per distinct float and leak without
- * bound. Quantized, the cache tops out near 100 entries per solid/wire pair,
- * and the geometry is BUILT from the quantized value, so every node landing in
- * a bucket renders identically to the geometry it shares. 1% of a glyph's
- * radius is well under a pixel of tube thickness at normal zoom; the 0.14
- * default is unaffected. Rounding is Python's (half-to-even), like the
- * desktop's `round(ratio, 2)`.
+ * (outer radius, inner radius, half-height) of a Flat Ring glyph — the
+ * desktop's `ring_dims` (glyphviz_core/geometry_data.py).
+ *
+ * Deliberately the TORUS's own extents, restated as a box rather than a tube:
+ * `torus_radii` puts the tube between radius `size − 2·ratio·size` and `size`,
+ * spanning z ±`ratio·size`, and that is exactly the rectangle swept here. So
+ * `ratio` reading as the band's radial width is not a second meaning for the
+ * field — it is the meaning it already had. Torus ↔ Flat Ring is therefore a
+ * pure change of LOOK: same silhouette, same bounding extents, and a
+ * Torus-topology parent places its children identically whichever of the two
+ * it wears.
+ *
+ * The half-height is the glyph's LOCAL one; the node's `scale_z` multiplies it
+ * at draw time, which is how the band's height is set independently of its
+ * radial width (scale_z == scale_x gives the square cross-section). The cost of
+ * that packaging is that a THIN band needs a large scale_z to stand tall — a
+ * 0.5-unit hoop at ratio 0.02 is scale_z 25 — and the gain is that height
+ * already has a column, a panel row, a gizmo and a Channels binding.
+ *
+ * A `ratio` at or past 0.5 closes the hole: the inner radius clamps at 0 and the
+ * ring becomes a solid wheel rather than inverting.
  */
-export function quantizedTorusRatio(ratio: number): number {
+export function ringDims(ratio: number, size = 1): [number, number, number] {
+  const minor = ratio * size
+  const major = size - minor
+  return [size, Math.max(0, major - minor), minor]
+}
+
+/**
+ * The geometries whose SHAPE — not merely their size — is set by the node's own
+ * `ratio`, so they cannot share one cached geometry the way every other glyph
+ * does. The desktop's `RATIO_SHAPED_GEOMETRIES`: everything that dispatches or
+ * keys on them reads this set rather than naming the ids, so a future
+ * ratio-shaped glyph joins by editing one line.
+ */
+export const RATIO_SHAPED_GEOMETRIES: ReadonlySet<number> = new Set<number>([
+  Geometry.TorusSolid,
+  Geometry.TorusWire,
+  Geometry.Ring,
+  Geometry.RingWire,
+])
+
+/**
+ * Ratios are quantized to 1% steps before they reach the geometry cache — the
+ * desktop's own fix (`ensure_ratio_list`, desktop 77d6361): nothing ever evicts
+ * a cached geometry, so a Channels animation sweeping `ratio` continuously
+ * would otherwise mint one per distinct float and leak without bound.
+ * Quantized, the cache tops out near 100 entries per solid/wire pair, and the
+ * geometry is BUILT from the quantized value, so every node landing in a bucket
+ * renders identically to the geometry it shares. 1% of a glyph's radius is well
+ * under a pixel of tube thickness at normal zoom; the 0.14 default is
+ * unaffected. Rounding is Python's (half-to-even), like the desktop's
+ * `round(ratio, 2)`.
+ *
+ * Note the flat ring's HEIGHT is deliberately not part of the key: it rides on
+ * the node's `scale_z`, outside the built geometry, which is what keeps this
+ * cache one-dimensional.
+ */
+export function quantizedShapeRatio(ratio: number): number {
   const floor = Math.floor(ratio * 100)
   const frac = ratio * 100 - floor
   const steps = frac > 0.5 ? floor + 1 : frac < 0.5 ? floor : floor % 2 === 0 ? floor : floor + 1
@@ -381,15 +441,25 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
   }
 
   if (geometryId === Geometry.TorusSolid) {
-    const ratio = quantizedTorusRatio(style.ratio)
+    const ratio = quantizedShapeRatio(style.ratio)
     const geo = cached(solidCache, `torus:${ratio}`, () => torusGeometry(ratio))
     return new THREE.Mesh(geo, solidMaterial(style, false))
   }
   if (geometryId === Geometry.TorusWire) {
-    const ratio = quantizedTorusRatio(style.ratio)
+    const ratio = quantizedShapeRatio(style.ratio)
     const geo = cached(wireCache, `torus:${ratio}`, () =>
       new THREE.WireframeGeometry(torusGeometry(ratio)),
     )
+    return new THREE.LineSegments(geo, wireMaterial(style))
+  }
+
+  if (geometryId === Geometry.Ring) {
+    const geo = ringSolidGeometry(style.ratio)
+    return new THREE.Mesh(geo, solidMaterial(style, false))
+  }
+  if (geometryId === Geometry.RingWire) {
+    const ratio = quantizedShapeRatio(style.ratio)
+    const geo = cached(wireCache, `ring:${ratio}`, () => zRingWireGeometry(...ringDims(ratio)))
     return new THREE.LineSegments(geo, wireMaterial(style))
   }
 
@@ -430,6 +500,7 @@ export const WIRE_TO_SOLID: Record<number, number> = {
   [Geometry.PinWire]: Geometry.PinSolid,
   [Geometry.CylinderWire]: Geometry.CylinderSolid,
   [Geometry.GridWire]: Geometry.GridSolid,
+  [Geometry.RingWire]: Geometry.Ring,
 }
 
 // Double-sided so flat markers (and rays exiting solids) always hit.
@@ -456,10 +527,18 @@ const POINT_PICK_RADIUS = 0.15
  * Invisible solid hit volume for a node's geometry, or null when the shape
  * has no renderer yet. Attach as a child of the glyph so it inherits the
  * draw-scale correction.
+ *
+ * `ratio` is consulted only by the flat ring, where the field decides how much
+ * of the glyph's own footprint is solid at all — a rail at ratio 0.02 is a band
+ * 4% of its radius wide, a graduated dial at 0.4 is most of a disc — so a
+ * fixed-ratio proxy would either swallow clicks aimed through a thin hoop's
+ * hole or let them through the middle of a wide one. At the same quantized
+ * ratio it is the very geometry the glyph draws, so this is free.
  */
 export function createPickProxy(
   geometryId: number,
   mesh?: THREE.BufferGeometry,
+  ratio = 0.1,
 ): THREE.Object3D | null {
   const solidId = WIRE_TO_SOLID[geometryId] ?? geometryId
 
@@ -479,6 +558,8 @@ export function createPickProxy(
     // isn't worth a per-ratio proxy geometry.
     const geo = cached(solidCache, 'torusPick', () => torusGeometry(0.1))
     proxy = new THREE.Mesh(geo, PICK_MATERIAL)
+  } else if (solidId === Geometry.Ring) {
+    proxy = new THREE.Mesh(ringSolidGeometry(ratio), PICK_MATERIAL)
   } else {
     const builder = SOLID_BUILDERS[solidId]
     if (!builder) return null
