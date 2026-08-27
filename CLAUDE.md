@@ -2196,6 +2196,19 @@ something to decide now).
           azimuth numerals and tick marks with them — which is a mirrored UV,
           a smeared one and a broken corner all ruled out at once, in the way
           the feature actually gets used.
+      - **CONFIRMED IN VR ON HARDWARE** by Jeff, 2026-08-26, the same day it
+        shipped: he walked the Armillary World in a headset and called the
+        immersive experience "excellent". Which is the test that mattered — the
+        scene exists to be stood inside, and the rings' crisp edges and the
+        legibility of their graduated bands are judged at reading distance
+        there, not from a desktop orbit.
+        - The scene itself is NOT final: Jeff is making adjustments to it on
+          the desktop before it becomes an official example, so its CSV and
+          textures will change. Don't vendor it or build anything on its exact
+          row ids until he says it has settled.
+        - The same session's real finding is about the app, not the shape:
+          **the immersive CONTROLS need improvement** (his words). That is the
+          next piece of work — see the XR pending list in section 9.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -3209,7 +3222,30 @@ something to decide now).
      - Shape when it happens: a "type…" affordance on the row, focusing a
        hidden input, the panel echoing the string, and a clean fallback when
        `isSystemKeyboardSupported` is false. Do NOT start it unprompted.
-   - PENDING, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
+   - **NEXT, and it displaces the pending list below: IMMERSIVE CONTROL
+     IMPROVEMENTS.** Jeff walked the Armillary World in his headset on
+     2026-08-26, called the experience excellent and said **the controls need
+     improvement**. He ended that session to focus on exactly this, so it is
+     the agreed topic to resume on.
+     - What he has NOT said yet is WHICH controls, and the honest answer is
+       that nothing here knows. **Ask first** — locomotion (stick flight speed,
+       turning, the two-handed pinch), selection (the trigger ray at a scene's
+       real scale), the two wrist panels, or comfort. Do not start redesigning
+       on a guess; every one of P1–P5's decisions is recorded above with its
+       reason, and a change that contradicts one should be a decision, not an
+       accident.
+     - Worth knowing before that conversation: the Armillary World is a scene
+       of NESTED CONCENTRIC rings, so it exercises immersive navigation harder
+       than anything driven before — the viewer is inside a structure whose
+       parts surround them at every radius, where the earlier drives flew
+       around scenes seen from outside. Expect scale, precision aiming through
+       a busy foreground, and getting BETWEEN shells to be where the trouble
+       is. The emulated-Quest recipe in the status memory reproduces the scene
+       (open the folder, then enter VR) but cannot reproduce how a gesture
+       FEELS, which is the whole of this complaint — his device is the
+       instrument, so plan on shipping something for him to try rather than on
+       proving it headlessly.
+   - PENDING after that, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
      small once the rig exists, and the demo that impresses people) — Jeff
      deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
      hand tracking, comfort options (snap turn, vignette) and authoring
