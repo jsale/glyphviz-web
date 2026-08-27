@@ -3312,28 +3312,72 @@ something to decide now).
          scene (above), and the badge was rigidly mounted to the wrist, so half
          of a hand's poses showed it edge-on — it billboards now, like the
          panels.
-   - **NEXT: Phase C, the curved dashboard** (agreed with Jeff 2026-08-27, and
-     the third thing he named). A top row of four mode tabs already fills the
-     panel's width (`TAB_W = (1 − PAD·5) / 4`), so it cannot grow — his words:
-     "as time goes by the panel will become too huge". The plan:
-     - A **curved shell geometry whose UVs match PlaneGeometry's**, which is the
-       cheap part and the reason this is low risk: `XrSurface.hover` reads
-       `hit.uv` and every widget is in normalised coordinates (ui/xrWidget.ts),
-       so every widget, hit test and painter works unchanged on it.
-     - Modes move to a **LEFT COLUMN** — Jeff is left-handed and will point at
-       them with that hand — with a reserved left gutter and the content columns
-       shifted right of it. A column holds 6–8 modes at a hit size a ray can
-       manage where a row maxes out at 4, which is the scaling answer.
-     - A **content-origin transform**, so future pages do not each re-tune
-       `CAP_X` / `VAL_X` / `INC_X` by hand. This is the part that makes the
-       panel keep scaling rather than just scale once.
-     - Scope agreed: the curved panel IS the PINNED state; **both wrist panels
-       keep their current job** as quick glances. He likes the pin and the mode
-       buttons and asked to keep them.
-     - It touches `xrPropertiesModel.test.ts`'s layout invariants (nothing
-       overlapping, nothing clipped, every widget ≥ 0.1 of the quad). Those are
-       exactly the checks that should catch a bad reflow — update them, do not
-       weaken them.
+   - **P7, the curved dashboard** (shipped 2026-08-27, the third thing Jeff
+     named, and confirmed on hardware between P6 and this: "I tested the dist
+     and it works great"). A top row of four mode tabs had already filled the
+     panel's width by construction — `TAB_W = (1 − PAD·5) / 4`, so a fifth mode
+     could only come out of the width of the other four — and his ask was for
+     room to grow: "there will be additional features to be added and we need a
+     larger panel-like surface."
+     - **THE CURVE** is `src/render/xrCurvedPanel.ts`: a cylindrical shell that
+       wraps its edges TOWARD the viewer. It is a drop-in for one reason worth
+       stating plainly — `XrSurface.hover` reads `hit.uv` and every widget is in
+       normalised coordinates (ui/xrWidget.ts), so ANY geometry carrying
+       PlaneGeometry's UV parameterisation drives the existing layouts, painters
+       and hit tests unchanged. Nothing above it learned about curvature.
+       - Curvature is a RATIO of the panel's own width, not a radius in metres,
+         so the shape is scale-invariant: the pinned slab wraps through the same
+         angle as the wrist-docked one and reads as the same object made bigger.
+         `PANEL_CURVE = 0.7` puts the radius at 1.43 × width, which approximates
+         a cylinder centred on the EYE in both states — pinned, 0.57 m across at
+         0.75 m (radius 0.81); docked, 0.30 m at roughly 0.35 m (radius 0.43).
+         Measured: the corners sit 0.779 m from the head against the middle's
+         0.776 m.
+       - The panel's width is its ARC LENGTH, not its footprint — the chord is
+         necessarily narrower (2R·sin(θ/2) against R·θ). Pinned by a test,
+         because "the panel came out 1% narrow" is exactly the kind of thing
+         someone later corrects by scaling the geometry and quietly breaking
+         every layout on it.
+       - `XrSurface.hover` now takes its normal from the INTERSECTION (three
+         interpolates it from the vertex normals and flips it toward the ray)
+         rather than from the mesh's orientation, so the P6 reticle lies flat on
+         the surface at the point it is touching. Measured at the panel's edge:
+         dot 1.0 against the true surface normal, 0.9635 against the plane the
+         panel would have been. `surfacePoint(u, v)` is the inverse — the world
+         point at a normalised coordinate, curvature included.
+       - Both wrist panels are curved, so the two match; only the properties
+         panel's LAYOUT changed.
+     - **THE MODE COLUMN** runs down the LEFT edge (Jeff is left-handed and will
+       reach for it with that hand). A column is bounded by HEIGHT where a row
+       was bounded by width, and the panel has six row slots for four modes —
+       which is what makes Draw Mode a line in `PAGES` rather than a redesign.
+       The open mode is marked by a bar down its INSIDE edge, not the tab row's
+       underline, which in a column reads as a divider between two entries.
+     - **THE CONTENT TRANSFORM** (`cx` / `cw` / `crect`) is the part that makes
+       the panel keep scaling rather than scale once: every control is stated in
+       CONTENT-relative coordinates and mapped through it, so the column can be
+       widened, narrowed or moved without re-tuning a single control column.
+     - The quad's size in METRES (`PANEL_W_M` / `PANEL_H_M`, 0.30 × 0.215) moved
+       INTO the model, because the layout is what decides whether a control is
+       big enough to hit and that question is only answerable in centimetres.
+       The layout test's hittable-size invariant is now physical — 2.4 cm, about
+       3.4° at a 40 cm reading distance — where it had been a normalised 0.1 that
+       silently changed meaning the moment the panel's own dimensions did, which
+       is precisely what this change did to it. `PINNED_SCALE` 1.7 → 1.9, so the
+       unclipped dashboard is 57 cm across.
+     - Driven in Chrome, 21 measured checks: the shell's 2.6 cm of wrap over
+       29.4 cm, its edges bowing toward the viewer, the ray still finding every
+       widget on the curved face, the reticle on the surface rather than the
+       plane, the column's single x and four descending y, the column clear of
+       the content, a press from the column switching pages, Select ▸ All
+       reaching 109 nodes through the new layout, the pin round trip, and the
+       pinned dashboard still taking the ray at 0.78 m.
+       - The PICTURES caught what the numbers could not, for the fifth session
+         running: the subtitle sat exactly on the mode column's first button and
+         read as a caption FOR it. Header spacing and the row lattice were
+         retuned around it (`ROW_TOP` 0.205, subtitle at 0.14).
+       - One row of the six is deliberately left empty on every page. That is the
+         headroom the change exists to create, not an oversight.
    - **THEN Phase D, drawing in VR**, which Jeff asked for by name ("that would
      be amazing"). The groundwork is already there: `drawPlane.ts`'s `gridHit`
      takes a RAY and `drawMode.ts`'s `placeStamp`/`shouldStamp` are pure. A Draw

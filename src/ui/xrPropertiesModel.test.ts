@@ -4,8 +4,15 @@ import { CRITERION_LABELS } from '../gv/selectionOps'
 import type { GvNode } from '../gv/types'
 import { GEOMETRY_NAMES, Geometry, NodeType, Topo } from '../gv/types'
 import {
+  CONTENT_X,
   DEFAULT_STEP,
+  MAX_ROWS,
+  PAGES,
+  PANEL_H_M,
+  PANEL_W_M,
   STEP_LADDER,
+  cx,
+  isPageWidget,
   num,
   propLayout,
   propSignature,
@@ -133,13 +140,42 @@ describe('propLayout — geometry of the quad', () => {
     }
   })
 
-  it('gives every row a hittable height — a ray has about a degree of jitter', () => {
+  it('gives every widget a hittable SIZE — a ray has about a degree of jitter', () => {
+    // In centimetres, not in fractions of the quad. A normalised threshold was
+    // only ever a proxy for this, and it silently changes meaning the moment
+    // the panel's own dimensions do — which is exactly what happened when the
+    // mode column arrived and the quad grew to carry it. 2.4 cm at a 40 cm
+    // reading distance is about 3.4°, comfortably past a pointing hand's ~1°.
     for (const s of everyState) {
       for (const widget of propLayout(s).widgets) {
-        expect(widget.rect.h).toBeGreaterThanOrEqual(0.1)
-        expect(widget.rect.w).toBeGreaterThanOrEqual(0.1)
+        expect(widget.rect.w * PANEL_W_M, `${widget.id} width`).toBeGreaterThanOrEqual(0.024)
+        expect(widget.rect.h * PANEL_H_M, `${widget.id} height`).toBeGreaterThanOrEqual(0.022)
       }
     }
+  })
+
+  it('keeps the mode column clear of the content', () => {
+    // The two halves are laid out independently — the column on the panel's own
+    // coordinates, everything else through cx/cw — so nothing but this stops
+    // them from being tuned into each other.
+    for (const s of everyState) {
+      for (const widget of propLayout(s).widgets) {
+        if (isPageWidget(widget.id)) {
+          expect(widget.rect.x + widget.rect.w, widget.id).toBeLessThanOrEqual(CONTENT_X)
+        } else if (widget.id !== 'pin') {
+          expect(widget.rect.x, widget.id).toBeGreaterThanOrEqual(CONTENT_X)
+        }
+      }
+    }
+  })
+
+  it('has room in the column for modes that do not exist yet', () => {
+    // The whole reason the tabs moved off the top edge: a row of four had run
+    // out of width by construction, where a column is bounded by height and the
+    // panel has spare rows. Draw Mode is the next one in.
+    expect(PAGES.length).toBeLessThan(MAX_ROWS)
+    const lowest = rowY(MAX_ROWS - 1) + 0.115
+    expect(lowest).toBeLessThanOrEqual(0.97)
   })
 })
 
@@ -458,7 +494,9 @@ describe('widgetAt', () => {
 
   it('misses the header and the caption column', () => {
     expect(widgetAt(widgets, 0.5, 0.06)).toBeNull()
-    expect(widgetAt(widgets, 0.05, rowY(1) + 0.05)).toBeNull()
+    // The caption column is inside the CONTENT region now — the panel's own
+    // left edge belongs to the mode buttons.
+    expect(widgetAt(widgets, cx(0.1), rowY(1) + 0.05)).toBeNull()
   })
 
   it('hits on the boundary, so an edge press is not lost', () => {

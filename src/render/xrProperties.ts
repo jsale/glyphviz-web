@@ -21,14 +21,18 @@ import {
   ALPHA_STEP,
   CAP_X,
   DEFAULT_STEP,
+  PANEL_H_M,
+  PANEL_W_M,
   RATIO_STEP,
   SELECT_CRITERIA,
   STEP_LADDER,
   STEP_VAL_W,
   STEP_VAL_X,
-  TAB_Y,
   VAL_W,
   VAL_X,
+  cx,
+  cw,
+  isPageWidget,
   propLayout,
   propSignature,
   scrubNotches,
@@ -59,18 +63,20 @@ import {
 } from './xrSurface'
 
 /**
- * Taller than the control panel (0.18 m) because it carries five rows to that
- * one's four bands, and a row a laser cannot reliably hit is worse than a page
- * more. At 0.22 m a row is 2.3 cm — about 3.3° at arm's length, comfortably
- * past a pointing hand's ~1° of jitter.
+ * The quad's own size lives with the LAYOUT (ui/xrPropertiesModel.ts), because
+ * the layout is what decides whether a control is big enough to hit and that
+ * question is only answerable in centimetres. The texture keeps its aspect, so
+ * a normalised rect is the same shape on the canvas as it is on the panel.
  */
-const PANEL_W = 0.26
-const PANEL_H = 0.22
-const TEX_W = 1024
-const TEX_H = 866
+const TEX_W = 1200
+const TEX_H = Math.round((TEX_W * PANEL_H_M) / PANEL_W_M)
 
-/** How much bigger the pinned slab draws, and where it is parked. */
-export const PINNED_SCALE = 1.7
+/**
+ * How much bigger the pinned slab draws, and where it is parked. 1.9 puts a
+ * 30 cm panel at 57 cm across at 75 cm away — a dashboard you read rather than
+ * a watch face you squint at, which is the point of unclipping it.
+ */
+export const PINNED_SCALE = 1.9
 export const PINNED_DISTANCE_M = 0.75
 export const PINNED_DROP_M = 0.2
 
@@ -138,7 +144,7 @@ export class XrProperties extends XrSurface<XrPropWidget> {
   private scrubApplied = 0
 
   constructor(actions: XrPropertiesActions) {
-    super({ width: PANEL_W, height: PANEL_H, texWidth: TEX_W, texHeight: TEX_H })
+    super({ width: PANEL_W_M, height: PANEL_H_M, texWidth: TEX_W, texHeight: TEX_H })
     this.setOffset(0, 0.09, -0.02)
     this.actions = actions
   }
@@ -453,15 +459,25 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     ctx.fillStyle = SURFACE_TEXT
     ctx.fillText(ellipsis(ctx, layout.title, W * 0.73 - titleX), titleX, H * 0.065)
 
+    // Clear of the mode column's first button, which now starts where the tab
+    // row used to end. At 0.165 the subtitle sat on that button's top edge and
+    // read as a caption FOR it — visible in the panel texture, invisible to
+    // every assertion about the layout.
     ctx.font = '28px system-ui, sans-serif'
     ctx.fillStyle = SURFACE_DIM
-    ctx.fillText(ellipsis(ctx, layout.subtitle, W * 0.93), W * 0.035, H * 0.165)
+    ctx.fillText(ellipsis(ctx, layout.subtitle, W * 0.93), W * 0.035, H * 0.14)
 
     if (layout.empty) {
+      // Centred on the CONTENT, not on the panel: the mode column owns the left
+      // fifth, and a message straddling it reads as a caption for the buttons.
       ctx.font = '30px system-ui, sans-serif'
       ctx.fillStyle = SURFACE_DIM
       ctx.textAlign = 'center'
-      ctx.fillText(ellipsis(ctx, layout.empty, W * 0.9), W / 2, H * 0.5)
+      ctx.fillText(
+        ellipsis(ctx, layout.empty, cw(0.94) * W),
+        cx(0.5) * W,
+        H * 0.5,
+      )
       this.paintWidgets(ctx)
       return
     }
@@ -474,20 +490,24 @@ export class XrProperties extends XrSurface<XrPropWidget> {
         ctx.font = '26px system-ui, sans-serif'
         ctx.fillStyle = SURFACE_DIM
         ctx.textAlign = 'center'
-        ctx.fillText(ellipsis(ctx, row.note, W * 0.9), W / 2, cy)
+        ctx.fillText(ellipsis(ctx, row.note, cw(0.94) * W), cx(0.5) * W, cy)
         continue
       }
       if (row.caption) {
         ctx.font = '28px system-ui, sans-serif'
         ctx.fillStyle = SURFACE_DIM
         ctx.textAlign = 'left'
-        ctx.fillText(ellipsis(ctx, row.caption, W * 0.2), CAP_X * W, cy)
+        ctx.fillText(ellipsis(ctx, row.caption, cw(0.2) * W), cx(CAP_X) * W, cy)
       }
       if (row.value) {
         ctx.font = 'bold 32px system-ui, sans-serif'
         ctx.fillStyle = SURFACE_TEXT
         ctx.textAlign = 'center'
-        ctx.fillText(ellipsis(ctx, row.value, VAL_W * W * 0.94), (VAL_X + VAL_W / 2) * W, cy)
+        ctx.fillText(
+          ellipsis(ctx, row.value, cw(VAL_W) * W * 0.94),
+          cx(VAL_X + VAL_W / 2) * W,
+          cy,
+        )
       }
     }
 
@@ -496,15 +516,15 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     // about what it steps, and a headset has no tooltip to explain it. (The
     // picture is what caught this; every assertion about the row passed.)
     if (this.page === 'move') {
-      const cx = (STEP_VAL_X + STEP_VAL_W / 2) * W
+      const chipX = cx(STEP_VAL_X + STEP_VAL_W / 2) * W
       const top = layout.rows[0].y * H
       ctx.textAlign = 'center'
       ctx.font = '22px system-ui, sans-serif'
       ctx.fillStyle = SURFACE_DIM
-      ctx.fillText('step', cx, top + 0.028 * H)
+      ctx.fillText('step', chipX, top + 0.03 * H)
       ctx.font = 'bold 30px system-ui, sans-serif'
       ctx.fillStyle = SURFACE_TEXT
-      ctx.fillText(String(stepSize(this.step)), cx, top + 0.072 * H)
+      ctx.fillText(String(stepSize(this.step)), chipX, top + 0.078 * H)
     }
 
     this.paintWidgets(ctx)
@@ -550,11 +570,13 @@ export class XrProperties extends XrSurface<XrPropWidget> {
           : SURFACE_BTN
     roundRect(ctx, x, y, w, h, 12)
     ctx.fill()
-    // A tab's own underline, so the chosen page reads at a glance even when
-    // another button is hovered and therefore lighter than it.
-    if (widget.active && widget.rect.y === TAB_Y) {
+    // The open mode's own marker, so it reads at a glance even when another
+    // button is hovered and therefore lighter than it. A bar down the INSIDE
+    // edge rather than the underline the tab row used: in a column an underline
+    // reads as a divider between two entries rather than as a state.
+    if (widget.active && isPageWidget(widget.id)) {
       ctx.fillStyle = SURFACE_ACCENT
-      ctx.fillRect(x + w * 0.2, y + h * 0.86, w * 0.6, h * 0.08)
+      ctx.fillRect(x + w * 0.92, y + h * 0.16, w * 0.06, h * 0.68)
     }
 
     if (widget.checked !== undefined) {

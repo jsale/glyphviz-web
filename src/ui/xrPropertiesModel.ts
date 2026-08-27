@@ -228,35 +228,91 @@ export const SCRUB_NOTCHES_PER_WIDTH = 40
  */
 const NEVER_CYCLED = new Set<number>([NodeType.World, NodeType.Camera, NodeType.WorldGrid])
 
+// --- Panel size ---------------------------------------------------------------
+
+/**
+ * The quad's size in METRES, which lives here rather than in the renderer
+ * because the layout is what decides whether a control is big enough to hit.
+ * Every widget rect is a fraction of these, so this is the only place that
+ * turns a normalised number into an angular size at reading distance — and it
+ * is what the layout tests measure against.
+ *
+ * Wider than the 0.26 × 0.22 this panel shipped at (P3): the mode buttons moved
+ * into a left column that costs a fifth of the width, and Jeff asked for a
+ * larger surface because there are more features to come.
+ */
+export const PANEL_W_M = 0.3
+export const PANEL_H_M = 0.215
+
 // --- Layout bands -------------------------------------------------------------
-// Ending at 0.96 rather than 1.0: a widget flush with the quad's rounded edge
-// draws clipped, which reads as a rendering fault (the control panel's own
-// lesson, found in its dumped texture rather than in any assertion).
+// Ending short of 1.0: a widget flush with the quad's rounded edge draws
+// clipped, which reads as a rendering fault (the control panel's own lesson,
+// found in its dumped texture rather than in any assertion).
 
-const PAD = 0.03
-export const PIN_RECT: XrRect = rect(0.795, 0.025, 0.175, 0.105)
-export const TAB_Y = 0.225
-const TAB_H = 0.105
-/** Four tabs across, which is still 5.5 cm each on a 26 cm quad — comfortably
- *  past a pointing hand's jitter. */
-const TAB_W = (1 - PAD * 5) / 4
+const PAD = 0.022
+export const PIN_RECT: XrRect = rect(0.8, 0.028, 0.175, 0.115)
 
-export const ROW_TOP = 0.375
-export const ROW_PITCH = 0.12
-const ROW_H = 0.105
+/**
+ * THE MODE COLUMN, down the LEFT edge (Jeff, 2026-08-27 — he is left-handed and
+ * will reach for it with that hand).
+ *
+ * It replaces a row of four tabs across the top, which had run out of room by
+ * construction: `TAB_W` was `(1 − PAD·5) / 4`, so a fifth mode could only come
+ * out of the width of the other four. A column is bounded by HEIGHT instead,
+ * and the panel has room for six at the same lattice the content rows use —
+ * which is what makes Draw Mode (and whatever follows it) a list entry rather
+ * than a redesign.
+ */
+export const COL_X = 0.022
+export const COL_W = 0.175
 
-/** Columns. Captions are painter-only; the three control columns are widgets. */
+/**
+ * The content region, right of the column. Every control below is laid out in
+ * CONTENT-relative coordinates and mapped through `cx`/`cw`, so the column can
+ * be widened, narrowed or moved without re-tuning a single control column —
+ * which is the difference between a panel that scales once and one that keeps
+ * scaling.
+ */
+export const CONTENT_X = 0.225
+export const CONTENT_W = 0.75
+
+/** Content-relative u → panel u, and the same for a width. */
+export function cx(u: number): number {
+  return CONTENT_X + u * CONTENT_W
+}
+
+export function cw(w: number): number {
+  return w * CONTENT_W
+}
+
+/** A rect stated in content-relative x/width, on the panel's own y lattice. */
+function crect(x: number, y: number, w: number, h: number): XrRect {
+  return rect(cx(x), y, cw(w), h)
+}
+
+/**
+ * Six rows where there were five, the top band having been freed by the tabs
+ * leaving it. The column shares the lattice, so a mode button lines up with the
+ * row beside it rather than floating between two.
+ */
+export const ROW_TOP = 0.205
+export const ROW_PITCH = 0.128
+const ROW_H = 0.115
+export const MAX_ROWS = 6
+
+/** Columns, CONTENT-relative. Captions are painter-only; the three control
+ *  columns are widgets. */
 export const CAP_X = 0.03
 const DEC_X = 0.245
-const BTN_W = 0.115
+const BTN_W = 0.13
 export const VAL_X = 0.375
 export const VAL_W = 0.4
-const INC_X = 0.79
-const INC_W = 0.13
+const INC_X = 0.785
+const INC_W = 0.15
 
 /** The axis/step chip row's own columns. */
-const AXIS_X = [0.03, 0.155, 0.28]
-const AXIS_W = 0.11
+const AXIS_X = [0.03, 0.16, 0.29]
+const AXIS_W = 0.115
 const STEP_DEC_X = 0.475
 export const STEP_VAL_X = 0.6
 export const STEP_VAL_W = 0.175
@@ -265,6 +321,23 @@ const GRAB_X = 0.21
 
 export function rowY(index: number): number {
   return ROW_TOP + index * ROW_PITCH
+}
+
+/**
+ * The mode column's entries, in order. Adding one is a line here — which was
+ * the point of moving them off the top edge.
+ */
+export const PAGES: ReadonlyArray<[XrPropId, XrPropPage, string]> = [
+  ['page-select', 'select', 'Select'],
+  ['page-shape', 'shape', 'Shape'],
+  ['page-move', 'move', 'Move'],
+  ['page-look', 'look', 'Look'],
+]
+
+/** Is this widget one of the mode buttons? The painter marks the open one, and
+ *  an id test beats testing its rect against a band the column no longer has. */
+export function isPageWidget(id: string): boolean {
+  return id.startsWith('page-')
 }
 
 export function propLayout(state: XrPropState): XrPropLayout {
@@ -283,17 +356,11 @@ export function propLayout(state: XrPropState): XrPropLayout {
     active: state.pinned,
   })
 
-  const pages: Array<[XrPropId, XrPropPage, string]> = [
-    ['page-select', 'select', 'Select'],
-    ['page-shape', 'shape', 'Shape'],
-    ['page-move', 'move', 'Move'],
-    ['page-look', 'look', 'Look'],
-  ]
-  pages.forEach(([id, page, label], i) => {
+  PAGES.forEach(([id, page, label], i) => {
     widgets.push({
       id,
       kind: 'button',
-      rect: rect(PAD + i * (TAB_W + PAD), TAB_Y, TAB_W, TAB_H),
+      rect: rect(COL_X, rowY(i), COL_W, ROW_H),
       label,
       active: state.page === page,
     })
@@ -406,7 +473,7 @@ function buildMove(
     widgets.push({
       id: `axis-${axis}` as XrPropId,
       kind: 'button',
-      rect: rect(AXIS_X[i], y, AXIS_W, ROW_H),
+      rect: crect(AXIS_X[i], y, AXIS_W, ROW_H),
       label: axis.toUpperCase(),
       active: state.axis === axis,
     })
@@ -415,14 +482,14 @@ function buildMove(
     {
       id: 'step-down',
       kind: 'button',
-      rect: rect(STEP_DEC_X, y, BTN_W, ROW_H),
+      rect: crect(STEP_DEC_X, y, BTN_W, ROW_H),
       label: '−',
       disabled: state.step === 0,
     },
     {
       id: 'step-up',
       kind: 'button',
-      rect: rect(INC_X, y, INC_W, ROW_H),
+      rect: crect(INC_X, y, INC_W, ROW_H),
       label: '+',
       disabled: state.step === STEP_LADDER.length - 1,
     },
@@ -443,7 +510,7 @@ function buildMove(
     widgets.push({
       id: `grab-${mode}` as XrPropId,
       kind: 'button',
-      rect: rect(GRAB_X + i * (w + PAD), y4, w, ROW_H),
+      rect: crect(GRAB_X + i * (w + PAD), y4, w, ROW_H),
       label,
       active: state.grabMode === mode,
     })
@@ -501,14 +568,14 @@ function buildSelect(state: XrPropState, rows: XrPropRow[], widgets: XrPropWidge
     {
       id: 'select-apply',
       kind: 'button',
-      rect: rect(CAP_X, y2, 0.46, ROW_H),
+      rect: crect(CAP_X, y2, 0.46, ROW_H),
       label: state.addToSelection ? 'Add matching' : 'Select matching',
       disabled: empty,
     },
     {
       id: 'select-add',
       kind: 'button',
-      rect: rect(INC_X, y2, INC_W, ROW_H),
+      rect: crect(INC_X, y2, INC_W, ROW_H),
       label: '',
       checked: state.addToSelection,
     },
@@ -547,7 +614,7 @@ function tripleRow(
     widgets.push({
       id,
       kind: 'button',
-      rect: rect(PAD + i * (w + PAD), y, w, ROW_H),
+      rect: crect(PAD + i * (w + PAD), y, w, ROW_H),
       label,
       // Show all is the way OUT of a hide, so it stays live with no selection;
       // Hide and Only need something to act on.
@@ -597,8 +664,8 @@ function stepperRow(
   const y = rowY(index)
   rows.push({ y, caption, value })
   widgets.push(
-    { id: prev, kind: 'button', rect: rect(DEC_X, y, BTN_W, ROW_H), label: '‹', disabled },
-    { id: next, kind: 'button', rect: rect(INC_X, y, INC_W, ROW_H), label: '›', disabled },
+    { id: prev, kind: 'button', rect: crect(DEC_X, y, BTN_W, ROW_H), label: '‹', disabled },
+    { id: next, kind: 'button', rect: crect(INC_X, y, INC_W, ROW_H), label: '›', disabled },
   )
 }
 
@@ -616,9 +683,9 @@ function nudgeRow(
   const y = rowY(index)
   rows.push({ y, caption, value })
   widgets.push(
-    { id: dec, kind: 'button', rect: rect(DEC_X, y, BTN_W, ROW_H), label: '−' },
-    { id: scrub, kind: 'scrub', rect: rect(VAL_X, y, VAL_W, ROW_H), label: value },
-    { id: inc, kind: 'button', rect: rect(INC_X, y, INC_W, ROW_H), label: '+' },
+    { id: dec, kind: 'button', rect: crect(DEC_X, y, BTN_W, ROW_H), label: '−' },
+    { id: scrub, kind: 'scrub', rect: crect(VAL_X, y, VAL_W, ROW_H), label: value },
+    { id: inc, kind: 'button', rect: crect(INC_X, y, INC_W, ROW_H), label: '+' },
   )
 }
 
@@ -654,7 +721,7 @@ function toggleRow(
   widgets.push({
     id,
     kind: 'button',
-    rect: rect(INC_X, y, INC_W, ROW_H),
+    rect: crect(INC_X, y, INC_W, ROW_H),
     label: '',
     checked,
   })

@@ -14,6 +14,7 @@
 
 import * as THREE from 'three'
 import { widgetAt, type XrWidgetBase } from '../ui/xrWidget'
+import { PANEL_CURVE, curvedPanelGeometry, curvedPanelPoint } from './xrCurvedPanel'
 import type { XrPointerHit } from './xrPointer'
 
 export interface XrSurfaceOptions {
@@ -25,6 +26,11 @@ export interface XrSurfaceOptions {
   texHeight: number
   /** Offset from the anchor, metres — where a watch face sits, for a wrist panel. */
   offset?: THREE.Vector3
+  /**
+   * Curvature as a fraction of the panel's own width (xrCurvedPanel.ts).
+   * Defaults to the shared PANEL_CURVE; 0 gives a flat quad.
+   */
+  curve?: number
 }
 
 /** Shared palette, so the two panels cannot drift into different-looking chrome. */
@@ -47,6 +53,7 @@ export abstract class XrSurface<W extends XrWidgetBase> {
   protected widgets: W[] = []
   protected hovered: string | null = null
 
+  private readonly size: { width: number; height: number; curve: number }
   private dragging: W | null = null
   private signature = ''
   /** Where the pointer last was on the quad, in the layout's own coordinates
@@ -62,8 +69,13 @@ export abstract class XrSurface<W extends XrWidgetBase> {
     // to the framebuffer (lighting.ts's colour-pipeline note).
     this.texture.colorSpace = THREE.NoColorSpace
     this.texture.anisotropy = 4
+    this.size = {
+      width: options.width,
+      height: options.height,
+      curve: options.curve ?? PANEL_CURVE,
+    }
     this.mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(options.width, options.height),
+      curvedPanelGeometry(this.size.width, this.size.height, this.size.curve),
       new THREE.MeshBasicMaterial({
         map: this.texture,
         transparent: true,
@@ -97,6 +109,17 @@ export abstract class XrSurface<W extends XrWidgetBase> {
     return this.hovered
   }
 
+  /**
+   * The world point at a normalised (u, v) on the panel's face, v counted DOWN
+   * from the top the way every layout counts it. Curvature-aware, so a caller
+   * placing something on the surface lands where a ray would hit rather than on
+   * the flat quad the panel used to be.
+   */
+  surfacePoint(u: number, v: number, target = new THREE.Vector3()): THREE.Vector3 {
+    curvedPanelPoint(u, v, this.size.width, this.size.height, this.size.curve, target)
+    return this.mesh.localToWorld(target)
+  }
+
   /** Where the panel sits relative to its anchor, and how big it draws. */
   setOffset(x: number, y: number, z: number): void {
     this.mesh.position.set(x, y, z)
@@ -126,9 +149,11 @@ export abstract class XrSurface<W extends XrWidgetBase> {
    * records which widget is under the pointer so the next paint can highlight
    * it.
    *
-   * The NORMAL comes off the mesh's own orientation rather than the
-   * intersection's face normal: the quad may be curved or scaled, and what the
-   * reticle wants is the face it is lying on, not one triangle's idea of it.
+   * The NORMAL is the intersection's own, which three interpolates from the
+   * vertex normals and flips toward the ray — so on a curved shell the reticle
+   * lies flat on the surface at the point it is actually touching, not on the
+   * plane the panel would have been. (A flat panel's normals are all (0, 0, 1),
+   * so this is unchanged for one.)
    */
   hover(raycaster: THREE.Raycaster): XrPointerHit | null {
     if (!this.group.visible) return null
@@ -142,7 +167,10 @@ export abstract class XrSurface<W extends XrWidgetBase> {
     this.lastV = 1 - hit.uv.y
     const widget = widgetAt(this.widgets, this.lastU, this.lastV)
     this.setHovered(widget?.id ?? null)
-    const normal = new THREE.Vector3(0, 0, 1).transformDirection(this.mesh.matrixWorld).normalize()
+    const normal = (hit.normal ?? new THREE.Vector3(0, 0, 1))
+      .clone()
+      .transformDirection(this.mesh.matrixWorld)
+      .normalize()
     return {
       distance: hit.distance,
       point: hit.point.clone(),
