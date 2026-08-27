@@ -14,6 +14,7 @@
 
 import * as THREE from 'three'
 import { widgetAt, type XrWidgetBase } from '../ui/xrWidget'
+import type { XrPointerHit } from './xrPointer'
 
 export interface XrSurfaceOptions {
   /** Quad size in METRES (rig-local units are perceived metres — xrNav.ts). */
@@ -120,11 +121,16 @@ export abstract class XrSurface<W extends XrWidgetBase> {
   }
 
   /**
-   * Ray hit test. Returns the hit distance in world units (the caller shortens
-   * the pointer ray to it) or null, and records which widget is under the
-   * pointer so the next paint can highlight it.
+   * Ray hit test. Returns where the ray met the surface — the caller shortens
+   * the beam to that distance and lays its reticle on that point — or null, and
+   * records which widget is under the pointer so the next paint can highlight
+   * it.
+   *
+   * The NORMAL comes off the mesh's own orientation rather than the
+   * intersection's face normal: the quad may be curved or scaled, and what the
+   * reticle wants is the face it is lying on, not one triangle's idea of it.
    */
-  hover(raycaster: THREE.Raycaster): number | null {
+  hover(raycaster: THREE.Raycaster): XrPointerHit | null {
     if (!this.group.visible) return null
     const hit = raycaster.intersectObject(this.mesh, false)[0]
     if (!hit?.uv) {
@@ -134,8 +140,18 @@ export abstract class XrSurface<W extends XrWidgetBase> {
     // Three's UV origin is bottom-left; every layout counts down from the top.
     this.lastU = hit.uv.x
     this.lastV = 1 - hit.uv.y
-    this.setHovered(widgetAt(this.widgets, this.lastU, this.lastV)?.id ?? null)
-    return hit.distance
+    const widget = widgetAt(this.widgets, this.lastU, this.lastV)
+    this.setHovered(widget?.id ?? null)
+    const normal = new THREE.Vector3(0, 0, 1).transformDirection(this.mesh.matrixWorld).normalize()
+    return {
+      distance: hit.distance,
+      point: hit.point.clone(),
+      normal,
+      // A disabled widget is a distinct answer, not a miss: the row is drawn
+      // greyed and still swallows the press (so it cannot select the glyph
+      // behind), and the reticle should say so rather than reading as live.
+      target: !widget ? 'surface' : widget.disabled ? 'disabled' : 'widget',
+    }
   }
 
   /** Trigger pressed while hovering. True if it landed on a widget — which is

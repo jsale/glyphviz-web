@@ -129,12 +129,7 @@ export interface XrPropWidget extends XrWidgetBase {
   active?: boolean
   /** A checkbox's state; `null` = mixed, which a multi-selection can be. */
   checked?: boolean | null
-  /**
-   * Drawn greyed and inert. The widget stays in the list rather than being
-   * omitted so the row keeps its shape — and so a press still COUNTS as
-   * landing on the panel, which is what stops it selecting the glyph behind.
-   */
-  disabled?: boolean
+  // `disabled` is on XrWidgetBase — the reticle reads it too.
 }
 
 /** One painted row: caption on the left, value between the steppers. */

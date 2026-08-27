@@ -31,6 +31,8 @@
 // there is nothing here to correct.
 
 import * as THREE from 'three'
+import { XrControllerModel } from './xrControllerModel'
+import { XrPointer, type XrPointerHit } from './xrPointer'
 import {
   GRAB_OFF_THRESHOLD,
   GRAB_ON_THRESHOLD,
@@ -59,9 +61,6 @@ export type XrHand = 'left' | 'right'
  */
 const XR_NEAR_M = 0.05
 const XR_FAR_M = 3000
-
-/** Ray length in metres — long enough to reach across a 20 m scene placement. */
-const RAY_LENGTH_M = 30
 
 /** Desktop `ControllerNav`'s marker colours, left then right. */
 const HAND_COLORS: Record<XrHand, THREE.Color> = {
@@ -104,6 +103,9 @@ export interface XrCallbacks {
   onTogglePanel(): void
   /** Right A — the same for the right wrist's PROPERTIES panel. */
   onToggleProperties(): void
+  /** What a trigger-held grab would do — captioned on the right controller, so
+   *  the armed mode is readable without raising the panel to check. */
+  grabModeLabel(): string
   onStart(): void
   onEnd(): void
 }
@@ -117,8 +119,8 @@ export interface XrCallbacks {
 export interface XrPointerTarget {
   /** Turn to face the viewer, before this frame's hit test reads the pose. */
   orient(headWorld: THREE.Vector3): void
-  /** World-unit distance to the hit, or null for a miss. */
-  hover(raycaster: THREE.Raycaster): number | null
+  /** Where the ray met this surface, or null for a miss. */
+  hover(raycaster: THREE.Raycaster): XrPointerHit | null
   /** Trigger pressed while hovering; true if it landed on something. */
   press(): boolean
   drag(raycaster: THREE.Raycaster): void
@@ -212,7 +214,13 @@ export class XrRig {
   private readonly camera: THREE.PerspectiveCamera
   private readonly callbacks: XrCallbacks
   private readonly raycaster = new THREE.Raycaster()
-  private readonly rayLines: THREE.Line[] = []
+  /** Beam + reticle and the drawn controller, one each per input slot. Which
+   *  HAND a slot is only resolves when the device connects, so both are built
+   *  neutral and told afterwards. */
+  private readonly pointersByIndex: XrPointer[] = []
+  private readonly modelsByIndex: XrControllerModel[] = []
+  private readonly pointerByHand = new Map<XrHand, XrPointer>()
+  private readonly modelByHand = new Map<XrHand, XrControllerModel>()
   /** This frame's viewer pose in XR space, and the same in world space. */
   private readonly headLocal = new THREE.Matrix4()
   private readonly headWorld = new THREE.Matrix4()
@@ -263,21 +271,23 @@ export class XrRig {
     for (let i = 0; i < 2; i++) {
       const ray = renderer.xr.getController(i)
       const grip = renderer.xr.getControllerGrip(i)
-      const line = this.makeRay()
-      ray.add(line)
-      this.rayLines.push(line)
+      const pointer = new XrPointer(ray, this.group)
+      const model = new XrControllerModel()
+      grip.add(model.group)
+      this.pointersByIndex.push(pointer)
+      this.modelsByIndex.push(model)
       ray.addEventListener('connected', (event) => {
         const handedness = (event as unknown as { data: XRInputSource }).data.handedness
-        const color = HAND_COLORS[handedness === 'left' ? 'left' : 'right']
-        ;(line.material as THREE.LineBasicMaterial).color.copy(color)
-        const marker = grip.children[0] as THREE.Mesh | undefined
-        const material = marker?.material as THREE.MeshBasicMaterial | undefined
-        material?.color.copy(color)
+        const hand: XrHand = handedness === 'left' ? 'left' : 'right'
+        const color = HAND_COLORS[hand]
+        pointer.setColor(color)
+        model.setHand(hand, color)
+        this.pointerByHand.set(hand, pointer)
+        this.modelByHand.set(hand, model)
         // The panels ride a wrist each, which is only identifiable now.
-        if (handedness === 'left') grip.add(this.panelAnchor)
+        if (hand === 'left') grip.add(this.panelAnchor)
         else grip.add(this.panelAnchorRight)
       })
-      grip.add(this.makeMarker())
       this.group.add(ray, grip)
     }
   }
@@ -502,6 +512,9 @@ export class XrRig {
     // ray is on the panel before deciding what a trigger means.
     this.updatePointer(hands)
     this.fireButtons(hands)
+    // After the buttons, so a press the panel just consumed is already showing
+    // on the controller that made it in the same frame.
+    this.updateModels(hands)
   }
 
   /** Push the rig state onto the group, then refresh the world matrices the
@@ -549,6 +562,14 @@ export class XrRig {
    * carries on through the button being pressed reads as missing it.
    */
   private updatePointer(hands: Partial<Record<XrHand, HandInput>>): void {
+    // The beams are refreshed even with no panels to point at — a hand that has
+    // gone away has to stop drawing one, and one with nothing under it has to
+    // go back to full length.
+    for (const hand of ['left', 'right'] as const) {
+      const pointer = this.pointerByHand.get(hand)
+      pointer?.setActive(hands[hand] !== undefined)
+      if (this.pointers.length === 0) pointer?.update(null, false, this.state.scale)
+    }
     if (this.pointers.length === 0) return
     for (const target of this.pointers) target.orient(this.headProxy.position)
     // A drag belongs to the hand that started it; the other hand cannot steal
@@ -561,21 +582,26 @@ export class XrRig {
       const input = hands[hand]
       if (!input) continue
       let best: XrPointerTarget | null = null
-      let bestDistance = Infinity
+      let bestHit: XrPointerHit | null = null
       if (hovered === null) {
         // Every target is asked, because `hover` is also what records which
         // widget is lit — asking only until the first hit would leave a stale
         // highlight on the panel the ray has just left.
         for (const target of this.pointers) {
-          const distance = target.hover(this.rayFor(input))
+          const hit = target.hover(this.rayFor(input))
           touched.add(target)
-          if (distance !== null && distance < bestDistance) {
-            bestDistance = distance
+          if (hit !== null && (bestHit === null || hit.distance < bestHit.distance)) {
+            bestHit = hit
             best = target
           }
         }
       }
-      this.setRayLength(input, best === null ? null : bestDistance)
+      // This frame's trigger, not last frame's `prevTrigger` — fireButtons has
+      // not run yet, and a press that lights the reticle a frame late is
+      // exactly the lag this whole module exists to remove.
+      this.pointerByHand
+        .get(hand)
+        ?.update(bestHit, input.trigger >= TRIGGER_THRESHOLD, this.state.scale)
       if (best !== null) {
         // Only the nearest one keeps its highlight: a ray that passes through
         // a near panel to reach a far one is pointing at the near one.
@@ -584,11 +610,45 @@ export class XrRig {
         hoveredTarget = best
       }
     }
+    // While a press is held, `order` visits only the pressing hand — so the
+    // other one never reached the loop above and would keep last frame's beam.
+    for (const hand of ['left', 'right'] as const) {
+      if (order.includes(hand) || !hands[hand]) continue
+      this.pointerByHand.get(hand)?.update(null, false, this.state.scale)
+    }
     if (hovered === null && this.pressHand === null) {
       for (const target of touched) target.clearHover()
     }
     this.pointerHand = hovered
     this.pointerTarget = hoveredTarget
+  }
+
+  /** Drive the drawn controllers off this frame's raw input. */
+  private updateModels(hands: Partial<Record<XrHand, HandInput>>): void {
+    const badges = {
+      mode: this.callbacks.grabModeLabel(),
+      additive: hands.right?.stickClick ?? false,
+    }
+    for (const hand of ['left', 'right'] as const) {
+      const input = hands[hand]
+      this.modelByHand.get(hand)?.update(
+        input
+          ? {
+              // The RAW stick, not the flight-filtered one: the indicator's job
+              // is to show what the thumb is doing, dead zone included.
+              stickX: input.stickX,
+              stickY: input.stickY,
+              trigger: input.trigger,
+              squeeze: input.squeeze,
+              stickClick: input.stickClick,
+              primary: input.primary,
+              secondary: input.secondary,
+            }
+          : null,
+        badges,
+        this.headProxy.position,
+      )
+    }
   }
 
   /**
@@ -623,13 +683,6 @@ export class XrRig {
    */
   private poseFor(input: HandInput): THREE.Quaternion {
     return input.ray.getWorldQuaternion(new THREE.Quaternion())
-  }
-
-  /** Shorten a hand's laser to what it is touching (world units → metres). */
-  private setRayLength(input: HandInput, distance: number | null): void {
-    const line = input.ray.children.find((c) => (c as THREE.Line).isLine) as THREE.Line | undefined
-    if (!line) return
-    line.scale.z = distance === null ? RAY_LENGTH_M : Math.max(0.02, distance / this.state.scale)
   }
 
   /**
@@ -721,27 +774,11 @@ export class XrRig {
     this.callbacks.onDragEnd(hand, cancelled)
   }
 
-  private makeRay(): THREE.Line {
-    const geometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, 0),
-      new THREE.Vector3(0, 0, -RAY_LENGTH_M),
-    ])
-    const line = new THREE.Line(
-      geometry,
-      new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, fog: false }),
-    )
-    line.raycast = () => {}
-    line.userData.isSelectionBox = true // chrome: never takes a blend mode
-    return line
-  }
-
-  private makeMarker(): THREE.Mesh {
-    const marker = new THREE.Mesh(
-      new THREE.BoxGeometry(0.04, 0.04, 0.09),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, fog: false }),
-    )
-    marker.raycast = () => {}
-    marker.userData.isSelectionBox = true
-    return marker
+  /** Release the pointers' and controllers' GPU resources. Never called in the
+   *  app (the rig outlives every session), but a test that builds several rigs
+   *  would otherwise leak a geometry per hand. */
+  dispose(): void {
+    for (const pointer of this.pointersByIndex) pointer.dispose()
+    for (const model of this.modelsByIndex) model.dispose()
   }
 }

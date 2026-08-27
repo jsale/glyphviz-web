@@ -3222,29 +3222,133 @@ something to decide now).
      - Shape when it happens: a "type…" affordance on the row, focusing a
        hidden input, the panel echoing the string, and a clean fallback when
        `isSystemKeyboardSupported` is false. Do NOT start it unprompted.
-   - **NEXT, and it displaces the pending list below: IMMERSIVE CONTROL
-     IMPROVEMENTS.** Jeff walked the Armillary World in his headset on
-     2026-08-26, called the experience excellent and said **the controls need
-     improvement**. He ended that session to focus on exactly this, so it is
-     the agreed topic to resume on.
-     - What he has NOT said yet is WHICH controls, and the honest answer is
-       that nothing here knows. **Ask first** — locomotion (stick flight speed,
-       turning, the two-handed pinch), selection (the trigger ray at a scene's
-       real scale), the two wrist panels, or comfort. Do not start redesigning
-       on a guess; every one of P1–P5's decisions is recorded above with its
-       reason, and a change that contradicts one should be a decision, not an
-       accident.
-     - Worth knowing before that conversation: the Armillary World is a scene
-       of NESTED CONCENTRIC rings, so it exercises immersive navigation harder
-       than anything driven before — the viewer is inside a structure whose
-       parts surround them at every radius, where the earlier drives flew
-       around scenes seen from outside. Expect scale, precision aiming through
-       a busy foreground, and getting BETWEEN shells to be where the trouble
-       is. The emulated-Quest recipe in the status memory reproduces the scene
-       (open the folder, then enter VR) but cannot reproduce how a gesture
-       FEELS, which is the whole of this complaint — his device is the
-       instrument, so plan on shipping something for him to try rather than on
-       proving it headlessly.
+   - **P6, a pointer you can see and a controller that shows its input**
+     (shipped 2026-08-27, Jeff's report on walking the Armillary World: the
+     immersive experience was excellent but **the controls need improvement**).
+     Asked which, he named three things, and the first two are this item — the
+     third (a curved dashboard with a mode COLUMN) is Phase C below.
+     - **THE RAY WAS BEHIND THE PANEL, by construction.** You could not see
+       where you were pointing; the only feedback was a button lighting up. Two
+       decisions met badly: panels draw with `depthTest: false` and
+       `renderOrder = 5` (P3's call, and the right one — a depth-tested panel is
+       sliced into pieces when you fly inside a scene, which is exactly when you
+       reach for it), while the ray was a plain `Line` at renderOrder 0. And the
+       ray is SHORTENED to its hit distance, so it terminated precisely at the
+       surface that then painted over it: the last centimetre, the only part
+       that says where you are aiming, was the guaranteed-invisible one.
+       - `src/render/xrPointer.ts` is both halves. The BEAM is a tapered tube
+         that fades in from the hand (a 4-component vertex colour, so the taper
+         survives `scale.z`), and while it is on a panel it takes that panel's
+         own depth treatment one order LATER. Off a panel it goes back to
+         ordinary depth testing — a laser aimed into the scene has no business
+         streaking over the glyphs it is aimed at, so the mode is per frame, one
+         boolean.
+       - The RETICLE is the piece that actually answers the complaint: a ring
+         lying on the surface at the hit point, in the hand's colour. Before
+         this, the gap BETWEEN two widgets was indistinguishable from missing
+         the panel altogether. Four states — on the surface (dim, no dot), on a
+         live widget (bright, dot, 1.2×), on a disabled one (grey, no dot: inert
+         is now visible BEFORE the press rather than only after nothing
+         happens), and pressed (0.78×, accent). `disabled` moved onto
+         `XrWidgetBase` for that, since it is now read by the pointer as well as
+         the painter.
+       - `XrPointerTarget.hover` therefore returns an `XrPointerHit` (distance,
+         world point, normal, what is under it) instead of a bare distance. The
+         normal comes off the MESH's own orientation, not the intersection's
+         face normal — a curved or scaled quad still wants the face it is lying
+         on, which is what keeps this working when Phase C lands.
+       - The reticle hangs off the RIG, not the world and not the ray: the rig's
+         local units are perceived metres (xrNav.ts), so its dimensions mean what
+         they say at any world scale.
+     - **THE CONTROLLER WAS A WIREFRAME BOX** — P1's placeholder, 4 × 4 × 9 cm,
+       saying nothing about what the hardware was doing. Jeff asked for the
+       Unity-style feedback he had seen: visible thumbstick movement.
+       `src/render/xrControllerModel.ts` draws a real one, and
+       `src/render/xrControllerPose.ts` is the pure input→part-transform half
+       (no THREE, no DOM, tested in plain node like xrNav.ts).
+       - Thumbstick TILTS (17° at full throw, gated to the unit circle so a
+         diagonal cannot out-tip a full axis push), and depresses on a stick
+         click; trigger sweeps with the analog value; grip pad slides toward the
+         palm; face buttons sink. Each has a LAMP that lights at the threshold
+         the app actually acts on — past `STICK_DEADZONE`, past
+         `TRIGGER_THRESHOLD`, past `GRAB_ON_THRESHOLD` — so the model teaches
+         the dead zone instead of hiding it. The tilt itself shows the RAW
+         stick, deliberately: inside the dead zone the stick still moves on
+         screen, which is the one state where the app otherwise looks broken.
+       - BUILT rather than loaded, agreed with Jeff. three ships
+         `XRControllerModelFactory`, which fetches the official per-device glTF
+         and animates it off the gamepad — the Unity behaviour exactly, and
+         `motion-controllers.module.js` + `GLTFLoader` already ship with three,
+         so it was a real option. Three reasons went the other way: this app
+         renders with `outputColorSpace = LinearSRGBColorSpace` and
+         `NoToneMapping` to match fixed-function GL (lighting.ts), under which a
+         PBR asset with metalness and no environment map comes out dull; the
+         assets are third-party bytes from a CDN at run time, or a few hundred
+         KB vendored; and a stock controller can only show the HARDWARE. This
+         one also shows GlyphViz — a billboarded badge on the RIGHT controller
+         carries the armed grab mode and flags the add-select modifier, state
+         with nowhere else to live in a headset.
+       - Body greys are LIGHTER than a real Touch controller's black plastic, on
+         purpose: the app shades at `albedo · (0.5 + max(N·L, 0))` and writes
+         straight to the framebuffer, so 0.16 albedo lands at 0.16–0.24 —
+         invisible against GlyphViz's near-black default background. Found by
+         looking at a rendered frame; every scene-graph assertion passed with
+         the dark values.
+     - Driven in Chrome against the emulated Quest 3, 35 measured checks: the
+       beam's render order against the panel's, its depth mode in both states,
+       its length against the real shot (0.3937 m vs 0.3922 m), the reticle 1.50
+       mm off the face and inside the quad at the uv the ray actually hit, all
+       four of its states, and every moving part of the model with its lamp
+       threshold — the stick at −17.2° pushed forward and still moving (unlit)
+       at 0.07 deflection, the trigger at 0.35 and 1.0, the grip pad travelling
+       toward the palm, the two controllers mirrored and differently coloured,
+       and the badge facing the viewer to dot 1.0.
+       - Harness quirk worth keeping: **iwer's emulated controller points along
+         +Z, not −Z**, so an aim helper must `lookAt` the MIRRORED point.
+         Aiming at the target directly measures dot = −1 and every check
+         downstream is nonsense.
+       - The PICTURES caught two faults after the numbers passed, which is now
+         four sessions running: the controller body was invisible against a dark
+         scene (above), and the badge was rigidly mounted to the wrist, so half
+         of a hand's poses showed it edge-on — it billboards now, like the
+         panels.
+   - **NEXT: Phase C, the curved dashboard** (agreed with Jeff 2026-08-27, and
+     the third thing he named). A top row of four mode tabs already fills the
+     panel's width (`TAB_W = (1 − PAD·5) / 4`), so it cannot grow — his words:
+     "as time goes by the panel will become too huge". The plan:
+     - A **curved shell geometry whose UVs match PlaneGeometry's**, which is the
+       cheap part and the reason this is low risk: `XrSurface.hover` reads
+       `hit.uv` and every widget is in normalised coordinates (ui/xrWidget.ts),
+       so every widget, hit test and painter works unchanged on it.
+     - Modes move to a **LEFT COLUMN** — Jeff is left-handed and will point at
+       them with that hand — with a reserved left gutter and the content columns
+       shifted right of it. A column holds 6–8 modes at a hit size a ray can
+       manage where a row maxes out at 4, which is the scaling answer.
+     - A **content-origin transform**, so future pages do not each re-tune
+       `CAP_X` / `VAL_X` / `INC_X` by hand. This is the part that makes the
+       panel keep scaling rather than just scale once.
+     - Scope agreed: the curved panel IS the PINNED state; **both wrist panels
+       keep their current job** as quick glances. He likes the pin and the mode
+       buttons and asked to keep them.
+     - It touches `xrPropertiesModel.test.ts`'s layout invariants (nothing
+       overlapping, nothing clipped, every widget ≥ 0.1 of the quad). Those are
+       exactly the checks that should catch a bad reflow — update them, do not
+       weaken them.
+   - **THEN Phase D, drawing in VR**, which Jeff asked for by name ("that would
+     be amazing"). The groundwork is already there: `drawPlane.ts`'s `gridHit`
+     takes a RAY and `drawMode.ts`'s `placeStamp`/`shouldStamp` are pure. A Draw
+     entry in the mode column, trigger-held strokes, and the P6 reticle drawn on
+     the grid plane as the cursor. One decision to make: desktop spacing is
+     PIXELS of cursor travel, and the honest headset analogue is world-units of
+     travel on the plane, which is scale-independent.
+   - Context worth having for both: the Armillary World is a scene of NESTED
+     CONCENTRIC rings, so it exercises immersive navigation harder than anything
+     driven before — the viewer is inside a structure whose parts surround them
+     at every radius, where the earlier drives flew around scenes seen from
+     outside. The emulated-Quest recipe reproduces the scene (open the folder,
+     then enter VR) but cannot reproduce how a gesture FEELS, so his device is
+     the instrument: ship something for him to try rather than proving it
+     headlessly.
    - PENDING after that, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
      small once the rig exists, and the demo that impresses people) — Jeff
      deferred it 2026-08-14 in favour of the desktop-feature catch-up; then

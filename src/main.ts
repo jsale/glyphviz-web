@@ -155,6 +155,7 @@ import {
   PINNED_SCALE,
   XrProperties,
 } from './render/xrProperties'
+import { GRAB_MODES } from './ui/xrPropertiesModel'
 import type { XrGrabMode, XrPropSelectData } from './ui/xrPropertiesModel'
 import { CameraRig, rigFromView } from './render/cameraMode'
 import type { OrbitRig } from './render/cameraMode'
@@ -399,6 +400,11 @@ const xrRig = new XrRig(renderer, camera, scene, {
         ? 'Properties panel shown.'
         : 'Properties panel hidden — press A to bring it back.',
     )
+  },
+  grabModeLabel() {
+    // The Properties panel owns the armed mode; the controller just wears it,
+    // so a grab's meaning is readable without raising the panel to check.
+    return GRAB_MODES.find((m) => m.mode === xrProperties.grabMode)?.label ?? 'Move'
   },
   onStart() {
     // Cross-eye stereo is a second pair of eyes drawn into one flat canvas;

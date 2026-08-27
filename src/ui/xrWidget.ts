@@ -29,6 +29,14 @@ export interface XrWidgetBase {
   id: string
   kind: 'button' | 'slider' | 'scrub'
   rect: XrRect
+  /**
+   * Drawn greyed and inert. A disabled widget stays in the list rather than
+   * being omitted so the row keeps its shape — and so a press still COUNTS as
+   * landing on the panel, which is what stops it selecting the glyph behind.
+   * The pointer reticle reads it too, so "inert" is visible before the press
+   * rather than only after nothing happens (render/xrPointer.ts).
+   */
+  disabled?: boolean
 }
 
 /** The widget under a normalised point, or null. Widgets never overlap, so the
