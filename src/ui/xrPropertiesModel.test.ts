@@ -6,6 +6,7 @@ import { GEOMETRY_NAMES, Geometry, NodeType, Topo } from '../gv/types'
 import {
   CONTENT_X,
   DEFAULT_STEP,
+  DRAW_SPACING_DEFAULT,
   MAX_ROWS,
   PAGES,
   PANEL_H_M,
@@ -19,6 +20,7 @@ import {
   rowY,
   scrubNotches,
   stepSize,
+  type XrDrawData,
   type XrPropId,
   type XrPropState,
 } from './xrPropertiesModel'
@@ -34,6 +36,24 @@ const SELECT_VALUES = [
   { value: 2, label: '2' },
 ]
 
+const DRAW: XrDrawData = {
+  drawing: false,
+  gridId: 7,
+  gridIsGlobe: false,
+  brushes: ['Single Object'],
+  brushIndex: 0,
+  drawZ: 0,
+  spacing: DRAW_SPACING_DEFAULT,
+  headingJitter: 0,
+  scaleJitter: 0,
+  stamps: 0,
+  nodes: 0,
+}
+
+function draw(overrides: Partial<XrDrawData> = {}): XrDrawData {
+  return { ...DRAW, ...overrides }
+}
+
 function state(overrides: Partial<XrPropState> = {}): XrPropState {
   return {
     node: node(),
@@ -45,6 +65,7 @@ function state(overrides: Partial<XrPropState> = {}): XrPropState {
     grabMode: 'move',
     labels: { textureLabel: 'none' },
     select: { criterion: 'branchLevel', values: SELECT_VALUES, selectable: 109 },
+    draw: DRAW,
     valueIndex: 0,
     addToSelection: false,
     ...overrides,
@@ -65,6 +86,7 @@ describe('propLayout — chrome that every state carries', () => {
       'page-shape',
       'page-move',
       'page-look',
+      'page-draw',
     ])
   })
 
@@ -100,6 +122,11 @@ describe('propLayout — geometry of the quad', () => {
     state({ page: 'look' }),
     state({ node: null, count: 0 }),
     state({ page: 'shape', node: node({ type: NodeType.WorldGrid }) }),
+    state({ page: 'draw' }),
+    state({ page: 'draw', node: null, count: 0, draw: draw({ drawing: true, stamps: 12, nodes: 84 }) }),
+    state({ page: 'draw', draw: draw({ gridId: null }) }),
+    state({ page: 'draw', draw: draw({ gridIsGlobe: true }) }),
+    state({ page: 'draw', draw: draw({ brushes: ['Single Object', 'Tree'], brushIndex: 1 }) }),
   ]
 
   it('keeps every widget inside the panel', () => {
@@ -187,6 +214,7 @@ describe('propLayout — the Select page', () => {
       'page-shape',
       'page-move',
       'page-look',
+      'page-draw',
       'criterion-prev',
       'criterion-next',
       'value-prev',
@@ -286,6 +314,7 @@ describe('propLayout — the Shape page', () => {
       'page-shape',
       'page-move',
       'page-look',
+      'page-draw',
       'topo-prev',
       'topo-next',
       'geometry-prev',
@@ -345,6 +374,7 @@ describe('propLayout — the Move page', () => {
       'page-shape',
       'page-move',
       'page-look',
+      'page-draw',
       'axis-x',
       'axis-y',
       'axis-z',
@@ -427,6 +457,7 @@ describe('propLayout — the Look page', () => {
       'page-shape',
       'page-move',
       'page-look',
+      'page-draw',
       'palette-prev',
       'palette-next',
       'index-prev',
@@ -462,6 +493,109 @@ describe('propLayout — the Look page', () => {
   it('carries the literal colour to the header swatch', () => {
     const layout = propLayout(state({ node: node({ color: { r: 220, g: 20, b: 60, a: 255 } }) }))
     expect(layout.color).toEqual({ r: 220, g: 20, b: 60, a: 255 })
+  })
+})
+
+describe('propLayout — the Draw page', () => {
+  it('offers the mode toggle, the brush and the four settings', () => {
+    expect(ids(state({ page: 'draw' }))).toEqual([
+      'pin',
+      'page-select',
+      'page-shape',
+      'page-move',
+      'page-look',
+      'page-draw',
+      'draw-toggle',
+      'brush-prev',
+      'brush-next',
+      'drawz-dec',
+      'drawz-scrub',
+      'drawz-inc',
+      'spacing-dec',
+      'spacing-scrub',
+      'spacing-inc',
+      'spin-dec',
+      'spin-scrub',
+      'spin-inc',
+      'sizejit-dec',
+      'sizejit-scrub',
+      'sizejit-inc',
+    ])
+  })
+
+  it('renders with NOTHING selected — drawing needs no selection', () => {
+    const layout = propLayout(state({ page: 'draw', node: null, count: 0 }))
+    expect(layout.empty).toBeNull()
+    expect(layout.rows).toHaveLength(6)
+  })
+
+  it('fills all six rows, which is what the sixth slot was left for', () => {
+    // If a later page wants a seventh, the lattice is what has to change — not
+    // this page quietly overflowing off the bottom of the quad.
+    const layout = propLayout(state({ page: 'draw' }))
+    expect(layout.rows.map((r) => r.y)).toEqual([0, 1, 2, 3, 4, 5].map(rowY))
+  })
+
+  it('names the toggle by what pressing it does', () => {
+    const off = propLayout(state({ page: 'draw' })).widgets.find((w) => w.id === 'draw-toggle')!
+    expect(off.label).toBe('Start drawing')
+    expect(off.active).toBe(false)
+    const on = propLayout(
+      state({ page: 'draw', draw: draw({ drawing: true }) }),
+    ).widgets.find((w) => w.id === 'draw-toggle')!
+    expect(on.label).toBe('Stop drawing')
+    expect(on.active).toBe(true)
+  })
+
+  it('refuses to arm on a globe grid, which has no drawing plane', () => {
+    const layout = propLayout(state({ page: 'draw', draw: draw({ gridIsGlobe: true }) }))
+    expect(layout.widgets.find((w) => w.id === 'draw-toggle')?.disabled).toBe(true)
+    expect(layout.subtitle).toContain('globe')
+  })
+
+  it('says a gridless scene will get a grid rather than failing silently', () => {
+    expect(propLayout(state({ page: 'draw', draw: draw({ gridId: null }) })).subtitle).toContain(
+      'starting will make one',
+    )
+  })
+
+  it('greys the brush stepper until there is more than one brush', () => {
+    const one = propLayout(state({ page: 'draw' })).widgets.find((w) => w.id === 'brush-next')!
+    expect(one.disabled).toBe(true)
+    const two = propLayout(
+      state({ page: 'draw', draw: draw({ brushes: ['Single Object', 'Tree'] }) }),
+    ).widgets.find((w) => w.id === 'brush-next')!
+    expect(two.disabled).toBe(false)
+  })
+
+  it('shows the brush the host says is chosen', () => {
+    const rows = propLayout(
+      state({ page: 'draw', draw: draw({ brushes: ['Single Object', 'Tree'], brushIndex: 1 }) }),
+    ).rows
+    expect(rows[1]).toMatchObject({ caption: 'brush', value: 'Tree' })
+  })
+
+  it('reports what the strokes drew — the status line is DOM and unseen here', () => {
+    expect(propLayout(state({ page: 'draw', draw: draw({ stamps: 12, nodes: 84 }) })).subtitle).toBe(
+      'Grid 7 · drew 12 stamps · 84 nodes',
+    )
+    // One node per stamp is the single-object brush, and reads as objects.
+    expect(propLayout(state({ page: 'draw', draw: draw({ stamps: 3, nodes: 3 }) })).subtitle).toBe(
+      'Grid 7 · drew 3 objects',
+    )
+  })
+
+  it('shows the four settings in their own units', () => {
+    const rows = propLayout(
+      state({
+        page: 'draw',
+        draw: draw({ drawZ: 2.5, spacing: 8, headingJitter: 45, scaleJitter: 20 }),
+      }),
+    ).rows
+    expect(rows[2]).toMatchObject({ caption: 'draw Z', value: '2.5' })
+    expect(rows[3]).toMatchObject({ caption: 'spacing', value: '8' })
+    expect(rows[4]).toMatchObject({ caption: 'spin ±°', value: '45' })
+    expect(rows[5]).toMatchObject({ caption: 'size ±%', value: '20' })
   })
 })
 

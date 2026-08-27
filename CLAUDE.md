@@ -3378,13 +3378,68 @@ something to decide now).
          retuned around it (`ROW_TOP` 0.205, subtitle at 0.14).
        - One row of the six is deliberately left empty on every page. That is the
          headroom the change exists to create, not an oversight.
-   - **THEN Phase D, drawing in VR**, which Jeff asked for by name ("that would
-     be amazing"). The groundwork is already there: `drawPlane.ts`'s `gridHit`
-     takes a RAY and `drawMode.ts`'s `placeStamp`/`shouldStamp` are pure. A Draw
-     entry in the mode column, trigger-held strokes, and the P6 reticle drawn on
-     the grid plane as the cursor. One decision to make: desktop spacing is
-     PIXELS of cursor travel, and the honest headset analogue is world-units of
-     travel on the plane, which is scale-independent.
+   - **P8, drawing in VR** (shipped 2026-08-27, Jeff asked for it by name —
+     "that would be amazing" — after confirming P7 in the headset). Draw Mode
+     (roadmap 6u) reached with a controller: point at a flat World Grid, hold
+     the trigger, and objects are stamped along the stroke.
+     - It is the SAME mode, not a second one — the same `drawMode` flag the D
+       key arms, the same `gridHit` / `placeStamp` / `shouldStamp`, the same
+       brushes and the same Draw Z. That was possible because the groundwork was
+       already right: `gridHit` took a RAY (never a mouse position) and the two
+       drawMode functions are pure. A Draw page and a gesture is the whole port.
+     - **THE GESTURE rides the trigger's existing claim mechanism** — `onPick`
+       returns true, then `onDragRay`/`onDragEnd` — so xrSession's button logic
+       needed no change at all. Draw claims the trigger exactly as it claims the
+       left button with a mouse: plain click-select is what a stroke replaces,
+       while the add-select modifier still selects (the desktop's "Ctrl+click
+       still works" rule, in the one chord this app has for Ctrl) and is the
+       documented way to grab a bad stroke and Delete it. Squeeze locomotion,
+       the wrist panels and both sticks are untouched.
+     - **SPACING is in the GRID's own child coordinates, not pixels of travel**,
+       and it is the one draw setting NOT shared with the DOM panel — the two
+       measure different things. On screen, pixels tie the brush to a zoom the
+       person drawing can see. In a headset you walk about while you draw and
+       cannot judge your own distance to the plane, so an angular spacing would
+       scatter stamps when you happened to be standing back and crowd them when
+       you leaned in: the same stroke coming out differently for a reason
+       invisible to the person making it. Grid units make the brush a property
+       of the DRAWING. Default 5.0, which is the New Object placement step.
+     - **THE CURSOR is the P6 reticle**, handed a synthetic `XrPointerHit` at
+       the grid plane through a new `XrCallbacks.aimHit` — so the beam shortens
+       to the plane and the ring lies flat on it with no new drawing code. Only
+       Draw Mode answers that callback, so a scene with nothing to report pays
+       nothing (and a continuous raycast against Event_Cloud's 209k glyphs never
+       happens — this one is a matrix inverse, not a traversal).
+       - Which exposed a fault in the P6 reticle itself, found by looking at a
+         rendered frame: it was a FIXED 8 mm ring, sized for a panel at 35 cm,
+         and a grid you are drawing on is fifteen metres away — where 8 mm is
+         0.06° and simply invisible. It holds a constant ANGULAR size now.
+         Measured: 576 mm at 15.8 m, against the 16 mm a fixed one would draw.
+         Every numeric check about the cursor had passed, because the cursor was
+         in exactly the right place and too small to see.
+     - The Draw page is the fifth mode-column entry and fills all six rows,
+       which is what the sixth slot was left for in P7: a toggle named by what
+       pressing it does, a brush stepper, and Draw Z / spacing / spin / size.
+       It renders with nothing selected, like Select, and carries its own report
+       in the subtitle — the status line is DOM and a headset never sees it.
+     - Driven in Chrome, 27 measured checks: the cursor 1.5 mm from the aimed
+       grid point and 576 mm across at 15.8 m; a stamp landing at (−30, 5) for
+       an aim at (−30, 5); a 120-unit stroke giving 6 stamps at spacing 20 and
+       16 at spacing 5, with no consecutive pair closer than the spacing IN GRID
+       UNITS; every stamp having a frame and a visible glyph (a node with no
+       frame is a row in a CSV, not a drawing); Draw Z reaching both the stamp
+       and the DOM panel's own input; the add-select modifier still selecting;
+       the wrist panel still taking presses; and the stick still flying.
+       - Harness lesson worth keeping: the first version TELEPORTED the aiming
+         hand to just above its target, which is not a pose anybody can adopt
+         and made every distance-dependent reading meaningless — the reticle
+         measured 0.7 m from a grid the head was fifteen metres from, which is
+         what nearly hid the sizing fault above. Aim from where a hand actually
+         is, about 25 cm in front of the head.
+     - Not done, deliberately: no brush LOADING in-headset (a file picker has no
+       headset counterpart, so the page steps through brushes the desktop side
+       has already loaded), and no undo beyond selecting a stroke and deleting
+       it.
    - Context worth having for both: the Armillary World is a scene of NESTED
      CONCENTRIC rings, so it exercises immersive navigation harder than anything
      driven before — the viewer is inside a structure whose parts surround them
@@ -3393,16 +3448,16 @@ something to decide now).
      then enter VR) but cannot reproduce how a gesture FEELS, so his device is
      the instrument: ship something for him to try rather than proving it
      headlessly.
-   - PENDING after that, in the order agreed: passthrough AR (`immersive-ar` on Quest 3,
-     small once the rig exists, and the demo that impresses people) — Jeff
-     deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
-     hand tracking, comfort options (snap turn, vignette) and authoring
-     gestures — Draw Mode with a controller is the natural one, since
-     `drawMode.ts`/`drawPlane.ts` already take a ray. Grab-to-move/turn/size
-     shipped as P4+P5, and add-select took the RIGHT thumbstick click; the LEFT
+   - PENDING after that, in the order agreed: passthrough AR (`immersive-ar` on
+     Quest 3, small once the rig exists, and the demo that impresses people) —
+     Jeff deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
+     hand tracking and comfort options (snap turn, vignette). The authoring
+     gestures are largely done now: grab-to-move/turn/size shipped as P4+P5 and
+     Draw Mode as P8, with add-select on the RIGHT thumbstick click; the LEFT
      stick click is the one free input left. Still absent in-headset: a
      rubber-band region select (the desktop's Shift+drag has no ray analogue
-     worth guessing at), and Draw Mode itself.
+     worth guessing at), text entry (deferred by Jeff — see above), and loading
+     a Composer brush without going out to the desktop.
 10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
     through step 8 — the two remaining desktop features, by conscious
     choice, so their absence is a decision and not a gap):

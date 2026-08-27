@@ -21,6 +21,9 @@ import {
   ALPHA_STEP,
   CAP_X,
   DEFAULT_STEP,
+  DRAW_JITTER_STEP,
+  DRAW_SPACING_STEP,
+  DRAW_Z_STEP,
   PANEL_H_M,
   PANEL_W_M,
   RATIO_STEP,
@@ -80,6 +83,14 @@ export const PINNED_SCALE = 1.9
 export const PINNED_DISTANCE_M = 0.75
 export const PINNED_DROP_M = 0.2
 
+/** Draw-page scrubs, which change host settings rather than node data. */
+const DRAW_SCRUBS = new Set<string>([
+  'drawz-scrub',
+  'spacing-scrub',
+  'spin-scrub',
+  'sizejit-scrub',
+])
+
 export interface XrPropertiesActions {
   /** Step an enum-ish field on every selected node, by ±1 (the desktop's own
    *  J/O and =/− cycle keys, which these rows ARE). */
@@ -110,7 +121,19 @@ export interface XrPropertiesActions {
   hideSelected(): void
   showAll(): void
   isolateSelected(): void
+
+  // --- Draw page. Every rule is gv/drawMode.ts's, unchanged; these are the
+  // same settings the DOM Draw panel edits, so the two surfaces cannot drift.
+  /** Turn Draw Mode on or off — it is ONE mode, shared with the D key. */
+  toggleDraw(): void
+  /** Cycle the brush: Single Object, then any loaded Composer template. */
+  stepBrush(step: number): void
+  /** Nudge one of the four draw settings, in that setting's own units. */
+  nudgeDraw(field: XrDrawField, delta: number): void
 }
+
+/** The Draw page's four adjustable settings. */
+export type XrDrawField = 'drawZ' | 'spacing' | 'headingJitter' | 'scaleJitter'
 
 /** What main.ts supplies each frame; the panel owns everything else. */
 export type XrPropertiesInput = Omit<
@@ -275,6 +298,7 @@ export class XrProperties extends XrSurface<XrPropWidget> {
       return
     }
     if (this.applySelectPress(id)) return
+    if (this.applyDrawPress(id)) return
     if (id === 'axis-x' || id === 'axis-y' || id === 'axis-z') {
       this.axis = id.slice(5) as XrPropAxis
       this.refresh()
@@ -329,6 +353,52 @@ export class XrProperties extends XrSurface<XrPropWidget> {
         return true
       case 'vis-only':
         a.isolateSelected()
+        return true
+      default:
+        return false
+    }
+  }
+
+  /**
+   * The Draw page's presses. Like the Select page's, these skip `commit` — the
+   * mode toggle and the brush step change no node data at all, and the four
+   * settings are host state that the next stamp reads, not fields on a node.
+   */
+  private applyDrawPress(id: XrPropId): boolean {
+    const a = this.actions
+    switch (id) {
+      case 'draw-toggle':
+        a.toggleDraw()
+        return true
+      case 'brush-prev':
+        a.stepBrush(-1)
+        return true
+      case 'brush-next':
+        a.stepBrush(1)
+        return true
+      case 'drawz-dec':
+        a.nudgeDraw('drawZ', -DRAW_Z_STEP)
+        return true
+      case 'drawz-inc':
+        a.nudgeDraw('drawZ', DRAW_Z_STEP)
+        return true
+      case 'spacing-dec':
+        a.nudgeDraw('spacing', -DRAW_SPACING_STEP)
+        return true
+      case 'spacing-inc':
+        a.nudgeDraw('spacing', DRAW_SPACING_STEP)
+        return true
+      case 'spin-dec':
+        a.nudgeDraw('headingJitter', -DRAW_JITTER_STEP)
+        return true
+      case 'spin-inc':
+        a.nudgeDraw('headingJitter', DRAW_JITTER_STEP)
+        return true
+      case 'sizejit-dec':
+        a.nudgeDraw('scaleJitter', -DRAW_JITTER_STEP)
+        return true
+      case 'sizejit-inc':
+        a.nudgeDraw('scaleJitter', DRAW_JITTER_STEP)
         return true
       default:
         return false
@@ -411,10 +481,22 @@ export class XrProperties extends XrSurface<XrPropWidget> {
         const field = widget.id.split('-')[0] as XrPropVectorField
         return this.actions.nudgeVector(field, this.axis, delta * stepSize(this.step))
       }
+      case 'drawz-scrub':
+        return this.actions.nudgeDraw('drawZ', delta * DRAW_Z_STEP)
+      case 'spacing-scrub':
+        return this.actions.nudgeDraw('spacing', delta * DRAW_SPACING_STEP)
+      case 'spin-scrub':
+        return this.actions.nudgeDraw('headingJitter', delta * DRAW_JITTER_STEP)
+      case 'sizejit-scrub':
+        return this.actions.nudgeDraw('scaleJitter', delta * DRAW_JITTER_STEP)
     }
   }
 
-  protected onDragEnd(): void {
+  protected onDragEnd(widget: XrPropWidget): void {
+    // A Draw-page scrub changed a host setting, not a node — there is nothing
+    // to rebuild, and `commit` would rebuild the whole scene for a number the
+    // next stamp reads.
+    if (widget.id.endsWith('-scrub') && DRAW_SCRUBS.has(widget.id)) return
     // The scrub itself moves the glyph in place every frame (main.ts takes the
     // gizmo's own applyFrameTransform path); the rebuild that re-cells
     // overlays, repaints the table and refreshes the DOM inspector happens

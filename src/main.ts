@@ -155,8 +155,9 @@ import {
   PINNED_SCALE,
   XrProperties,
 } from './render/xrProperties'
-import { GRAB_MODES } from './ui/xrPropertiesModel'
-import type { XrGrabMode, XrPropSelectData } from './ui/xrPropertiesModel'
+import { DRAW_SPACING_DEFAULT, GRAB_MODES } from './ui/xrPropertiesModel'
+import type { XrDrawData, XrGrabMode, XrPropSelectData } from './ui/xrPropertiesModel'
+import type { XrPointerHit } from './render/xrPointer'
 import { CameraRig, rigFromView } from './render/cameraMode'
 import type { OrbitRig } from './render/cameraMode'
 import {
@@ -343,6 +344,16 @@ scene.add(xrLabel.sprite)
 const xrRig = new XrRig(renderer, camera, scene, {
   onPick(raycaster, _hand, pose, additive) {
     if (!currentRoot) return false
+    // Draw Mode claims the trigger, exactly as it claims the left button with a
+    // mouse: plain click-select is what a stroke replaces. The add-select
+    // modifier still selects, which is the documented way to grab a bad stroke
+    // and delete it — the desktop's "Ctrl+click still works" rule, in the one
+    // chord this app has for Ctrl.
+    if (drawMode && !additive) {
+      if (beginXrStroke(raycaster)) return true
+      // Nothing under the ray to draw on: fall through to an ordinary pick, so
+      // aiming past the grid still selects rather than doing nothing at all.
+    }
     const nodeId = pickNodeId(raycaster, currentRoot)
     // The right thumbstick click held is this app's Ctrl: the press TOGGLES
     // membership and never grabs, because the gesture is about the selection
@@ -369,10 +380,21 @@ const xrRig = new XrRig(renderer, camera, scene, {
     return false
   },
   onDragRay(raycaster, _hand, pose) {
+    if (xrStroke) return xrStrokeMove(raycaster)
     xrGrabMove(raycaster, pose)
   },
   onDragEnd(_hand, cancelled) {
+    if (xrStroke) return endXrStroke()
     endXrGrab(cancelled)
+  },
+  /**
+   * What the ray is aiming AT in the scene, for the pointer's cursor. Only
+   * Draw Mode answers: a continuous raycast per hand per frame is affordable
+   * against one grid plane (it is a matrix inverse, not a scene traversal) and
+   * would not be against Event_Cloud's 209k glyphs.
+   */
+  aimHit(raycaster) {
+    return drawMode ? xrDrawCursorHit(raycaster) : null
   },
   fitTarget() {
     if (!currentRoot) return null
@@ -542,6 +564,39 @@ const xrProperties = new XrProperties({
   showAll: () => xrApplyVisibility(showAll(currentNodes), 'Showed'),
   isolateSelected: () =>
     xrApplyVisibility(isolateSelection(currentNodes, new Set(selection.ids)), 'Isolated,'),
+
+  // Draw page. `setDrawMode` is the SAME function the D key and the HUD button
+  // call, so the mode is one mode however it was armed.
+  toggleDraw: () => setDrawMode(!drawMode),
+  stepBrush: (step) => {
+    // The select's options are "Single Object" (value '') then one per loaded
+    // brush, which is exactly the list the page steps through — so the DOM
+    // control stays the single source of truth and no second index can drift.
+    const options = drawStampSelect.options
+    if (options.length < 2) return
+    const n = options.length
+    const next = (((drawStampSelect.selectedIndex + step) % n) + n) % n
+    drawStampSelect.selectedIndex = next
+    status(`Draw brush: ${options[next].textContent ?? 'Single Object'}.`)
+  },
+  nudgeDraw: (field, delta) => {
+    if (field === 'spacing') {
+      // VR-only, and in the grid's own units rather than the mouse panel's
+      // pixels — the two measure different things and must not share an input.
+      xrDrawSpacing = Math.max(0, round6(xrDrawSpacing + delta))
+      return
+    }
+    const input =
+      field === 'drawZ'
+        ? drawZInput
+        : field === 'headingJitter'
+          ? drawHeadingJitterInput
+          : drawScaleJitterInput
+    const min = Number(input.min)
+    const max = Number(input.max)
+    const next = round6((Number(input.value) || 0) + delta)
+    input.value = String(Math.min(max, Math.max(min, next)))
+  },
 })
 
 /** A visibility command's tail: `hide` is CSV data, so it needs a rebuild, and
@@ -1663,6 +1718,25 @@ renderer.domElement.addEventListener(
   get rateState() {
     return { paused: ratesPaused, frozen: pausedRates.size, ticking: rateNodes.length }
   },
+  // Draw Mode. The VR spacing lives in neither the DOM nor the scene graph (it
+  // is in the grid's own units, so it cannot share the mouse panel's pixel
+  // input), and where a grid coordinate lands in the world is derivable only
+  // from the scene's live matrices — which is what a drive has to aim at.
+  xrDraw: {
+    get on() {
+      return drawMode
+    },
+    get state() {
+      return xrDrawData()
+    },
+    setSpacing(value: number) {
+      xrDrawSpacing = value
+    },
+    gridPoint(lon: number, lat: number, z = 0) {
+      const target = xrDrawTarget()
+      return target ? gridChildWorld(target.grid, target.frame, lon, lat, z) : null
+    },
+  },
 }
 
 const statusBar = document.createElement('div')
@@ -1759,6 +1833,7 @@ function updateXrProperties() {
       textureLabel: primary ? xrTextureLabel(primary.textureId) : '',
     },
     select: xrSelectData(xrProperties.criterion),
+    draw: xrDrawData(),
   })
 }
 
@@ -4383,6 +4458,11 @@ let drawMode = false
 let drawStrokeLast: { x: number; y: number } | null = null
 let drawStrokeStamps = 0
 let drawStrokeNodes = 0
+/** Totals since Draw Mode was switched on. The per-stroke counters above are
+ *  reset by each report; the VR Draw page shows a running total instead, since
+ *  a headset never sees the status line that report goes to. */
+let drawStrokeTotalStamps = 0
+let drawStrokeTotalNodes = 0
 let drawRebuildFrame = 0
 /** Loaded Glyph Composer brushes, indexed by the Stamp menu's option values. */
 const drawBrushes: GlyphRecipe[] = []
@@ -4437,6 +4517,11 @@ function setDrawMode(on: boolean): void {
   if (on && flyRig.flyMode) setCameraMode(false)
   drawMode = on
   drawStrokeLast = null
+  xrStroke = null
+  // The VR Draw page's report counts what THIS spell of drawing produced, so
+  // arming the mode starts it over.
+  drawStrokeTotalStamps = 0
+  drawStrokeTotalNodes = 0
   drawModeButton.classList.toggle('active', on)
   renderer.domElement.style.cursor = on ? 'crosshair' : ''
   // Manipulation is suspended while drawing; the armed mode stays sticky.
@@ -4553,8 +4638,183 @@ function drawStamp(clientX: number, clientY: number): void {
   )
   currentNodes.push(...nodes)
   drawStrokeStamps++
+  drawStrokeTotalStamps++
   drawStrokeNodes += nodes.length
+  drawStrokeTotalNodes += nodes.length
   requestDrawRebuild()
+}
+
+// --- Draw Mode in a headset ----------------------------------------------------
+// The same mode, the same rules and the same functions as the mouse version
+// above: `gridHit` already took a RAY and `placeStamp`/`shouldStamp` were
+// already pure, which is why this is a gesture and a cursor rather than a
+// second Draw Mode.
+//
+// Three things had to be decided rather than ported, since the desktop has no
+// controller:
+//
+//  - SPACING is measured in the grid's own child coordinates, not in pixels of
+//    travel. See DRAW_SPACING_STEP in ui/xrPropertiesModel.ts — the short of it
+//    is that a person drawing in a headset cannot judge their own distance to
+//    the plane, so an angular spacing would make the same stroke come out
+//    differently for an invisible reason.
+//  - The stroke rides the trigger's EXISTING claim mechanism (onPick returns
+//    true, then onDragRay/onDragEnd), so xrSession's button logic needed no
+//    change at all.
+//  - The CURSOR is the P6 reticle, fed a synthetic hit at the grid plane. That
+//    is what makes "where will this land" visible before the trigger, which is
+//    the whole reason the pointer work came first.
+
+/** Spacing between stamps in the grid's own units — VR only, see above. */
+let xrDrawSpacing = DRAW_SPACING_DEFAULT
+/** The stroke in progress: the last stamped grid coordinate, or null. */
+let xrStroke: { lon: number; lat: number } | null = null
+
+/** The grid this stamp lands on, and its frame, or a reason it cannot. */
+function xrDrawTarget(): { grid: GvNode; frame: THREE.Object3D } | null {
+  const grid = drawTargetGrid()
+  if (!grid || gridIsGlobe(grid)) return null
+  const frame = currentFrames?.get(grid.id)
+  if (!frame) return null
+  // A frame built since the last render pass has no world matrix yet, and a
+  // stamp is routinely the very next thing after a rebuild. Ancestors only.
+  frame.updateWorldMatrix(true, false)
+  return { grid, frame }
+}
+
+/** Where the ray meets the grid's drawing plane, in the grid's child
+ *  coordinates, or null. */
+function xrGridHit(raycaster: THREE.Raycaster): { lon: number; lat: number } | null {
+  const target = xrDrawTarget()
+  if (!target) return null
+  return gridHit(raycaster.ray, target.grid, target.frame, xrDrawZ())
+}
+
+function xrDrawZ(): number {
+  return Number(drawZInput.value) || 0
+}
+
+/**
+ * The pointer cursor while Draw Mode is on: a reticle lying on the grid's
+ * drawing plane exactly where a stamp would land. Built as an ordinary
+ * `XrPointerHit`, so the beam shortens to the plane and the ring lies flat on
+ * it with no new drawing code — the pointer already does all of that for a
+ * panel.
+ */
+function xrDrawCursorHit(raycaster: THREE.Raycaster): XrPointerHit | null {
+  const target = xrDrawTarget()
+  if (!target) return null
+  const drawZ = xrDrawZ()
+  const hit = gridHit(raycaster.ray, target.grid, target.frame, drawZ)
+  if (!hit) return null
+  const point = gridChildWorld(target.grid, target.frame, hit.lon, hit.lat, drawZ)
+  return {
+    distance: raycaster.ray.origin.distanceTo(point),
+    point,
+    // The plane's own normal — its grid-local +Z carried into the world by the
+    // frame, so the ring lies ON the surface however the grid is tilted.
+    normal: new THREE.Vector3(0, 0, 1).transformDirection(target.frame.matrixWorld).normalize(),
+    // Always 'widget': the cursor is over a place a press will DO something,
+    // which is exactly what that state means on a panel.
+    target: 'widget',
+  }
+}
+
+/**
+ * World position of a point in a flat grid's child coordinates — the forward
+ * direction of `gridHit`'s inversion, and buildScene's `framePosition` rule for
+ * a flat grid child: the grid's own scale re-spaces its children rather than
+ * living on its frame (the ANTz Grid rule), so it is multiplied back in.
+ */
+function gridChildWorld(
+  grid: GvNode,
+  frame: THREE.Object3D,
+  lon: number,
+  lat: number,
+  z: number,
+): THREE.Vector3 {
+  const center = gridCenter(grid)
+  return new THREE.Vector3(
+    (lon - center.lon) * grid.scale.x,
+    (lat - center.lat) * grid.scale.y,
+    z * grid.scale.z,
+  ).applyMatrix4(frame.matrixWorld)
+}
+
+/** Trigger down with Draw Mode on: plant the first stamp and claim the drag. */
+function beginXrStroke(raycaster: THREE.Raycaster): boolean {
+  const grid = drawTargetGrid()
+  // The mode is meaningless without a target, so a gridless scene gets one —
+  // the same rule entering the mode follows.
+  // addWorldGrid rebuilds for itself, which is what gives the new grid a frame
+  // for xrGridHit to read a world matrix off.
+  if (!grid) {
+    addWorldGrid()
+  } else if (gridIsGlobe(grid)) {
+    status(`Grid ${grid.id} is a globe — Draw Mode draws on flat grids only.`)
+    return false
+  }
+  const hit = xrGridHit(raycaster)
+  if (!hit) return false
+  xrStroke = hit
+  xrDrawStampAt(hit)
+  return true
+}
+
+/** Trigger held: stamp again once the ray has swept a spacing's worth of grid. */
+function xrStrokeMove(raycaster: THREE.Raycaster): void {
+  const hit = xrGridHit(raycaster)
+  if (!hit) return
+  if (!shouldStamp(xrStroke && { x: xrStroke.lon, y: xrStroke.lat }, hit.lon, hit.lat, xrDrawSpacing))
+    return
+  xrStroke = hit
+  xrDrawStampAt(hit)
+}
+
+function endXrStroke(): void {
+  xrStroke = null
+  finishDrawStroke()
+}
+
+/** One stamp, at a grid coordinate the caller has already resolved. */
+function xrDrawStampAt(hit: { lon: number; lat: number }): void {
+  const grid = drawTargetGrid()
+  if (!grid) return
+  const nodes = drawStampNodes(grid, nextNodeId(currentNodes))
+  if (nodes.length === 0) return
+  placeStamp(
+    nodes,
+    grid.branchLevel + 1,
+    hit.lon,
+    hit.lat,
+    xrDrawZ(),
+    Number(drawHeadingJitterInput.value) || 0,
+    Number(drawScaleJitterInput.value) || 0,
+  )
+  currentNodes.push(...nodes)
+  drawStrokeStamps++
+  drawStrokeTotalStamps++
+  drawStrokeNodes += nodes.length
+  drawStrokeTotalNodes += nodes.length
+  requestDrawRebuild()
+}
+
+/** What the Draw page shows, and the four settings it edits. */
+function xrDrawData(): XrDrawData {
+  const grid = drawTargetGrid()
+  return {
+    drawing: drawMode,
+    gridId: grid?.id ?? null,
+    gridIsGlobe: grid ? gridIsGlobe(grid) : false,
+    brushes: ['Single Object', ...drawBrushes.map((r) => r.name || 'Template')],
+    brushIndex: drawStampSelect.value === '' ? 0 : Number(drawStampSelect.value) + 1,
+    drawZ: xrDrawZ(),
+    spacing: xrDrawSpacing,
+    headingJitter: Number(drawHeadingJitterInput.value) || 0,
+    scaleJitter: Number(drawScaleJitterInput.value) || 0,
+    stamps: drawStrokeTotalStamps,
+    nodes: drawStrokeTotalNodes,
+  }
 }
 
 function finishDrawStroke(): void {

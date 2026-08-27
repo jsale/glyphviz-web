@@ -55,6 +55,27 @@ const BEAM_ALPHA_FAR = 0.75
 const RETICLE_INNER = 0.0058
 const RETICLE_OUTER = 0.008
 const RETICLE_DOT = 0.0024
+
+/**
+ * The reticle holds a constant ANGULAR size rather than a constant metric one:
+ * its dimensions above are for a surface at this distance, and it is scaled by
+ * the hit distance from there.
+ *
+ * A wrist panel is 0.35 m away and a grid you are drawing on can be fifteen
+ * metres off, so a fixed 8 mm ring — sized for the panel, where this started —
+ * is sub-pixel on the grid, which is precisely where you most need to see where
+ * the stamp will land. Found by looking at a rendered frame of Draw Mode; every
+ * numeric check about the cursor passed, because the cursor was in exactly the
+ * right place and simply too small to see.
+ *
+ * It also makes the pinned dashboard's reticle read the same as the wrist one's
+ * rather than half the size.
+ */
+const RETICLE_REFERENCE_M = 0.4
+const RETICLE_MIN_SCALE = 0.7
+/** Past this the ring is a hoop on the horizon; a cursor that big has stopped
+ *  pointing at anything in particular. */
+const RETICLE_MAX_SCALE = 30
 /** Lifted off the surface so the ring never argues with the panel's own pixels
  *  — belt and braces, since both draw with depth testing off. */
 const RETICLE_LIFT_M = 0.0015
@@ -148,7 +169,8 @@ export class XrPointer {
       return
     }
 
-    this.beam.scale.z = Math.max(0.02, hit.distance / rigScale)
+    const metres = Math.max(0.02, hit.distance / rigScale)
+    this.beam.scale.z = metres
     // On a panel the beam adopts the panel's own treatment, one order later, so
     // the tip lands ON the surface rather than behind it.
     this.beamMaterial.depthTest = false
@@ -167,8 +189,14 @@ export class XrPointer {
 
     const live = hit.target === 'widget'
     const disabled = hit.target === 'disabled'
-    const scale = pressed && live ? 0.78 : live ? 1.2 : 1
-    this.reticle.scale.setScalar(scale)
+    const state = pressed && live ? 0.78 : live ? 1.2 : 1
+    // Constant angular size, so the ring reads the same on a wrist panel at
+    // 35 cm and on a World Grid fifteen metres out.
+    const distance = Math.min(
+      RETICLE_MAX_SCALE,
+      Math.max(RETICLE_MIN_SCALE, metres / RETICLE_REFERENCE_M),
+    )
+    this.reticle.scale.setScalar(state * distance)
     if (pressed && live) this.ringMaterial.color.copy(PRESSED_COLOR)
     else if (disabled) this.ringMaterial.color.copy(DISABLED_COLOR)
     else this.ringMaterial.color.copy(this.color)

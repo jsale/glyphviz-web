@@ -44,7 +44,7 @@ import type { GvNode, Rgba } from '../gv/types'
 import { GEOMETRY_NAMES, NODE_TYPE_NAMES, NodeType, TOPO_NAMES } from '../gv/types'
 import { rect, type XrRect, type XrWidgetBase } from './xrWidget'
 
-export type XrPropPage = 'select' | 'shape' | 'move' | 'look'
+export type XrPropPage = 'select' | 'shape' | 'move' | 'look' | 'draw'
 export type XrPropAxis = 'x' | 'y' | 'z'
 export type XrPropVectorField = 'translate' | 'rotate' | 'scale'
 
@@ -71,6 +71,7 @@ export type XrPropId =
   | 'page-shape'
   | 'page-move'
   | 'page-look'
+  | 'page-draw'
   | 'criterion-prev'
   | 'criterion-next'
   | 'value-prev'
@@ -120,6 +121,21 @@ export type XrPropId =
   | 'alpha-scrub'
   | 'hide'
   | 'showtext'
+  | 'draw-toggle'
+  | 'brush-prev'
+  | 'brush-next'
+  | 'drawz-dec'
+  | 'drawz-inc'
+  | 'drawz-scrub'
+  | 'spacing-dec'
+  | 'spacing-inc'
+  | 'spacing-scrub'
+  | 'spin-dec'
+  | 'spin-inc'
+  | 'spin-scrub'
+  | 'sizejit-dec'
+  | 'sizejit-inc'
+  | 'sizejit-scrub'
 
 export interface XrPropWidget extends XrWidgetBase {
   id: XrPropId
@@ -174,6 +190,36 @@ export interface XrPropSelectData {
   selectable: number
 }
 
+/**
+ * What the Draw page needs from the host. Everything but `spacing` is the same
+ * value the DOM Draw panel edits, so the two surfaces cannot drift — the rule
+ * every other VR control follows.
+ */
+export interface XrDrawData {
+  /** Draw Mode is on (it is ONE mode, shared with the desktop's D key). */
+  drawing: boolean
+  /** The grid a stamp would land on, or null for a scene with none. */
+  gridId: number | null
+  /** Globe grids cannot be drawn on, on either side. */
+  gridIsGlobe: boolean
+  /** Brush names, "Single Object" first, then any loaded templates. */
+  brushes: readonly string[]
+  brushIndex: number
+  drawZ: number
+  /**
+   * Stamp spacing in the GRID's own child coordinates — the one draw setting
+   * that is not shared with the desktop panel, because the two measure
+   * different things. See DRAW_SPACING_STEP.
+   */
+  spacing: number
+  headingJitter: number
+  scaleJitter: number
+  /** What the strokes so far have drawn. The status line is DOM and a headset
+   *  never sees it, so the page has to carry its own report. */
+  stamps: number
+  nodes: number
+}
+
 export interface XrPropState {
   /** The PRIMARY selected node (scene row order), or null. */
   node: GvNode | null
@@ -187,6 +233,7 @@ export interface XrPropState {
   grabMode: XrGrabMode
   labels: XrPropLabels
   select: XrPropSelectData
+  draw: XrDrawData
   /** Index into `select.values`, owned by the panel. */
   valueIndex: number
   /** The Select By rows ADD to the selection rather than replacing it. */
@@ -209,6 +256,29 @@ export const DEFAULT_STEP = 2 // 1.0
  *  because neither shares the vectors' axis chip. */
 export const RATIO_STEP = 0.05
 export const ALPHA_STEP = 8
+
+/** The Draw page's nudges, each in its own row's units. */
+export const DRAW_Z_STEP = 1
+export const DRAW_JITTER_STEP = 5
+
+/**
+ * Stamp spacing steps in the GRID's own child coordinates, and its default.
+ *
+ * The desktop measures a stroke's spacing in PIXELS of cursor travel, which is
+ * the natural unit for a mouse and the wrong one here. On screen, "pixels" ties
+ * the brush to the zoom you are drawing at, and the person drawing can see that
+ * zoom. In a headset you walk about while you draw and cannot judge your own
+ * distance to the plane, so an angular spacing would scatter stamps when you
+ * happened to be standing back and crowd them when you leaned in — the same
+ * stroke coming out differently for a reason invisible to the person making it.
+ *
+ * Grid units make the brush a property of the DRAWING rather than of where you
+ * were standing, so a stroke is repeatable. 5.0 is the New Object placement
+ * step (gv/placement.ts), which is the app's existing idea of "one object away
+ * from the last one".
+ */
+export const DRAW_SPACING_STEP = 1
+export const DRAW_SPACING_DEFAULT = 5
 
 /**
  * How many step-sized notches a full-panel-width scrub covers. Quantising to
@@ -332,6 +402,10 @@ export const PAGES: ReadonlyArray<[XrPropId, XrPropPage, string]> = [
   ['page-shape', 'shape', 'Shape'],
   ['page-move', 'move', 'Move'],
   ['page-look', 'look', 'Look'],
+  // Last, and a MODE rather than a property page — which is why it is the one
+  // entry whose own button turns something on rather than only changing what
+  // the panel shows.
+  ['page-draw', 'draw', 'Draw'],
 ]
 
 /** Is this widget one of the mode buttons? The painter marks the open one, and
@@ -376,6 +450,21 @@ export function propLayout(state: XrPropState): XrPropLayout {
       subtitle: `${state.select.selectable} nodes available`,
       empty: null,
       color: node ? node.color : null,
+      rows,
+      widgets,
+    }
+  }
+
+  // Draw is a MODE, not an inspector — it needs no selection either, and what
+  // it wants a selection FOR (choosing which grid to draw on) it reports rather
+  // than requires.
+  if (state.page === 'draw') {
+    buildDraw(state.draw, rows, widgets)
+    return {
+      title: state.draw.drawing ? 'Draw — ON' : 'Draw',
+      subtitle: drawSubtitle(state.draw),
+      empty: null,
+      color: null,
       rows,
       widgets,
     }
@@ -621,6 +710,83 @@ function tripleRow(
       disabled: disabled && id !== 'vis-show',
     })
   })
+}
+
+/**
+ * The Draw page: paint objects onto a flat World Grid with the controller.
+ *
+ * Every rule is the mouse Draw Mode's, unchanged (gv/drawMode.ts,
+ * render/drawPlane.ts) — this is a face on it, the way the Select page is a
+ * face on selectionOps. The one setting that differs is the spacing's UNIT; see
+ * DRAW_SPACING_STEP for why a headset cannot use the desktop's pixels.
+ *
+ * Six rows, which is the whole panel: this is the page the sixth row slot was
+ * left for.
+ */
+function buildDraw(draw: XrDrawData, rows: XrPropRow[], widgets: XrPropWidget[]): void {
+  const y0 = rowY(0)
+  rows.push({ y: y0, caption: '', value: '' })
+  widgets.push({
+    id: 'draw-toggle',
+    kind: 'button',
+    // Named by what pressing it DOES, the pin's own rule.
+    label: draw.drawing ? 'Stop drawing' : 'Start drawing',
+    rect: crect(CAP_X, y0, 0.91, ROW_H),
+    active: draw.drawing,
+    // A globe grid has no drawing plane on either side, so the button says so
+    // rather than arming a mode that would refuse every stamp.
+    disabled: draw.gridIsGlobe,
+  })
+
+  stepperRow(
+    rows,
+    widgets,
+    1,
+    'brush',
+    draw.brushes[draw.brushIndex] ?? 'Single Object',
+    'brush-prev',
+    'brush-next',
+    // One brush is the Single Object; a stepper that cannot move is inert.
+    draw.brushes.length < 2,
+  )
+  nudgeRow(rows, widgets, 2, 'draw Z', num(draw.drawZ), 'drawz-dec', 'drawz-inc', 'drawz-scrub')
+  nudgeRow(
+    rows,
+    widgets,
+    3,
+    'spacing',
+    num(draw.spacing),
+    'spacing-dec',
+    'spacing-inc',
+    'spacing-scrub',
+  )
+  nudgeRow(rows, widgets, 4, 'spin ±°', num(draw.headingJitter), 'spin-dec', 'spin-inc', 'spin-scrub')
+  nudgeRow(
+    rows,
+    widgets,
+    5,
+    'size ±%',
+    num(draw.scaleJitter),
+    'sizejit-dec',
+    'sizejit-inc',
+    'sizejit-scrub',
+  )
+}
+
+/** What the Draw page says about itself: the target, then the running total. */
+function drawSubtitle(draw: XrDrawData): string {
+  const target =
+    draw.gridId === null
+      ? 'No World Grid yet — starting will make one'
+      : draw.gridIsGlobe
+        ? `Grid ${draw.gridId} is a globe — flat grids only`
+        : `Grid ${draw.gridId}`
+  if (draw.stamps === 0) return target
+  const drawn =
+    draw.nodes === draw.stamps
+      ? `${draw.stamps} object${draw.stamps === 1 ? '' : 's'}`
+      : `${draw.stamps} stamps · ${draw.nodes} nodes`
+  return `${target} · drew ${drawn}`
 }
 
 function buildLook(node: GvNode, rows: XrPropRow[], widgets: XrPropWidget[]): void {

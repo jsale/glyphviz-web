@@ -106,6 +106,16 @@ export interface XrCallbacks {
   /** What a trigger-held grab would do — captioned on the right controller, so
    *  the armed mode is readable without raising the panel to check. */
   grabModeLabel(): string
+  /**
+   * What this ray is aiming at in the SCENE, for the pointer's cursor — the
+   * beam shortens to it and the reticle lies on it, exactly as for a panel.
+   *
+   * Asked once per hand per frame, and only when nothing nearer is under the
+   * ray, so a host that has nothing to report answers null and pays nothing.
+   * Draw Mode is what answers today: the point where the ray meets the grid's
+   * drawing plane, which is where a stamp would land.
+   */
+  aimHit(raycaster: THREE.Raycaster, hand: XrHand): XrPointerHit | null
   onStart(): void
   onEnd(): void
 }
@@ -568,7 +578,9 @@ export class XrRig {
     for (const hand of ['left', 'right'] as const) {
       const pointer = this.pointerByHand.get(hand)
       pointer?.setActive(hands[hand] !== undefined)
-      if (this.pointers.length === 0) pointer?.update(null, false, this.state.scale)
+      if (this.pointers.length === 0 && hands[hand]) {
+        pointer?.update(this.aimHitFor(hands[hand]!, hand), false, this.state.scale)
+      }
     }
     if (this.pointers.length === 0) return
     for (const target of this.pointers) target.orient(this.headProxy.position)
@@ -596,6 +608,11 @@ export class XrRig {
           }
         }
       }
+      // Nothing on a panel: ask the host what the ray is aiming at in the
+      // scene, which is what puts Draw Mode's cursor on the grid. A panel
+      // always wins — it is nearer by construction and it is what the press
+      // would act on.
+      if (bestHit === null) bestHit = this.aimHitFor(input, hand)
       // This frame's trigger, not last frame's `prevTrigger` — fireButtons has
       // not run yet, and a press that lights the reticle a frame late is
       // exactly the lag this whole module exists to remove.
@@ -614,13 +631,21 @@ export class XrRig {
     // other one never reached the loop above and would keep last frame's beam.
     for (const hand of ['left', 'right'] as const) {
       if (order.includes(hand) || !hands[hand]) continue
-      this.pointerByHand.get(hand)?.update(null, false, this.state.scale)
+      this.pointerByHand
+        .get(hand)
+        ?.update(this.aimHitFor(hands[hand]!, hand), false, this.state.scale)
     }
     if (hovered === null && this.pressHand === null) {
       for (const target of touched) target.clearHover()
     }
     this.pointerHand = hovered
     this.pointerTarget = hoveredTarget
+  }
+
+  /** What the host says this ray is aiming at, if anything. Its own raycaster
+   *  call, so a host that walks the scene does it at most once per hand. */
+  private aimHitFor(input: HandInput, hand: XrHand): XrPointerHit | null {
+    return this.callbacks.aimHit(this.rayFor(input), hand)
   }
 
   /** Drive the drawn controllers off this frame's raw input. */
