@@ -4463,7 +4463,8 @@ let drawStrokeNodes = 0
  *  a headset never sees the status line that report goes to. */
 let drawStrokeTotalStamps = 0
 let drawStrokeTotalNodes = 0
-let drawRebuildFrame = 0
+/** A stamp landed and the scene has not been rebuilt for it yet. */
+let drawRebuildPending = false
 /** Loaded Glyph Composer brushes, indexed by the Stamp menu's option values. */
 const drawBrushes: GlyphRecipe[] = []
 
@@ -4578,17 +4579,33 @@ function drawStampNodes(grid: GvNode, startId: number): GvNode[] {
 }
 
 /**
- * One rebuild per animation frame however many stamps land in it. A drag at
- * the default 30 px spacing fires several stamps a second, and rebuildScene
- * rebuilds the whole graph — the same rAF coalescing the Global Scale slider
- * uses, for the same reason.
+ * One rebuild per animation frame however many stamps land in it. A drag at the
+ * default spacing fires several stamps a second and rebuildScene rebuilds the
+ * whole graph, so the work is coalesced — the trade the Global Scale slider
+ * makes, for the same reason.
+ *
+ * Coalesced onto THIS APP'S animation loop rather than onto
+ * `requestAnimationFrame`, which is the fix for a bug Jeff found in a headset
+ * (2026-08-27): the page's own rAF stops firing while an immersive session is
+ * presenting — frame callbacks come from `XRSession.requestAnimationFrame`
+ * instead — so the queued rebuild never ran and a stroke's objects all appeared
+ * at once when the trigger was RELEASED and `finishDrawStroke` flushed it
+ * synchronously. The animation loop runs in both modes (three drives it from
+ * the session while presenting and from window rAF otherwise), so one flag
+ * checked there is correct on a desk and in a headset with no branch.
+ *
+ * The emulator does not reproduce the fault, since iwer runs the session in the
+ * page and leaves window rAF firing. That is why this needed a device.
  */
 function requestDrawRebuild(): void {
-  if (drawRebuildFrame) return
-  drawRebuildFrame = requestAnimationFrame(() => {
-    drawRebuildFrame = 0
-    rebuildScene(false)
-  })
+  drawRebuildPending = true
+}
+
+/** Called once per animation frame, before anything reads the scene. */
+function flushDrawRebuild(): void {
+  if (!drawRebuildPending) return
+  drawRebuildPending = false
+  rebuildScene(false)
 }
 
 function drawStamp(clientX: number, clientY: number): void {
@@ -4821,12 +4838,9 @@ function finishDrawStroke(): void {
   drawStrokeLast = null
   controls.enabled = !flyRig.flyMode
   if (drawStrokeStamps === 0) return
-  // Flush the coalesced rebuild so the stroke is on screen with its report.
-  if (drawRebuildFrame) {
-    cancelAnimationFrame(drawRebuildFrame)
-    drawRebuildFrame = 0
-    rebuildScene(false)
-  }
+  // Flush the coalesced rebuild so the stroke is on screen with its report,
+  // rather than a frame later.
+  flushDrawRebuild()
   const what =
     drawStrokeNodes !== drawStrokeStamps
       ? `${drawStrokeStamps} stamp(s), ${drawStrokeNodes} node(s)`
@@ -5571,6 +5585,10 @@ renderer.setAnimationLoop(() => {
   const now = performance.now()
   const dtMs = lastTickMs === 0 ? 0 : Math.min(now - lastTickMs, 250)
   lastTickMs = now
+  // Stamps that landed since the last frame, before anything below reads the
+  // scene: a stroke has to appear AS it is drawn, on a desk and in a headset
+  // alike. (This is the loop that runs in both — see requestDrawRebuild.)
+  flushDrawRebuild()
   // A channel frame or a gizmo drag rewrites node fields without a rebuild, so
   // the table's visible rows have to be repainted from them. Only the ~30 rows
   // on screen are touched, and nothing at all while the panel is collapsed.

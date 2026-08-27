@@ -3436,6 +3436,32 @@ something to decide now).
          measured 0.7 m from a grid the head was fifteen metres from, which is
          what nearly hid the sizing fault above. Aim from where a hand actually
          is, about 25 cm in front of the head.
+     - **Bug fixed the same day, from Jeff's device report**: a stroke's objects
+       appeared only when the trigger was RELEASED, where the mouse version
+       draws them as they go. `requestDrawRebuild` coalesced its rebuild onto
+       `window.requestAnimationFrame` — and the page's own rAF stops firing
+       while an immersive session presents, frame callbacks coming from
+       `XRSession.requestAnimationFrame` instead. So the rebuild sat queued
+       until `finishDrawStroke` cancelled it and rebuilt synchronously on
+       release. It is coalesced onto THIS APP'S animation loop now (a flag, and
+       `flushDrawRebuild` at the top of `setAnimationLoop`), which three drives
+       from the session while presenting and from window rAF otherwise — so one
+       mechanism is correct in both modes with no branch, and the mouse path
+       keeps its once-per-frame coalescing unchanged.
+       - **The emulator cannot reproduce this, and the reason is worth keeping**:
+         iwer implements the emulated session's rAF ON TOP OF window rAF, so
+         stubbing the global to imitate a headset stops the app's animation loop
+         altogether — reproducing something worse than the device rather than
+         the device. Measured: with the stub in place the controller ray stopped
+         updating entirely. A drive can still check the property the fix
+         establishes (the draw path schedules nothing through window rAF —
+         verified by recording a stack for every registration: 0 of 59 during a
+         stroke) and that stamps have frames at every point along one
+         (2/2 → 3/3 → 4/4 → 5/5 with the trigger still held). The SYMPTOM lives
+         only on hardware.
+       - Anything else that must run per frame during a session belongs on the
+         animation loop for the same reason. The one remaining `rAF` user is the
+         Global Scale slider, which is a DOM control a session cannot reach.
      - Not done, deliberately: no brush LOADING in-headset (a file picker has no
        headset counterpart, so the page steps through brushes the desktop side
        has already loaded), and no undo beyond selecting a stroke and deleting
