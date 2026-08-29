@@ -13,7 +13,7 @@
 // sized in eye units for that reason.)
 
 import * as THREE from 'three'
-import { widgetAt, type XrWidgetBase } from '../ui/xrWidget'
+import { widgetAt, type XrRect, type XrWidgetBase } from '../ui/xrWidget'
 import { PANEL_CURVE, curvedPanelGeometry, curvedPanelPoint } from './xrCurvedPanel'
 import type { XrPointerHit } from './xrPointer'
 
@@ -107,6 +107,18 @@ export abstract class XrSurface<W extends XrWidgetBase> {
   /** Which widget the pointer is on — nothing else can observe this. */
   get hoveredId(): string | null {
     return this.hovered
+  }
+
+  /**
+   * This frame's widgets, for the drive harness — which otherwise has to sweep
+   * a ray across the panel hunting for each control by its hover, and cannot
+   * tell a control that is missing from one it simply failed to find.
+   *
+   * Paired with `surfacePoint`, which turns a rect's centre into the world point
+   * to aim at. Never read by the app.
+   */
+  get widgetRects(): ReadonlyArray<{ id: string; rect: XrRect; disabled: boolean }> {
+    return this.widgets.map((w) => ({ id: w.id, rect: w.rect, disabled: w.disabled === true }))
   }
 
   /**

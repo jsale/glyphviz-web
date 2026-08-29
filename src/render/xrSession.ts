@@ -13,6 +13,11 @@
 //   trigger      pick the node under the ray
 //   B / Y        play/pause Channels
 //
+// The LEFT stick CLICK is a web addition and the last free input on either
+// controller: go to the selection (render/xrFocus.ts). It sits under the thumb
+// of the hand you fly with, which is where "travel there" belongs — the two
+// answers to "that node is a long way off" then share one hand.
+//
 // The two face buttons the spike spent on re-fitting are panel switches here,
 // one per wrist: X shows/hides the CONTROL panel on the left, A the PROPERTIES
 // panel on the right (agreed with Jeff 2026-08-16). Re-fit did not lose a home
@@ -32,10 +37,21 @@
 
 import * as THREE from 'three'
 import { XrControllerModel } from './xrControllerModel'
+import { XrFade } from './xrFade'
 import { XrPointer, type XrPointerHit } from './xrPointer'
+import {
+  beginFocus,
+  focusFrame,
+  focusInterruptible,
+  goToNav,
+  shiftFocus,
+  type FocusStyle,
+  type FocusTransition,
+} from './xrFocus'
 import {
   GRAB_OFF_THRESHOLD,
   GRAB_ON_THRESHOLD,
+  STICK_DEADZONE,
   TRIGGER_THRESHOLD,
   fitRig,
   flyStep,
@@ -97,6 +113,14 @@ export interface XrCallbacks {
   onDragEnd(hand: XrHand, cancelled: boolean): void
   /** A/X: what the scene should be framed to, or null for an empty scene. */
   fitTarget(): { center: THREE.Vector3; extent: number } | null
+  /**
+   * The LEFT thumbstick click: travel to the selection. The host answers by
+   * calling `requestGoTo` (or reporting that there is nothing selected), rather
+   * than returning a target, because the same command is on the Select page and
+   * on Follow's selection-change path — one place decides what "the selection"
+   * means, and it is not this file.
+   */
+  onGoTo(): void
   /** B/Y. */
   onSecondary(): void
   /** Left X — put the left wrist's CONTROL panel away, and bring it back. */
@@ -234,6 +258,9 @@ export class XrRig {
   /** This frame's viewer pose in XR space, and the same in world space. */
   private readonly headLocal = new THREE.Matrix4()
   private readonly headWorld = new THREE.Matrix4()
+  /** The blink's blackout, carried on the camera so its radius is in the same
+   *  perceived metres the head pose is. */
+  private readonly fade = new XrFade()
 
   private grabbing = new Set<XrHand>()
   private grabKey = ''
@@ -244,6 +271,15 @@ export class XrRig {
   private prevSecondary: Record<XrHand, boolean> = { left: false, right: false }
   private pendingFit = false
   private pendingFitMetres: number | undefined
+  private pendingFitTarget: { center: THREE.Vector3; extent: number } | null = null
+  /** A go-to asked for since the last frame, applied against THIS frame's head
+   *  pose (the same deferral `pendingFit` uses, and for the same reason: the
+   *  press can arrive from a panel callback, or from a selection change that
+   *  happened nowhere near a frame boundary). */
+  private pendingGoTo: { center: Vec3; extent: number } | null = null
+  private focus: FocusTransition | null = null
+  private focusElapsed = 0
+  private prevStickClick: Record<XrHand, boolean> = { left: false, right: false }
   private pointers: XrPointerTarget[] = []
   /** The hand hovering a pointer target this frame, the target it is on, and
    *  the hand holding a press — a drag belongs to the hand that started it. */
@@ -276,6 +312,12 @@ export class XrRig {
     this.group.name = 'xr-rig'
     scene.add(this.group)
     this.group.add(this.panelAnchor, this.panelAnchorRight, this.floatAnchor)
+    // On the CAMERA rather than the rig: the shell has to stay centred on the
+    // eye however the head moves within the play space, and a child of the
+    // camera is the only thing that does that for free. It draws nothing until
+    // a blink asks it to, and the camera is off the rig entirely between
+    // sessions.
+    camera.add(this.fade.mesh)
 
     renderer.xr.enabled = true
     for (let i = 0; i < 2; i++) {
@@ -350,9 +392,61 @@ export class XrRig {
    * every scene load). `targetMetres` is how wide the scene should read —
    * omitted, it takes the spike's 20 m default.
    */
-  requestFit(targetMetres?: number): void {
+  requestFit(
+    targetMetres?: number,
+    target?: { center: THREE.Vector3; extent: number } | null,
+  ): void {
     this.pendingFit = true
     this.pendingFitMetres = targetMetres
+    // Given a target, frame THAT instead of asking the host what the scene is —
+    // which is the whole of "fit the selection". Omitted, the scene answers, as
+    // it has since immersive mode shipped.
+    this.pendingFitTarget = target ?? null
+  }
+
+  /**
+   * Travel to a world point, arriving at a distance suited to `extent` — the
+   * target's largest world-space span (render/xrFocus.ts).
+   *
+   * Unlike `requestFit` this leaves yaw and scale exactly as the viewer set
+   * them: it is navigation, not framing. A fit that happens to be pending wins,
+   * since a fit is a deliberate re-placement of the whole scene and a go-to
+   * inside the scene it is about to replace means nothing.
+   */
+  requestGoTo(center: THREE.Vector3, extent: number): void {
+    this.pendingGoTo = { center: vec3(center.x, center.y, center.z), extent }
+  }
+
+  /**
+   * Translate the rig by a world-space delta, carrying any move in progress
+   * with it.
+   *
+   * This is how Follow Selected tracks a node animating under Channels: moving
+   * the viewer by exactly the node's own delta leaves ZERO relative motion, so
+   * the node holds its place in the view with none of the vection that chasing
+   * it would produce — and every other navigation gesture stays live, because
+   * nothing here re-points anything (the desk camera's own rule, roadmap 6cc).
+   */
+  nudgeNav(delta: THREE.Vector3): void {
+    if (delta.x === 0 && delta.y === 0 && delta.z === 0) return
+    const d = vec3(delta.x, delta.y, delta.z)
+    this.state = {
+      nav: { x: this.state.nav.x + d.x, y: this.state.nav.y + d.y, z: this.state.nav.z + d.z },
+      yaw: this.state.yaw,
+      scale: this.state.scale,
+    }
+    // A dash aimed at where the node WAS would otherwise land beside it.
+    if (this.focus) this.focus = shiftFocus(this.focus, d)
+  }
+
+  /** Is a focus move running, and what it looks like — the drive harness has no
+   *  other way to see any of this, and nothing in the DOM shows it. */
+  get focusState(): { active: boolean; style: FocusStyle | null; fade: number } {
+    return {
+      active: this.focus !== null,
+      style: this.focus?.style ?? null,
+      fade: this.fade.value,
+    }
   }
 
   /**
@@ -428,6 +522,11 @@ export class XrRig {
     this.pressHand = null
     this.pressTarget = null
     this.grabHand = null
+    this.pendingGoTo = null
+    this.focus = null
+    this.focusElapsed = 0
+    this.fade.set(0)
+    this.prevStickClick = { left: false, right: false }
     // A provisional fit for the one frame before a real head pose arrives, so
     // the scene is roughly in place rather than wherever the last one left it.
     this.applyFit(vec3(0, 1.6, 0), 0)
@@ -440,6 +539,12 @@ export class XrRig {
     this.saved = null
     this.grabbing.clear()
     this.endGrab(true)
+    // The shell rides the camera, which is about to go back to the desk — a
+    // fade left part-way up would black out the ordinary viewport.
+    this.pendingGoTo = null
+    this.focus = null
+    this.focusElapsed = 0
+    this.fade.set(0)
     if (saved) {
       this.group.remove(this.camera)
       saved.parent?.add(this.camera)
@@ -488,32 +593,43 @@ export class XrRig {
     const hands = readHands(session, this.renderer)
     if (this.pendingFit) {
       this.pendingFit = false
+      this.pendingGoTo = null // a fit re-places the whole scene; see requestGoTo
       this.applyFit(head.position, headYawOf(head.forward))
+    }
+    if (this.pendingGoTo) {
+      const goal = this.pendingGoTo
+      this.pendingGoTo = null
+      this.beginGoTo(goToNav(goal.center, goal.extent, head, this.state))
     }
 
     this.updateGrabSet(hands)
-    const left = hands.left
-    const rightHand = hands.right
-    if (this.twoAnchor && left && rightHand) {
-      this.state = twoHandDrag(this.twoAnchor, left.grip, rightHand.grip)
-    } else if (this.oneAnchor) {
-      const held = this.grabbing.values().next().value as XrHand | undefined
-      const hand = held ? hands[held] : undefined
-      if (hand) this.state = oneHandDrag(this.oneAnchor, hand.grip)
-    } else {
-      // Thumbstick flight is suppressed while a hand is grabbing rather than
-      // fighting it for the same nav offset — the desktop's rule.
-      this.state = flyStep(
-        this.state,
-        {
-          leftX: left?.stickX ?? 0,
-          leftY: left?.stickY ?? 0,
-          rightX: rightHand?.stickX ?? 0,
-          rightY: rightHand?.stickY ?? 0,
-        },
-        head,
-        Math.min(dtMs, 250) / 1000,
-      )
+    // A focus move owns `nav` while it runs, so locomotion stands aside for it
+    // — the same all-or-nothing rule flight and grabbing already follow between
+    // themselves, rather than three sources adding into one offset.
+    if (!this.tickFocus(dtMs, hands)) {
+      const left = hands.left
+      const rightHand = hands.right
+      if (this.twoAnchor && left && rightHand) {
+        this.state = twoHandDrag(this.twoAnchor, left.grip, rightHand.grip)
+      } else if (this.oneAnchor) {
+        const held = this.grabbing.values().next().value as XrHand | undefined
+        const hand = held ? hands[held] : undefined
+        if (hand) this.state = oneHandDrag(this.oneAnchor, hand.grip)
+      } else {
+        // Thumbstick flight is suppressed while a hand is grabbing rather than
+        // fighting it for the same nav offset — the desktop's rule.
+        this.state = flyStep(
+          this.state,
+          {
+            leftX: left?.stickX ?? 0,
+            leftY: left?.stickY ?? 0,
+            rightX: rightHand?.stickX ?? 0,
+            rightY: rightHand?.stickY ?? 0,
+          },
+          head,
+          Math.min(dtMs, 250) / 1000,
+        )
+      }
     }
 
     this.applyState()
@@ -547,9 +663,73 @@ export class XrRig {
     )
   }
 
+  /** Start (or restart) a move to this rig translation. A second go-to while
+   *  one is running replaces it outright rather than queueing — the last thing
+   *  asked for is the thing wanted. */
+  private beginGoTo(to: Vec3): void {
+    this.focus = beginFocus(this.state.nav, to, this.state.scale)
+    this.focusElapsed = 0
+    if (this.focus.durationMs <= 0) this.endFocus(to)
+  }
+
+  private endFocus(nav: Vec3): void {
+    this.focus = null
+    this.focusElapsed = 0
+    this.fade.set(0)
+    this.state = { nav, yaw: this.state.yaw, scale: this.state.scale }
+  }
+
+  /**
+   * Advance a focus move, if one is running. Returns whether it owns `nav` this
+   * frame, so the caller knows to leave locomotion alone.
+   *
+   * A dash yields to a manual gesture (stick or squeeze) the instant one
+   * arrives — the "an unsmoothed gesture halts a glide" rule the desk camera
+   * runs on — and drops wherever it had got to rather than snapping either way,
+   * which is what makes an interrupted travel feel like steering out of it.
+   */
+  private tickFocus(dtMs: number, hands: Partial<Record<XrHand, HandInput>>): boolean {
+    const focus = this.focus
+    if (!focus) return false
+    if (focusInterruptible(focus) && this.manualInput(hands)) {
+      this.focus = null
+      this.focusElapsed = 0
+      this.fade.set(0)
+      return false
+    }
+    this.focusElapsed += Math.min(dtMs, 250)
+    const frame = focusFrame(focus, this.focusElapsed)
+    this.fade.set(frame.fade)
+    if (frame.done) this.endFocus(frame.nav)
+    else this.state = { nav: frame.nav, yaw: this.state.yaw, scale: this.state.scale }
+    return true
+  }
+
+  /** Is a hand actively driving the rig this frame? Read past the SAME dead
+   *  zone flight uses, so the gesture that interrupts a dash is exactly the one
+   *  that would have moved the viewer anyway. */
+  private manualInput(hands: Partial<Record<XrHand, HandInput>>): boolean {
+    if (this.grabbing.size > 0) return true
+    for (const hand of ['left', 'right'] as const) {
+      const input = hands[hand]
+      if (!input) continue
+      if (Math.abs(input.stickX) > STICK_DEADZONE || Math.abs(input.stickY) > STICK_DEADZONE) {
+        return true
+      }
+    }
+    return false
+  }
+
   private applyFit(headPos: Vec3, headYaw: number): void {
-    const target = this.callbacks.fitTarget()
+    const target = this.pendingFitTarget ?? this.callbacks.fitTarget()
+    this.pendingFitTarget = null
     if (!target) return
+    // A fit re-places the whole scene, so anything travelling within it is
+    // moot — and leaving a blink's shell up over the new framing would read as
+    // a rendering fault.
+    this.focus = null
+    this.focusElapsed = 0
+    this.fade.set(0)
     this.state = fitRig({
       center: vec3(target.center.x, target.center.y, target.center.z),
       extent: target.extent,
@@ -789,6 +969,14 @@ export class XrRig {
       this.prevPrimary[hand] = input.primary
       if (input.secondary && !this.prevSecondary[hand]) this.callbacks.onSecondary()
       this.prevSecondary[hand] = input.secondary
+      // The LEFT stick click travels to the selection. The RIGHT one is the
+      // add-select modifier and is HELD rather than pressed, so only the left
+      // is edge-triggered here — a modifier that also fired a command on every
+      // press would make add-select unusable.
+      if (hand === 'left' && input.stickClick && !this.prevStickClick.left) {
+        this.callbacks.onGoTo()
+      }
+      this.prevStickClick[hand] = input.stickClick
     }
   }
 
@@ -805,5 +993,6 @@ export class XrRig {
   dispose(): void {
     for (const pointer of this.pointersByIndex) pointer.dispose()
     for (const model of this.modelsByIndex) model.dispose()
+    this.fade.dispose()
   }
 }

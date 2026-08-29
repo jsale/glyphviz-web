@@ -3392,10 +3392,15 @@ something to decide now).
        at 0.07 deflection, the trigger at 0.35 and 1.0, the grip pad travelling
        toward the palm, the two controllers mirrored and differently coloured,
        and the badge facing the viewer to dot 1.0.
-       - Harness quirk worth keeping: **iwer's emulated controller points along
-         +Z, not −Z**, so an aim helper must `lookAt` the MIRRORED point.
-         Aiming at the target directly measures dot = −1 and every check
-         downstream is nonsense.
+       - Harness quirk worth keeping: **an aim helper's handedness has to be
+         MEASURED, not assumed.** This drive found iwer's emulated controller
+         pointing along +Z, so its helper aimed at the MIRRORED point; under
+         iwer 2.3.0's own `lookRotation` (P9's drive, 2026-08-29) aiming
+         DIRECTLY is what picks the node, and the app's world-space ray then
+         matches the intended one exactly. Get it backwards and every check
+         downstream is nonsense while looking perfectly well-formed, so an aim
+         helper must assert the pick or the hover landed before anything reads
+         a number from it.
        - The PICTURES caught two faults after the numbers passed, which is now
          four sessions running: the controller body was invisible against a dark
          scene (above), and the badge was rigidly mounted to the wrist, so half
@@ -3555,6 +3560,129 @@ something to decide now).
        headset counterpart, so the page steps through brushes the desktop side
        has already loaded), and no undo beyond selecting a stroke and deleting
        it.
+   - **P9, Focus: going to a node** (shipped 2026-08-29, Jeff's request — the
+     first item of a VR-strengths priority list drawn up with him that day, and
+     his own idea). Point at a node, and travel to it. **Left thumbstick click**,
+     a **Go to** button on the Properties panel's Select page, and — with
+     **Follow** armed — every selection change. `src/render/xrFocus.ts` is the
+     whole model, pure and DOM-free like xrNav.ts beside it.
+     - WHY, and why it is NOT teleport. Long traverses are VR's standing problem
+       and the two stock answers do not fit this app. A parabolic teleport arc
+       needs a FLOOR to land on — games have terrain and the arc's job is finding
+       the walkable surface under it — where a GlyphViz scene mostly has no floor
+       at all: a hyperglyph is a cloud in the air. And thumbstick flight is a
+       fixed 3 m/s, which crosses a diorama in a second and a 43,414-node Cosmic
+       Web never. What a scene DOES have is the glyphs, and a ray that already
+       picks them, so the destinations are the data. (Arc teleport onto a flat
+       World Grid is still worth having later — that is the one case with a
+       floor. See the pending list.)
+     - TRANSLATION ONLY, which is the decision the rest follows from. `fitRig`
+       also rescales and re-yaws, right for placing a whole scene and wrong for
+       travelling inside one: the working scale is something the viewer chose
+       (Room view, Tabletop, or a two-handed pinch) and silently rebasing it on
+       every hop would make each arrival a different world; and rotating the
+       world about a standing viewer is the most reliable way to make them sick.
+       So a go-to writes `nav` and nothing else — which also makes it the most
+       comfortable move available: no rotation, no scale change, a straight path.
+       Measured: scale and yaw come back bit-identical across every travel.
+     - The arrival distance is derived from the target's PERCEIVED size —
+       `extent / scale` metres, spanning a comfortable 40° — so the same node
+       earns a different distance at Tabletop than at Room view and the command
+       never needs to touch the scale to be useful at either. Clamped to
+       0.45–40 m; the floor is where the eyes stop converging comfortably, and it
+       is what a small glyph at a room-scale fit gets. The gaze direction is the
+       head's own with its PITCH CLAMPED to 35°: we cannot re-aim a viewer's
+       head, so the target has to land where they are already looking, but an
+       unclamped steep gaze parks it wherever the neck happened to be.
+     - TWO TRANSITION STYLES, chosen by the hop's length in perceived metres. A
+       **dash** (eased in and out, 160–800 ms) under 12 m: seeing yourself cross
+       the gap is what tells you how the thing you went to sits relative to the
+       thing you left, and in a data scene that relationship IS the information.
+       A **blink** (fade out, jump inside the black, fade in — 300 ms) past it:
+       a dash over 400 m of scene is not travel, it is a blur at highway speed,
+       and there is nothing to learn from a blur. Smoothstep rather than the
+       exponential lag `cameraSmoothing.ts` uses at the desk — a first-order
+       filter opens at its maximum velocity, the worst possible start for a long
+       move, and never defines an arrival.
+       - A dash yields to a manual gesture the instant one arrives ("an
+         unsmoothed gesture halts a glide", roadmap 6y) and drops where it got
+         to. A blink does NOT: it is over in 300 ms and its middle is a black
+         screen, so there is nothing there anyone could mean to interrupt, and
+         halting half way would strand the viewer in the dark.
+       - `src/render/xrFade.ts` is the blackout — a small BackSide sphere on the
+         CAMERA, so its radius is in the same perceived metres its position is,
+         and a shell round the eye covers every direction a compositor might
+         sample at any field of view. Chrome, so exempt from fog (roadmap 6j's
+         line) and hidden outright at opacity 0.
+     - FOLLOW SELECTED is the desk's own flag, not a second setting that means
+       nearly the same thing (the trap 6ff names): F, the HUD checkbox and the
+       wrist checkbox are one control. In a session it does two things — travel
+       on every selection CHANGE, and, when the followed node MOVES, translate
+       the rig by the node's own delta. That delta is the whole trick: zero
+       relative motion, so a node animating under Channels holds its place in the
+       view with none of the vection chasing it would produce. Measured on the
+       sine wave: **0.000 m of variation over 12 samples** while the node
+       travelled 10.5 world units in 400 ms.
+       - What it deliberately does NOT do is re-fit per frame, which would fight
+         the viewer for the same offset and undo any flight, grab or turn the
+         moment it began — the desk bug of 6cc in this platform's dialect.
+         Measured: flight still moves the rig 1.2 m with Follow on.
+       - Suspended while a glyph is being grabbed: that is an EDIT, and
+         travelling to the node would be chasing your own hand (the gizmo rule).
+     - FIT ▸ SELECTION is the other operation, and lives on the control panel's
+       Fit row — which is now three buttons (Room / Table / Selection) rather
+       than two. It FRAMES rather than travels, so it is the one that changes the
+       scale, at 1.2 m (the Tabletop treatment applied to what is selected). It
+       sits with the other fits and not beside Go to because that row is where
+       the scale changes and everything in it changes the scale. Greyed with
+       nothing selected; the other two always have the scene to fall back on.
+     - The **LEFT stick click** is the last free input on either controller, and
+       it goes to the most-used new command: it sits under the thumb of the hand
+       you fly with, so both answers to "that node is a long way off" share one
+       hand. The RIGHT stick click stays the add-select modifier, and is HELD
+       rather than pressed — only the left is edge-triggered, or a modifier would
+       fire a command on every press.
+     - The target is the selected nodes' POSITIONS, not `Box3.setFromObject`:
+       folding in descendants would aim a trunk selection at the whole hyperglyph
+       and a root at the whole scene, so the further up a tree you picked the
+       further away you would arrive. Its extent is floored by the primary's own
+       rendered radius, and `renderedRadius` is EXPORTED from `scatterHint.ts`
+       rather than copied — "how big does this glyph actually draw" has one
+       answer.
+     - Verified to FAIL four ways (`xrFocus.test.ts`, 31 tests): without the
+       perceived-metres conversion, with the blink threshold measured in world
+       units, without the gaze pitch clamp, and with the blink jumping outside
+       the black.
+     - Driven in Chrome against the emulated Quest 3, **45 measured checks**: an
+       18.1 m hop landing 0.450 m from the node and 1.34° off the gaze with scale
+       and yaw untouched; a short hop dashing and never fading; a 14.1 m hop
+       blinking to a peak fade of 1.00 and clearing again; a stick push halting a
+       dash; the Select page's two controls and their greyed states; the Fit row
+       reframing 10.580 → 0.500 units/m where a go-to does not; Follow travelling
+       on a bare pick (4.62 m → 0.450 m) and then holding a Channels-animated
+       node dead still in the view. Console clean.
+       - Two HARNESS lessons, both of which made a correct implementation look
+         broken. `Object3D.getWorldDirection` returns +Z — only Camera overrides
+         it to −Z — so a gaze read off `headProxy` comes out 180° wrong. And the
+         rig and a node must be sampled in ONE `page.evaluate`: two calls read
+         them at different instants, and a node moving 8 units per 400 ms drifts
+         a quarter of a metre between them, which looks exactly like a tracking
+         failure. Also: with iwer 2.3.0's `lookRotation` the controller aims
+         DIRECTLY at the given direction — the "+Z, so mirror it" note under P6
+         no longer holds, and pointing is measured rather than assumed.
+       - `XrSurface.widgetRects` was added for the drive, beside `hoveredId`:
+         without it the harness has to sweep a ray hunting for each control and
+         cannot tell a control that is MISSING from one it merely failed to find.
+     - First thing to tune on hardware: `FOCUS_MIN_DISTANCE_M`. Arriving 45 cm
+       from a node inside a dense chain (the sine wave) puts the neighbours
+       within arm's reach too, which is honest — it is where the node is — but
+       may read as too close in a headset. Every transition constant
+       (`DASH_SPEED_MPS`, `BLINK_ABOVE_M`, the durations) is named for the same
+       reason: only a device settles them.
+     - Not done, deliberately: no in-VR control over any of those constants (they
+       belong with the comfort options — snap turn and vignette — which is the
+       next item on the list), and no scale-changing "spyglass" toggle beyond the
+       Fit row's three buttons.
    - Context worth having for both: the Armillary World is a scene of NESTED
      CONCENTRIC rings, so it exercises immersive navigation harder than anything
      driven before — the viewer is inside a structure whose parts surround them
@@ -3563,16 +3691,68 @@ something to decide now).
      then enter VR) but cannot reproduce how a gesture FEELS, so his device is
      the instrument: ship something for him to try rather than proving it
      headlessly.
+   - **THE VR PRIORITY LIST** (drawn up with Jeff 2026-08-29, and the order to
+     work in from here — he asked for a considered ranking rather than a feature
+     dump, and agreed to take them one session at a time). The frame it falls out
+     of: VR's real strengths are that 3D structure is LEGIBLE (stereopsis plus
+     parallax), that SCALE is a verb rather than a slider, proprioception, spatial
+     memory, and presence — against costs that reading is expensive, precision is
+     worse than a mouse, discoverability is near zero, smooth motion makes people
+     sick, and long traverses are tiring.
+     1. ~~Focus / go-to, and Follow in a headset~~ — **shipped 2026-08-29, P9.**
+     2. **Snap turn + comfort vignette.** Already on the list below and it should
+        be higher: smooth 90°/s turning is the largest nausea source for most
+        people, and Jeff is the only tester, which is exactly why it has not
+        bitten yet. It gets expensive the day the headset goes to Steve or to a
+        patient in Dr. Warner's cohort. Small, and it gates who else can use it.
+        The focus constants (P9) want in-VR tuning at the same time.
+     3. **World-in-miniature map.** The overview problem for large scenes and the
+        teleport target for long hops. NOT a shrunken copy of the scene — cloning
+        209k objects is unaffordable and the detail would not read at that size —
+        but a POINT CLOUD of node centres in the node colours: one draw call,
+        built from the positions the halo pass already reads, with a marker for
+        the viewer. Point into it with the ray to travel there.
+     4. **Labels that work in a headset.** Only the selected node draws a
+        billboard today (`render/xrLabel.ts`), and a scene of unlabelled shapes is
+        pretty and not readable. Wants a nearest-N budget with an angular-size
+        floor and a distance cull, plus label-on-hover from the ray. Expect it to
+        be demanded as hard as the desk's tag defaults were (6ii).
+     5. **Measurement and a sense of scale.** A units-per-metre readout, and the
+        distance between two selected nodes. "How far apart are these two" is the
+        most natural question in a 3D scatter and the one you cannot answer by
+        eye; without it, immersive viewing is nearer decoration than analysis.
+     6. **Spatial bookmarks.** Save the rig as a named viewpoint and jump back —
+        `XrRigState` is five numbers, so this is nearly free, and it banks VR's
+        spatial-memory strength. The desk has camera views; the headset has none.
+     7. **Undo.** The app has none anywhere (P8 says so for draw strokes), and VR
+        is what makes it urgent: gestures are imprecise, a grab can fling a node,
+        one stroke lays two hundred objects. Authoring you daren't do is not
+        authoring — and immersive authoring is the point of the whole project.
+        Ranked seventh only because it is a whole-app feature and genuinely
+        expensive; treat it as a prerequisite and it moves to second.
+     8. **Teleport arc onto a flat World Grid** — the one case in this app with a
+        floor. Partly subsumed by the map.
+     9. Precision aids for authoring: axis lock and snapping during a grab,
+        duplicate-in-place, and a flight speed control (`MOVE_SPEED_MPS` is fixed
+        at 3.0 with no boost and no fine mode).
+     10. Passthrough AR, then hand tracking, then text entry — all already below,
+         all correctly deferred.
+     11. **Co-presence**: two headsets in one scene. Jeff calls this the pinnacle
+         and has lived the comparison — he used 3Data's DataVR, where the shared
+         experience was great and the visualisation was 3D bar charts and point
+         clouds. It is a server, a protocol and a conflict model, so it is a
+         horizon rather than a backlog item; but it is what the rest is for.
    - PENDING after that, in the order agreed: passthrough AR (`immersive-ar` on
      Quest 3, small once the rig exists, and the demo that impresses people) —
      Jeff deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
      hand tracking and comfort options (snap turn, vignette). The authoring
-     gestures are largely done now: grab-to-move/turn/size shipped as P4+P5 and
-     Draw Mode as P8, with add-select on the RIGHT thumbstick click; the LEFT
-     stick click is the one free input left. Still absent in-headset: a
-     rubber-band region select (the desktop's Shift+drag has no ray analogue
-     worth guessing at), text entry (deferred by Jeff — see above), and loading
-     a Composer brush without going out to the desktop.
+     gestures are largely done: grab-to-move/turn/size shipped as P4+P5 and Draw
+     Mode as P8, with add-select on the RIGHT thumbstick click and go-to on the
+     LEFT one (P9) — **both stick clicks are now spent, and the input budget is
+     full**: anything further needs a chord, a panel row, or a gesture. Still
+     absent in-headset: a rubber-band region select (the desktop's Shift+drag has
+     no ray analogue worth guessing at), text entry (deferred by Jeff — see
+     above), and loading a Composer brush without going out to the desktop.
 10. Deliberately NOT ported (Jeff, 2026-07-30, on completing the roadmap
     through step 8 — the two remaining desktop features, by conscious
     choice, so their absence is a decision and not a gap):

@@ -121,6 +121,11 @@ export interface XrPropertiesActions {
   hideSelected(): void
   showAll(): void
   isolateSelected(): void
+  /** Travel to the selection (render/xrFocus.ts) — the same command the LEFT
+   *  thumbstick click fires. */
+  goToSelection(): void
+  /** Follow Selected: the SAME flag F and the DOM checkbox drive. */
+  setFollow(follow: boolean): void
 
   // --- Draw page. Every rule is gv/drawMode.ts's, unchanged; these are the
   // same settings the DOM Draw panel edits, so the two surfaces cannot drift.
@@ -353,6 +358,14 @@ export class XrProperties extends XrSurface<XrPropWidget> {
         return true
       case 'vis-only':
         a.isolateSelected()
+        return true
+      case 'focus-goto':
+        a.goToSelection()
+        return true
+      case 'focus-follow':
+        // The flag lives in main.ts (it is the desk's Follow Selected), so this
+        // asks rather than sets, and the next frame's input reports the answer.
+        a.setFollow(!this.input?.followSelected)
         return true
       default:
         return false

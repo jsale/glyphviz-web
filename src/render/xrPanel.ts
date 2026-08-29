@@ -27,6 +27,7 @@ import {
   SURFACE_BG,
   SURFACE_BTN,
   SURFACE_BTN_HOVER,
+  SURFACE_BTN_OFF,
   SURFACE_DIM,
   SURFACE_EDGE,
   SURFACE_TEXT,
@@ -49,6 +50,10 @@ export interface XrPanelActions {
   stepDrawLimit(factor: number): void
   stepExample(delta: number): void
   fit(targetMetres: number): void
+  /** Frame the SELECTION the way `fit` frames the scene — same operation, a
+   *  different subject, which is why it shares this row and not the Go to
+   *  button on the other wrist (see ui/xrPanelModel.ts). */
+  fitSelection(): void
 }
 
 /** Desktop `\` / `Shift+\` factors, so the panel and the keys agree. */
@@ -88,6 +93,7 @@ export class XrPanel extends XrSurface<XrWidget> {
   }
 
   protected onPress(widget: XrWidget): void {
+    if (widget.disabled) return
     switch (widget.id) {
       case 'play':
         this.actions.togglePlay()
@@ -112,6 +118,9 @@ export class XrPanel extends XrSurface<XrWidget> {
         break
       case 'fit-table':
         this.actions.fit(TABLE_METRES)
+        break
+      case 'fit-selection':
+        this.actions.fitSelection()
         break
       case 'seek':
         break
@@ -196,10 +205,11 @@ export class XrPanel extends XrSurface<XrWidget> {
     const y = widget.rect.y * TEX_H
     const w = widget.rect.w * TEX_W
     const h = widget.rect.h * TEX_H
-    ctx.fillStyle = this.hovered === widget.id ? SURFACE_BTN_HOVER : SURFACE_BTN
+    const hovered = this.hovered === widget.id && !widget.disabled
+    ctx.fillStyle = widget.disabled ? SURFACE_BTN_OFF : hovered ? SURFACE_BTN_HOVER : SURFACE_BTN
     roundRect(ctx, x, y, w, h, 12)
     ctx.fill()
-    ctx.fillStyle = SURFACE_TEXT
+    ctx.fillStyle = widget.disabled ? SURFACE_DIM : SURFACE_TEXT
     if (widget.icon) {
       drawTransportIcon(ctx, widget.icon, x + w / 2, y + h / 2, h * 0.34)
       return

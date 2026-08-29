@@ -135,7 +135,7 @@ import {
 } from './render/textureLibrary'
 import type { AudioMode, TextureLibrary } from './render/textureLibrary'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
-import { TOPO_SCALE_HINT_RATIO, worstChildPlacementRatio } from './render/scatterHint'
+import { TOPO_SCALE_HINT_RATIO, renderedRadius, worstChildPlacementRatio } from './render/scatterHint'
 import { composeScreenshot, downloadCanvasPng, screenshotFilename } from './render/screenshot'
 import { nodeIdsInRect } from './render/rectSelect'
 import {
@@ -408,6 +408,9 @@ const xrRig = new XrRig(renderer, camera, scene, {
       extent: Math.max(size.x, size.y, size.z),
     }
   },
+  onGoTo() {
+    goToSelection()
+  },
   onSecondary() {
     setPlaying(!playing)
   },
@@ -490,6 +493,12 @@ const xrPanel = new XrPanel({
   fit(targetMetres) {
     xrRig.requestFit(targetMetres)
   },
+  fitSelection() {
+    const target = selectionFocusTarget()
+    if (!target) return status('Nothing selected to frame.')
+    xrRig.requestFit(XR_FIT_SELECTION_METRES, target)
+    status(`Framed ${selection.size} selected node${selection.size === 1 ? '' : 's'}.`)
+  },
 })
 xrRig.panelAnchor.add(xrPanel.group)
 
@@ -566,6 +575,12 @@ const xrProperties = new XrProperties({
   showAll: () => xrApplyVisibility(showAll(currentNodes), 'Showed'),
   isolateSelected: () =>
     xrApplyVisibility(isolateSelection(currentNodes, new Set(selection.ids)), 'Isolated,'),
+  goToSelection: () => {
+    goToSelection()
+  },
+  // The desk's own Follow Selected, reached from a wrist — same flag, same
+  // status wording, so F, the HUD checkbox and this button are one control.
+  setFollow: (follow) => setFollowSelected(follow),
 
   // Draw page. `setDrawMode` is the SAME function the D key and the HUD button
   // call, so the mode is one mode however it was armed.
@@ -1712,6 +1727,13 @@ renderer.domElement.addEventListener(
       ? null
       : { nodeId: xrGrab.nodeId, mode: xrGrab.mode, moved: xrGrab.moved }
   },
+  // A focus move: which style it picked, how black the view is, and what it was
+  // aimed at. None of it reaches the DOM, and the blink's whole point is that
+  // the travel is invisible — so a drive has no other way to tell a dash from a
+  // blink, or to know one ran at all.
+  get xrFocusState() {
+    return { ...xrRig.focusState, following: followSelected, target: selectionFocusTarget() }
+  },
   // The wrist panel's own readouts, which exist nowhere else while a session
   // is running: what is drawn, and where the transport stands.
   get drawState() {
@@ -1783,6 +1805,72 @@ function worldPosOf(nodeId: number): THREE.Vector3 | null {
 }
 
 /**
+ * Where the selection is and how big it draws — the target a focus move aims
+ * at (render/xrFocus.ts) and the subject of the control panel's Fit ▸ Selection.
+ *
+ * Node POSITIONS, not `Box3.setFromObject`, which would fold in every
+ * descendant: selecting a hyperglyph's trunk would then aim at the whole
+ * hyperglyph, and selecting a root at the whole scene, so the further up a tree
+ * you picked the further away you would arrive. What a person means by "go to
+ * this node" is the node.
+ *
+ * The extent is the span those positions cover, floored by the primary's own
+ * rendered radius (`renderedRadius`, the measurement the Topology Scale hint
+ * already makes) — so one node still has a size, and it is the size it actually
+ * draws at, draw-scale floor, Global Scale and a rod's proportions included.
+ */
+function selectionFocusTarget(): { center: THREE.Vector3; extent: number } | null {
+  const frames = currentFrames
+  if (!frames) return null
+  const box = new THREE.Box3()
+  const pos = new THREE.Vector3()
+  let radius = 0
+  // `selection.ids` is already scene row order, so the first frame found is the
+  // PRIMARY's — which is the one whose rendered radius floors the extent.
+  for (const id of selection.ids) {
+    const frame = frames.get(id)
+    // No frame means no place: a node past the draw limit, or one that never
+    // drew. The same rule every other selection path follows (roadmap 6m).
+    if (!frame) continue
+    box.expandByPoint(pos.setFromMatrixPosition(frame.matrixWorld))
+    if (radius === 0) radius = renderedRadius(frame)
+  }
+  if (box.isEmpty()) return null
+  const size = box.getSize(new THREE.Vector3())
+  return {
+    center: box.getCenter(new THREE.Vector3()),
+    extent: Math.max(size.x, size.y, size.z, radius * 2),
+  }
+}
+
+/** How wide the selection reads after Fit ▸ Selection: an object held in front
+ *  of you, the Tabletop framing applied to what is selected rather than to the
+ *  whole scene. */
+const XR_FIT_SELECTION_METRES = 1.2
+
+/**
+ * Travel to the selection — the LEFT thumbstick click, the Select page's Go to
+ * button, and what Follow does on every selection change.
+ *
+ * Only in a session: at the desk this is the double-click focus and the F key,
+ * which move the orbit pivot instead (there is no rig to translate).
+ */
+function goToSelection(report = true): boolean {
+  if (!xrRig.presenting) return false
+  const target = selectionFocusTarget()
+  if (!target) {
+    if (report) status('Nothing selected — point at a glyph and pull the trigger first.')
+    return false
+  }
+  xrRig.requestGoTo(target.center, target.extent)
+  if (report) {
+    const n = selection.size
+    status(n > 1 ? `Going to ${n} selected nodes.` : `Going to node ${selection.id}.`)
+  }
+  return true
+}
+
+/**
  * The one label an immersive session draws: the selected node's own text,
  * billboarded at its position (desktop `text_billboard.draw_label`).
  *
@@ -1848,6 +1936,7 @@ function updateXrProperties() {
     },
     select: xrSelectData(xrProperties.criterion),
     draw: xrDrawData(),
+    followSelected,
   })
 }
 
@@ -5554,6 +5643,11 @@ for (const input of [fogStartInput, fogEndInput]) {
 
 let followSelected = false
 const followDelta = new THREE.Vector3()
+/** Which node the immersive follow is riding, and where it was last frame —
+ *  the XR branch tracks by DELTA, so it needs the previous position and has to
+ *  notice when the selection has moved to a different node entirely. */
+let xrFollowId: number | null = null
+const xrFollowLast = new THREE.Vector3()
 
 /** The node the camera follows: the first selected VISUAL node in row order
  *  (desktop follow_node — World/Camera rows are settings, not places). */
@@ -5573,9 +5667,13 @@ function applyFollowTarget() {
   // deltas and doesn't have that coupling, so it can follow throughout.
   if (gizmo.dragging) return
   const node = followNode()
-  if (!node) return
+  if (!node) {
+    xrFollowId = null
+    return
+  }
   const pos = worldPosOf(node.id)
   if (!pos) return
+  if (xrRig.presenting) return applyXrFollow(node.id, pos)
   // Move the pivot AND the camera by the same delta, leaving distance, azimuth
   // and elevation alone — the desktop only re-centres _cam_target and keeps its
   // spherical camera parameters, so orbit and zoom stay live while following.
@@ -5599,6 +5697,40 @@ function applyFollowTarget() {
   camSmoothing.goal.target = [pos.x, pos.y, pos.z] // fresh array: goal must never alias
 }
 
+/**
+ * Follow Selected in a headset. Two behaviours, which are the two halves of
+ * what the desktop's pivot re-centring does when you read it as a viewer rather
+ * than as a camera:
+ *
+ *   the selection CHANGED  travel to the new node (a dash, or a blink for a
+ *                          long hop). This is the "point at a node and you are
+ *                          there" that immersive follow exists for.
+ *   the node MOVED         translate the rig by the node's own delta. Zero
+ *                          relative motion, so a node animating under Channels
+ *                          holds its place in the view with none of the vection
+ *                          that chasing it would produce.
+ *
+ * What it deliberately does NOT do is re-fit every frame. That would fight the
+ * viewer for the same offset and undo any flight, grab or turn the moment it
+ * began — which is the desk bug of roadmap 6cc in this platform's dialect, and
+ * the reason the tracking half is a delta and nothing else.
+ */
+function applyXrFollow(nodeId: number, pos: THREE.Vector3) {
+  // A grab is an EDIT: the viewer is moving the node, and travelling to it at
+  // the same time would chase their own hand (the gizmo rule above, in VR).
+  if (xrGrab !== null) return
+  if (nodeId !== xrFollowId) {
+    xrFollowId = nodeId
+    xrFollowLast.copy(pos)
+    goToSelection(false)
+    return
+  }
+  followDelta.copy(pos).sub(xrFollowLast)
+  if (followDelta.lengthSq() === 0) return
+  xrFollowLast.copy(pos)
+  xrRig.nudgeNav(followDelta)
+}
+
 function setFollowSelected(value: boolean) {
   // Follow pins the pivot to a node every frame; flight translates it every
   // frame. Entering Camera Mode clears Follow (desktop set_fly_mode), so
@@ -5607,9 +5739,19 @@ function setFollowSelected(value: boolean) {
   if (value && flyRig.flyMode) setCameraMode(false)
   followSelected = value
   followCheckbox.checked = value
+  // Forget which node was being ridden either way: turning follow ON should
+  // travel to the selection even if it is the same node the last session of
+  // following left off at, and turning it off must not leave a stale anchor for
+  // the next one to measure a delta against.
+  xrFollowId = null
   if (!value) return status('Follow off.')
   const node = followNode()
   applyFollowTarget() // jump now rather than on the next animation frame
+  if (xrRig.presenting) {
+    return status(
+      node ? `Following node ${node.id} — travelling on every selection.` : 'Follow on — select a node to follow.',
+    )
+  }
   status(node ? `Following node ${node.id}.` : 'Follow on — select a node to follow.')
 }
 
@@ -5698,6 +5840,13 @@ renderer.setAnimationLoop(() => {
   // position, and OrbitControls has no pointer to read.
   const presenting = xrRig.presenting
   if (presenting) {
+    // BEFORE the rig's own update, not after: follow writes the rig's nav (a
+    // delta, or a travel request), and update is what reads that, folds this
+    // frame's locomotion in and pushes the result onto the scene graph. The
+    // other way round the group's matrices would be a frame behind everything
+    // that reads them — the head proxy the light and the backdrop aim off, and
+    // the ray the pointer casts.
+    applyFollowTarget()
     xrRig.update(dtMs)
   } else {
     // After the animation tick, like the desktop's paintGL: the followed node

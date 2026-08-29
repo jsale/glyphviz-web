@@ -91,8 +91,13 @@ export function worstChildPlacementRatio(
  * hidden node, a link, one past the draw limit) falls back to its own basis,
  * and a degenerate zero-scale parent to the Global Scale, so the ratio stays
  * meaningful instead of dividing by ~nothing.
+ *
+ * Exported because immersive focus (render/xrFocus.ts) needs exactly the same
+ * measurement to decide how far from a node to arrive — "how big does this
+ * glyph actually draw" has one answer, and a second copy of it would be a
+ * second answer waiting to disagree.
  */
-function renderedRadius(frame: THREE.Object3D): number {
+export function renderedRadius(frame: THREE.Object3D): number {
   const glyph = frame.children.find((c) => c.userData.isGlyph) ?? frame
   const m = glyph.matrixWorld.elements
   const column = (i: number) => Math.hypot(m[i * 4], m[i * 4 + 1], m[i * 4 + 2])

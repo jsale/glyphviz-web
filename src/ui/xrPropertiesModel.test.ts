@@ -68,6 +68,7 @@ function state(overrides: Partial<XrPropState> = {}): XrPropState {
     draw: DRAW,
     valueIndex: 0,
     addToSelection: false,
+    followSelected: false,
     ...overrides,
   }
 }
@@ -227,7 +228,34 @@ describe('propLayout — the Select page', () => {
       'vis-hide',
       'vis-show',
       'vis-only',
+      'focus-goto',
+      'focus-follow',
     ])
+  })
+
+  it('offers Go to only with something selected, and Follow always', () => {
+    const armed = propLayout(state({ page: 'select', count: 3 })).widgets
+    expect(armed.find((w) => w.id === 'focus-goto')?.disabled).toBe(false)
+    // Follow stays live with an empty selection: "Follow on — select a node to
+    // follow" is a legitimate state on both sides, and arming it first is how
+    // you get the travel on the very next pick.
+    const empty = propLayout(state({ page: 'select', node: null, count: 0 })).widgets
+    expect(empty.find((w) => w.id === 'focus-goto')?.disabled).toBe(true)
+    expect(empty.find((w) => w.id === 'focus-follow')?.disabled).toBeUndefined()
+  })
+
+  it('shows Follow as a checkbox reading the shared flag', () => {
+    const off = propLayout(state({ page: 'select' })).widgets
+    expect(off.find((w) => w.id === 'focus-follow')?.checked).toBe(false)
+    const on = propLayout(state({ page: 'select', followSelected: true })).widgets
+    expect(on.find((w) => w.id === 'focus-follow')?.checked).toBe(true)
+  })
+
+  it('captions the Follow checkbox — a bare tick box says nothing in a headset', () => {
+    const layout = propLayout(state({ page: 'select' }))
+    const follow = layout.widgets.find((w) => w.id === 'focus-follow')!
+    const row = layout.rows.find((r) => Math.abs(r.y - follow.rect.y) < 1e-9)
+    expect(row?.value).toBe('follow')
   })
 
   it('renders with NOTHING selected — which is what the page is for', () => {

@@ -33,7 +33,16 @@ describe('panelWidgets', () => {
       'scene-next',
       'fit-room',
       'fit-table',
+      'fit-selection',
     ])
+  })
+
+  it('greys Fit ▸ Selection with nothing selected, and only that one', () => {
+    const off = panelWidgets(base)
+    expect(off.find((w) => w.id === 'fit-selection')?.disabled).toBe(true)
+    expect(off.filter((w) => w.disabled).map((w) => w.id)).toEqual(['fit-selection'])
+    const on = panelWidgets({ ...base, selection: { id: 3, text: '', type: 'Glyph' } })
+    expect(on.find((w) => w.id === 'fit-selection')?.disabled).toBe(false)
   })
 
   it('adds the transport only when the scene has Channels', () => {

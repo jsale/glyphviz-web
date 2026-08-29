@@ -28,6 +28,7 @@ export type XrWidgetId =
   | 'scene-next'
   | 'fit-room'
   | 'fit-table'
+  | 'fit-selection'
 
 export interface XrWidget extends XrWidgetBase {
   id: XrWidgetId
@@ -100,19 +101,30 @@ export function panelWidgets(state: XrPanelState): XrWidget[] {
     // a second Play button one row below the real one.
     { id: 'scene-prev', kind: 'button', label: '‹', rect: row(ROW_SCENE, PAD, BTN_W) },
     { id: 'scene-next', kind: 'button', label: '›', rect: row(ROW_SCENE, PAD * 2 + BTN_W, BTN_W) },
-    {
-      id: 'fit-room',
-      kind: 'button',
-      label: 'Room view',
-      rect: row(ROW_FIT, PAD, 0.5 - PAD * 1.5),
-    },
-    {
-      id: 'fit-table',
-      kind: 'button',
-      label: 'Tabletop',
-      rect: row(ROW_FIT, 0.5 + PAD * 0.5, 0.5 - PAD * 1.5),
-    },
   )
+  // THREE framings, not two. Room and Tabletop place the whole scene; Selection
+  // does the same job on whatever is selected — the "show me this at a size I
+  // can work with" that a go-to deliberately does NOT do (a go-to travels and
+  // leaves the scale alone, see render/xrFocus.ts). Putting it here rather than
+  // beside Go to is what keeps the two apart: this row is where the scale
+  // changes, and everything in it changes the scale.
+  const fitW = (1 - PAD * 4) / 3
+  const fits: Array<[XrWidgetId, string]> = [
+    ['fit-room', 'Room'],
+    ['fit-table', 'Table'],
+    ['fit-selection', 'Selection'],
+  ]
+  fits.forEach(([id, label], i) => {
+    widgets.push({
+      id,
+      kind: 'button',
+      label,
+      rect: row(ROW_FIT, PAD + i * (fitW + PAD), fitW),
+      // Nothing to frame with nothing selected. The other two always have the
+      // scene to fall back on.
+      disabled: id === 'fit-selection' && state.selection === null,
+    })
+  })
   return widgets
 }
 

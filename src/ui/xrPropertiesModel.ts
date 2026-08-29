@@ -84,6 +84,8 @@ export type XrPropId =
   | 'vis-hide'
   | 'vis-show'
   | 'vis-only'
+  | 'focus-goto'
+  | 'focus-follow'
   | 'topo-prev'
   | 'topo-next'
   | 'geometry-prev'
@@ -238,6 +240,14 @@ export interface XrPropState {
   valueIndex: number
   /** The Select By rows ADD to the selection rather than replacing it. */
   addToSelection: boolean
+  /**
+   * Follow Selected — the SAME flag the desktop's F key and the DOM checkbox
+   * drive, not a second setting that means nearly the same thing (the trap
+   * roadmap 6ff names). In a headset it warps to the selection whenever the
+   * selection changes, and carries the viewer along with a node animating under
+   * Channels; at the desk it re-centres the orbit pivot. One idea, two surfaces.
+   */
+  followSelected: boolean
 }
 
 /** The three criteria, in the desktop Select By combo's own order. */
@@ -685,6 +695,34 @@ function buildSelect(state: XrPropState, rows: XrPropRow[], widgets: XrPropWidge
       ['vis-only', 'Only'],
     ],
     state.count === 0,
+  )
+
+  // TRAVEL, in the sixth row P7 deliberately left empty — and on the Select
+  // page rather than a page of its own, because going to the selection is the
+  // other half of choosing it. Everything above answers "which nodes"; this
+  // answers "take me to them", which in a headset is the question that follows.
+  //
+  // Laid out as the Apply row is: a wide command with its modifier captioned in
+  // the gap beside it. Follow is a checkbox rather than a second button because
+  // it is a MODE — it keeps acting long after the press, on every later
+  // selection change and on every frame a followed node moves.
+  const y5 = rowY(5)
+  rows.push({ y: y5, caption: '', value: 'follow' })
+  widgets.push(
+    {
+      id: 'focus-goto',
+      kind: 'button',
+      rect: crect(CAP_X, y5, 0.46, ROW_H),
+      label: 'Go to',
+      disabled: state.count === 0,
+    },
+    {
+      id: 'focus-follow',
+      kind: 'button',
+      rect: crect(INC_X, y5, INC_W, ROW_H),
+      label: '',
+      checked: state.followSelected,
+    },
   )
 }
 
