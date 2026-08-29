@@ -526,6 +526,48 @@ export function channelInputId(node: GvNode): number {
 }
 
 /**
+ * Point `node` at ch-map channel `chId` (0 = not animated) — the write half of
+ * `channelInputId`, and the whole of what the Properties panel's "channel in"
+ * row does to the data (desktop `set_channel_id`).
+ *
+ * Writes back through whichever of CH_INPUT_KEYS the node already carries
+ * rather than always adding `ch_input_id`: the read above takes the FIRST key
+ * present, so a GaiaViz-dialect row spelling it `np_ch_in_id` would otherwise
+ * end up with two columns that disagree — and its file would grow a column it
+ * never had.
+ *
+ * 0 is written, never deleted: an explicit 0 is what the format carries for an
+ * unbound node, and the reader already treats a missing key as 0 anyway.
+ */
+export function setChannelInputId(node: GvNode, chId: number): void {
+  // extras are the file's own text, preserved verbatim by the writer.
+  const value = String(Math.trunc(chId))
+  for (const key of CH_INPUT_KEYS) {
+    if (node.extras[key] !== undefined) {
+      node.extras[key] = value
+      return
+    }
+  }
+  node.extras['ch_input_id'] = value
+}
+
+/**
+ * The attribute names channel `chId` actually drives, in ch-map order with
+ * duplicates collapsed (desktop `channel_attrs`).
+ *
+ * Filtered to attributes this app can bind — the same filter `bindChannels`
+ * applies — so this answers "what will happen if I point a node at this
+ * channel", not merely "what does the file say".
+ */
+export function channelAttributes(map: ChMapParseResult, chId: number): string[] {
+  const seen: string[] = []
+  for (const { attribute } of map.byChannel.get(chId) ?? []) {
+    if (ATTRIBUTES[attribute] && !seen.includes(attribute)) seen.push(attribute)
+  }
+  return seen
+}
+
+/**
  * Resolve the three-way join (node.ch_input_id → map channel_id → track column)
  * into a flat binding list.
  *

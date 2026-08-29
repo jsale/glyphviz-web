@@ -27,13 +27,15 @@ import type { SceneCandidate } from './gv/bundle'
 import {
   applyChannelFrame,
   bindChannels,
+  channelAttributes,
   deriveChannelFilenames,
   emptyChannelAnimation,
   parseGvChMap,
   parseGvChTracks,
   resetChannels,
 } from './gv/channels'
-import type { ChannelAnimation } from './gv/channels'
+import type { ChannelAnimation, ChMapParseResult, ChTracksParseResult } from './gv/channels'
+import { channelBindingMessage } from './ui/channelIn'
 import { applyRateAnimation, rateCandidates, restoreRates, snapshotAndZeroRates } from './gv/rates'
 import type { RateSnapshot } from './gv/rates'
 import { buildMediaIndex } from './gv/media'
@@ -1054,6 +1056,10 @@ let nodesById = new Map<number, GvNode>()
 
 const inspector = new Inspector({
   onNodesEdited(nodes, notes) {
+    // A ch_input_id edit re-resolves the bindings BEFORE the rebuild: the build
+    // reads the bound-node sets to register the animated slice, so a node bound
+    // mid-playback starts moving on the very next frame.
+    if (notes?.channelBinding !== undefined) rebindChannels()
     // The mutated nodes live in currentNodes; rebuild in place, keeping the
     // camera and reattaching the selection + inspector.
     rebuildScene(false)
@@ -1066,6 +1072,7 @@ const inspector = new Inspector({
     // A topology change can throw a subtree off screen; the hint names the
     // field that brings it back (desktop `_on_insp_topo_changed`'s tail).
     if (notes?.topologyChanged) hintScatteredChildren(nodes)
+    if (notes?.channelBinding !== undefined) reportChannelBinding(nodes, notes.channelBinding)
   },
   onFetchBasemap(grid) {
     basemapWindow.open(grid, currentNodes)
@@ -1711,7 +1718,14 @@ renderer.domElement.addEventListener(
     return { limit: drawLimit, drawn: drawnCount, total: currentNodes.length }
   },
   get channelState() {
-    return { playing, frame: channelFrame, frames: channels.frameCount }
+    // `bound` is what the "channel in" row changes, and after the load-time
+    // scene line it appears nowhere in the DOM.
+    return {
+      playing,
+      frame: channelFrame,
+      frames: channels.frameCount,
+      bound: channels.boundNodeIds.size,
+    }
   },
   // Rate pause (P): the checkbox shows the flag, but how many nodes the pause
   // is actually holding at zero exists only in the snapshot.
@@ -2313,9 +2327,15 @@ let showHidden = false
 let drawLimit: number | null = null
 /** How many nodes the last build actually drew — the wrist panel's readout. */
 let drawnCount = 0
-// Tag labels are off by default, matching the desktop ("press T to see labels").
-let showTags = false
-let tagsSelectedOnly = false
+// Tags on, scoped to the selection, is the default PAIR (desktop 2026-08-28,
+// `Viewport.show_tags` / `show_tags_selected_only`, both flipped to True).
+// Either one alone is a poor first impression: all-tags-off hides the labels a
+// scene's author wrote, and all-tags-on buries a large scene in text. Together
+// they mean "click a glyph, read what it is" — the labels are discoverable
+// without ever cluttering the view. T still toggles the first of them;
+// unchecking the second shows every tag.
+let showTags = true
+let tagsSelectedOnly = true
 // Nodes whose show_text pins their label, and the World row's tag styling —
 // both cached per scene build so the per-frame overlay never rescans the scene.
 let pinnedTags: GvNode[] = []
@@ -2472,6 +2492,13 @@ app.appendChild(nodeTable.element)
 // run at 60 Hz. Rate fields integrate alongside, with or without channels.
 
 let channels: ChannelAnimation = emptyChannelAnimation()
+/**
+ * The loaded scene's PARSED channel companions, kept alongside the resolved
+ * animation (not handed to `bindChannels` and forgotten) so a node's channel
+ * binding can be changed from the Properties panel and re-resolved in place —
+ * see `rebindChannels`. Desktop `_ch_map` / `_ch_tracks`.
+ */
+let channelData: { map: ChMapParseResult; tracks: ChTracksParseResult } | null = null
 /** Nodes the rate integrator has to visit — see rates.ts on why it isn't all. */
 let rateNodes: GvNode[] = []
 let dynamic: DynamicNodes | null = null
@@ -2914,6 +2941,7 @@ function loadChannels(source: SceneSource) {
   channelFrame = 0
   frameCarry = 0
   channels = emptyChannelAnimation()
+  channelData = null
   channelAudio.unload()
   channelNote = ''
   currentChannelFiles = null
@@ -2928,14 +2956,20 @@ function loadChannels(source: SceneSource) {
     parseWarningLines.push(
       ...[...map.errors, ...map.warnings, ...tracks.errors, ...tracks.warnings].map(issueText),
     )
-    if (map.errors.length === 0 && tracks.errors.length === 0) {
+    if (map.errors.length === 0 && tracks.errors.length === 0 && tracks.frameCount > 0) {
+      channelData = { map, tracks }
       channels = bindChannels(map, tracks, currentNodes)
       parseWarningLines.push(...channels.warnings)
-      // The desktop hides its Channels group when the join produced nothing;
-      // an empty binding list here is the same "there is nothing to play".
-      if (channels.bindings.length === 0) channels = emptyChannelAnimation()
+      // Deliberately NOT also requiring a non-empty binding list (desktop
+      // `_ch_load_from_csv`, 2026-08-28): a channel file no node points at yet
+      // is precisely the scene the Properties panel's "channel in" row exists
+      // to wire up, and dropping the animation would leave the transport
+      // hidden and nothing to bind against.
     }
   }
+  // The row names the channels this file offers, so it has to know before the
+  // first selection lands in the panel.
+  inspector.setChannels(channelMenu())
 
   if (source.audio && channels.frameCount > 0) {
     channelAudio.load(source.audio.blob, source.audio.name)
@@ -2957,6 +2991,14 @@ function loadChannels(source: SceneSource) {
   })
   channelsPanel.setPlaying(false)
 
+}
+
+/**
+ * The scene line's channels clause. Recomputed after a rebind as well as on
+ * load: the bound-node count is exactly what the "channel in" row changes, and
+ * this line is the only place that says it once the status message has gone.
+ */
+function channelNoteText(): string {
   const notes: string[] = []
   if (channels.frameCount > 0) {
     notes.push(
@@ -2965,7 +3007,59 @@ function loadChannels(source: SceneSource) {
     )
   }
   if (rateNodes.length > 0) notes.push(`${rateNodes.length} rate-animated node(s)`)
-  channelNote = notes.join(', ')
+  return notes.join(', ')
+}
+
+/**
+ * The loaded ch-map as channel id → the attributes it drives — what the
+ * Properties panel's "channel in" row offers. Empty when no channel file
+ * loaded, which that row reads as "degrade to a plain id field".
+ */
+function channelMenu(): Map<number, string[]> {
+  const menu = new Map<number, string[]>()
+  if (!channelData) return menu
+  for (const id of [...channelData.map.byChannel.keys()].sort((a, b) => a - b)) {
+    menu.set(id, channelAttributes(channelData.map, id))
+  }
+  return menu
+}
+
+/**
+ * Re-resolve every node↔channel binding against the loaded ch-map, after the
+ * Properties panel changed some node's ch_input_id (desktop `_ch_rebind`).
+ *
+ * RESET FIRST, then re-bind: binding snapshots each newly-bound node's CURRENT
+ * field values as the ones Stop will later restore, so rebinding mid-playback
+ * without resetting would bake whatever frame happened to be on screen into the
+ * scene permanently — and a node taken OFF a channel would keep that frame's
+ * values instead of returning to its own.
+ *
+ * Cheap enough to run per edit (one pass over the node list), and the
+ * alternative — patching the binding list in place — would have to reproduce
+ * bindChannels' originals and palette bookkeeping. The caller rebuilds: the
+ * build is what registers the animated slice with DynamicNodes.
+ */
+function rebindChannels() {
+  if (!channelData) return
+  resetChannels(channels)
+  channels = bindChannels(channelData.map, channelData.tracks, currentNodes)
+  // A node bound while the scene is playing (or parked on a scrubbed frame)
+  // should be showing that frame, not its CSV values, before the next tick.
+  applyChannelFrame(channels, channelFrame)
+}
+
+/** The status line after a "channel in" edit, in the desktop's own wording. */
+function reportChannelBinding(nodes: GvNode[], chId: number) {
+  const subject = nodes.length === 1 ? `Node ${nodes[0].id}` : `${nodes.length} nodes`
+  const ids = [...channelMenu().keys()]
+  status(
+    channelBindingMessage(subject, {
+      channelIds: ids,
+      value: chId,
+      mixed: false,
+      attributes: channelData ? channelAttributes(channelData.map, chId) : [],
+    }),
+  )
 }
 
 /**
@@ -3117,6 +3211,10 @@ function rebuildScene(fitCamera: boolean) {
   // with no rates would otherwise have no way to stop the motion it just
   // acquired. Narrower than setScene, which would reset the transport.
   rateNodes = rateCandidates(currentNodes, channels.rateBoundNodeIds)
+  // Both counts this line reports can move under an edit — a rate typed into
+  // the panel, or a node pointed at a channel — so it is written here rather
+  // than at load.
+  channelNote = channelNoteText()
   channelsPanel.setRateNodes(rateNodeCount(), ratesPaused)
   dynamic = new DynamicNodes(
     currentNodes,

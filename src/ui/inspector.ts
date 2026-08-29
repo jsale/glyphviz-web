@@ -17,6 +17,8 @@
 // A single selection is the same code path: the anchor equals the node's own
 // value, so `+= (new − anchor)` is just `= new`.
 
+import { channelInputId, setChannelInputId } from '../gv/channels'
+import { channelInHint, channelOptionLabel } from './channelIn'
 import { PALETTE_NAMES, paletteIndexCount, setColorIndex, setPalette } from '../gv/colorPalette'
 import { stepTextureId, textureChoices } from '../gv/media'
 import type { MediaIndex } from '../gv/media'
@@ -54,6 +56,13 @@ export interface EditNotes {
    * would be noise on any other field.
    */
   topologyChanged?: boolean
+  /**
+   * The edit wrote `ch_input_id`, and this is the value written (0 = unbound).
+   * The host has to re-resolve the whole scene's channel bindings BEFORE the
+   * rebuild — the build reads the bound-node sets to register the animated
+   * slice — so a node bound mid-playback starts moving on the next frame.
+   */
+  channelBinding?: number
 }
 
 export interface InspectorHost {
@@ -115,6 +124,12 @@ export class Inspector {
   private host: InspectorHost
   /** The loaded scene's media folder, naming the ids the texture row offers. */
   private media: MediaIndex | null = null
+  /**
+   * The loaded scene's ch-map, as channel id → the attributes it drives — what
+   * the "channel in" row offers and describes. Empty means no channel file, in
+   * which case the row degrades to a plain id field (the texture row's rule).
+   */
+  private channelMap = new Map<number, string[]>()
   /** Imported models, which the geometry row lists below the built-in shapes. */
   private meshes: MeshLibrary | null = null
   /** Values the translate/rotate fields are currently showing (see header). */
@@ -144,6 +159,16 @@ export class Inspector {
    */
   setMedia(index: MediaIndex | null): void {
     this.media = index
+  }
+
+  /**
+   * The channels this scene's ch-map offers (id → the attributes it drives),
+   * for the "channel in" row. Set per scene load; an empty map is the no-
+   * channel-file case, which the row still has to serve — the id is node data
+   * that saves, so it must be authorable before the animation exists.
+   */
+  setChannels(map: Map<number, string[]>): void {
+    this.channelMap = map
   }
 
   /**
@@ -418,6 +443,109 @@ export class Inspector {
       stepButton(-1, '‹', 'Previous texture'),
       stepButton(1, '›', 'Next texture'),
     )
+  }
+
+  /**
+   * ch_input_id: which channel of the scene's Channels animation drives this
+   * node (0 = none). Applies ABSOLUTELY to every selected node, like the
+   * desktop's Channel In spin box (`_on_insp_ch_in_changed`) — pointing several
+   * nodes at one channel makes them animate in unison.
+   *
+   * Sits directly under the texture row, the desktop's own placement, because
+   * it is the same kind of field: a number that points into a companion file
+   * rather than a property of the glyph itself. Before this row existed the
+   * binding could only be written into the node CSV by hand, so there was no
+   * way to try an animation against a node you were looking at.
+   *
+   * Divergence, and the same one the texture row already makes: this app has
+   * the loaded ch-map in hand, so it offers the channels that EXIST, each
+   * labelled with what it drives, instead of a bare number typed blind. An id
+   * the map does not carry still round-trips (an "Unknown" entry), since a
+   * scene may legitimately be wired up before its channel file exists — which
+   * is also the whole of the no-channel-file case below.
+   */
+  private channelInRows(nodes: GvNode[]): HTMLElement[] {
+    const value = channelInputId(nodes[0])
+    const mixed = nodes.some((n) => channelInputId(n) !== value)
+    const ids = [...this.channelMap.keys()].sort((a, b) => a - b)
+    const hint = el('div', {
+      className: 'ins-note',
+      textContent: channelInHint({
+        channelIds: ids,
+        value,
+        mixed,
+        attributes: this.channelMap.get(value) ?? [],
+      }),
+    })
+    // The value is what the host reports on and rebinds against, so it rides
+    // with the edit rather than being re-read from a node the rebuild replaces.
+    const setId = (v: number) =>
+      this.commit((n) => setChannelInputId(n, v), { channelBinding: v })
+
+    if (ids.length === 0) {
+      const input = this.numberInput(value, setId, { min: 0, integer: true, width: '70px' })
+      input.title =
+        'ch_input_id: which channel of a Channels animation drives this node.\n' +
+        '0 = not animated. Saved with the scene, so it can be set before the\n' +
+        'gv_ch-map.csv / gv_ch-tracks.csv companions exist — open the scene as a\n' +
+        'folder or .zip to pick a channel by what it drives.'
+      return [row('channel in', input), hint]
+    }
+
+    const options = [0, ...ids]
+    if (value !== 0 && !this.channelMap.has(value)) options.push(value)
+    const select = el('select', { className: 'ins-tex' })
+    select.dataset.insKey = 'channel-in'
+    for (const id of options) {
+      const known = this.channelMap.has(id) || id === 0
+      select.appendChild(
+        el('option', {
+          value: String(id),
+          textContent: known
+            ? channelOptionLabel(id, this.channelMap.get(id) ?? [])
+            : `Unknown (${id})`,
+        }),
+      )
+    }
+    select.value = String(value)
+    // The panel is 300px wide, so a channel driving several attributes elides
+    // in the closed control — the tooltip is where the whole list still reads.
+    select.title =
+      'Which channel of this scene’s Channels animation drives this node\n' +
+      '(ch_input_id; 0 = not animated).\n' +
+      'Set it while an animation is playing and the node starts moving on the\n' +
+      'spot, driven by whatever tracks and attributes that channel maps; set it\n' +
+      'back to 0 and the node stops and returns to its own saved values.\n' +
+      'Applies to every selected node — pointing several at one channel makes\n' +
+      'them animate in unison. Saved with the scene (the ch_input_id column).'
+    select.addEventListener('change', () => setId(Number(select.value)))
+
+    const stepButton = (direction: 1 | -1, glyph: string, title: string) => {
+      const button = el('button', { className: 'ins-step', textContent: glyph, title })
+      button.type = 'button'
+      button.dataset.insKey = `channel-in-${direction}`
+      button.addEventListener('click', () => {
+        const current = channelInputId(this.nodes[0] ?? nodes[0])
+        const at = options.indexOf(current)
+        const next = at === -1 ? options[0] : options[(at + direction + options.length) % options.length]
+        setId(next)
+      })
+      // A focused button is not a text field, so the viewport's single-key
+      // commands would fire alongside the step it is already doing.
+      button.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') e.stopPropagation()
+      })
+      return button
+    }
+    return [
+      row(
+        'channel in',
+        select,
+        stepButton(-1, '‹', 'Previous channel'),
+        stepButton(1, '›', 'Next channel'),
+      ),
+      hint,
+    ]
   }
 
   /**
@@ -791,6 +919,9 @@ export class Inspector {
         }),
       ),
       this.textureRow(primary),
+      // Directly under the texture row, the desktop's own placement — both are
+      // ids pointing into a companion file rather than glyph properties.
+      ...this.channelInRows(nodes),
     )
 
     // Fetch Basemap: the desktop keeps this on its World Grid panel; this app

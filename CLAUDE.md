@@ -2209,6 +2209,95 @@ something to decide now).
         - The same session's real finding is about the app, not the shape:
           **the immersive CONTROLS need improvement** (his words). That is the
           next piece of work — see the XR pending list in section 9.
+   ii. Tag labels on by default + Channel In (shipped 2026-08-29, Jeff's
+      request — two of the desktop's most-demanded features, ported the day he
+      built them there; his desktop working tree, not yet a commit). Unrelated
+      to each other, and shipped together because he asked for them together.
+      - TAG LABELS DEFAULT ON, SCOPED TO THE SELECTION (desktop
+        `Viewport.show_tags` / `show_tags_selected_only`, both False → True).
+        The PAIR is the default, and either half alone is worse: all-tags-off
+        hides the labels a scene's author wrote, all-tags-on buries a large
+        scene in text. Together they mean "click a glyph, read what it is" —
+        discoverable without ever cluttering the view. T still toggles the
+        first; unchecking the second labels every tagged node at once.
+        - Three lines of state (main.ts's two flags and the two checkboxes)
+          that must agree at boot, which is what the drive measured rather
+          than assumed. Nothing else changed: the cap, the pinning exemption
+          and the XR billboard label all behave as before.
+        - No web counterpart to the desktop half of that commit: its headless
+          tools (`export_frame.py`, `benchmark_frames.py`,
+          `capture_tour_shots.py`) had to start saying
+          `show_tags_selected_only = False` explicitly, since a headless render
+          has no selection and would otherwise draw zero tags. This app's Save
+          PNG captures what is on screen, selection included, so it needs no
+          such opt-out.
+      - CHANNEL IN (desktop `set_channel_id` / `channel_attrs` /
+        `_refresh_channel_in_row` / `_ch_rebind`): a node's `ch_input_id` — the
+        join that decides which channel of a Channels animation drives it — is
+        now editable from the Properties panel, directly under the texture row
+        (the desktop's own placement: both are ids pointing into a companion
+        file rather than properties of the glyph). Before this it could only be
+        written into the node CSV by hand, so there was no way to try an
+        animation against a node you were looking at.
+        - `setChannelInputId` (gv/channels.ts) writes back through whichever of
+          `CH_INPUT_KEYS` the file already used — `channelInputId` reads the
+          FIRST key present, so always adding `ch_input_id` would leave a
+          GaiaViz-dialect row with two columns that disagree, and grow its file
+          a column it never had. 0 is written, never deleted.
+        - REBINDING IS RESET-THEN-REBIND, and the order is the feature:
+          `bindChannels` snapshots each newly-bound node's CURRENT field values
+          as the ones Stop restores, so re-resolving mid-playback without
+          resetting first would bake whatever frame was on screen into the
+          scene permanently — and a node taken OFF a channel would keep that
+          frame's values instead of returning to its own. `rebindChannels`
+          runs BEFORE the rebuild, since the build is what registers the
+          animated slice with DynamicNodes; main.ts now keeps the PARSED
+          companions (`channelData`) alongside the resolved animation for it,
+          where it used to hand them to `bindChannels` and forget them.
+        - `loadChannels` no longer discards an animation whose channels no node
+          points at (the desktop dropped its `has_bindings` requirement in the
+          same commit): a channel file nothing references yet is precisely the
+          scene this row exists to wire up, and hiding the transport left
+          nothing to bind against. The `frameCount > 0` half of the old guard
+          stays — that IS "there is nothing to play".
+        - Divergence, and the same one the texture row already makes: the row
+          is a MENU of the channels the loaded ch-map actually offers, each
+          labelled with what it drives (`3 · translate_z, color_r`), with ‹ ›
+          steppers that walk it — where the desktop has a bare spin box. This
+          app has the parsed map in hand and a channel id is otherwise a number
+          with nothing on screen to check it against. An id the map does NOT
+          carry still round-trips, as an `Unknown (99)` entry, because a scene
+          may legitimately be wired up before its channel file exists; with no
+          channel file at all the row degrades to the desktop's plain id field.
+        - The hint line under the row is the discovery half and is the
+          desktop's wording exactly (`ui/channelIn.ts`, pure text, no DOM in
+          it): what the chosen channel drives, or how many channels the file
+          has and which ids they use, plus `(selection differs)` for a mixed
+          selection. `channelAttributes` filters through the same bindable-
+          attribute table `bindChannels` uses, so the hint promises only what
+          will actually happen — never merely what the file says.
+        - Applies ABSOLUTELY to every selected node (the desktop's rule), so
+          pointing several nodes at one channel makes them animate in unison.
+          The scene line's bound-node count now follows a rebind rather than
+          being frozen at load, and `__gv.channelState` gained `bound` for the
+          same reason — after that line, the bound set is nowhere in the DOM.
+      - Parity: the desktop's `tests/test_channel_binding.py` is ported case
+        for case into `channels.test.ts` (the key round trip, the explicit 0,
+        the attribute filter, and the reset-then-rebind ordering);
+        `ui/channelIn.test.ts` pins every hint and status string.
+      - Driven in Chrome, 41 measured checks over three passes and four scenes:
+        both checkboxes checked at boot with ZERO label ink until something is
+        selected and 360 px² of it after (1833 with the scope unchecked, i.e.
+        the whole scene); T still toggling from the new default; the row's
+        size, order, wrapping and that nothing overflows the 300px panel; a
+        node bound mid-playback taking channel 5 and MOVING frame to frame
+        (2.89 → 1.90); clearing it back to the CSV value while still playing;
+        a three-node selection binding as one; the steppers walking the list
+        and wrapping; the saved CSV carrying the column; and — on a scene built
+        to the desktop test's own shape, whose channels bind nothing — the
+        transport on screen anyway, then node 1 bound to channel 3 and frame 2
+        driving translate_z to 9 and color_r to 30 with its sibling untouched
+        at 0 / 90, the desktop test's own numbers.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -3573,6 +3662,12 @@ something to decide now).
       inherit a parent's per-axis scale; a ring's texture must be built at the
       RING's aspect, which for a thin hoop is 150:1; and tilting a ring takes
       two Euler angles, not one).
+    - ~~**Tag label defaults + Channel In**~~ (desktop working tree, 2026-08-28
+      — not yet committed there when this was ported) — **shipped 2026-08-29,
+      see roadmap 6ii.** Jeff named both as being on the short list of his
+      most-demanded features. Read `tests/test_channel_binding.py` and
+      `test_channel_binding_gui.py` on that side; the second file's tag-default
+      tests are the desktop's own statement of the pair rule.
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

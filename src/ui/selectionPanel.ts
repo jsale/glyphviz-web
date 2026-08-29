@@ -149,7 +149,9 @@ export class SelectionPanel {
     this.showHidden = hiddenCheck.input
     this.showHidden.addEventListener('change', () => host.setShowHidden(this.showHidden.checked))
 
-    // Labels are off by default, as on the desktop ("press T to see labels").
+    // Both on by default — see main.ts's showTags for why the PAIR is the
+    // default rather than either one alone. They must start agreeing with the
+    // state there, which is what these two `checked` lines are.
     const tagCheck = checkbox(
       'Show Tag Labels',
       'Draw each node’s label text in the viewport  [T]\n' +
@@ -157,15 +159,18 @@ export class SelectionPanel {
         'gv_tag.csv when the node CSV has neither.',
     )
     this.showTags = tagCheck.input
+    this.showTags.checked = true
     this.showTags.addEventListener('change', () => host.setShowTags(this.showTags.checked))
 
     const tagSelectedCheck = checkbox(
       'Labels of Selected Only',
       'Restrict labels to the current selection.\n' +
+        'Uncheck to label every tagged node in the scene at once.\n' +
         `In show-all mode at most ${MAX_TAGS_PER_FRAME} labels draw per frame (a frame-rate\n` +
         'safety valve); scoping to a selection lifts that cap entirely.',
     )
     this.tagsSelectedOnly = tagSelectedCheck.input
+    this.tagsSelectedOnly.checked = true
     this.tagsSelectedOnly.addEventListener('change', () =>
       host.setTagsSelectedOnly(this.tagsSelectedOnly.checked),
     )

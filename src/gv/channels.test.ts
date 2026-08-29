@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   applyChannelFrame,
   bindChannels,
+  channelAttributes,
   channelInputId,
   deriveChannelFilenames,
   parseGvChMap,
   parseGvChTracks,
   resetChannels,
   roundHalfToEven,
+  setChannelInputId,
 } from './channels'
 import { parseGvNodeCsv } from './nodeCsv'
 import type { GvNode } from './types'
@@ -143,6 +145,123 @@ describe('channelInputId', () => {
     delete node.extras['ch_input_id']
     node.extras['np_ch_in_id'] = '4'
     expect(channelInputId(node)).toBe(4)
+  })
+})
+
+// Ported from the desktop's tests/test_channel_binding.py — the data half of
+// the Properties panel's "channel in" row.
+describe('setChannelInputId', () => {
+  it('writes the native key on a node that carries none', () => {
+    const [node] = nodes(row(1, 0))
+    delete node.extras['ch_input_id']
+    setChannelInputId(node, 4)
+    expect(node.extras).toEqual({ ch_input_id: '4' })
+    expect(channelInputId(node)).toBe(4)
+  })
+
+  it('writes 0 rather than deleting the column', () => {
+    // An explicit 0 is what the format carries for an unbound node, and the
+    // reader already treats a missing key as 0 anyway.
+    const [node] = nodes(row(1, 7))
+    setChannelInputId(node, 0)
+    expect(node.extras['ch_input_id']).toBe('0')
+    expect(channelInputId(node)).toBe(0)
+  })
+
+  it('writes back through the spelling the file used', () => {
+    // channelInputId reads the FIRST key present, so adding a second spelling
+    // would leave two columns that disagree — and would grow a GaiaViz file a
+    // column it never had.
+    const [node] = nodes(row(1, 0))
+    delete node.extras['ch_input_id']
+    node.extras['np_ch_in_id'] = '2'
+    setChannelInputId(node, 9)
+    expect(node.extras).toEqual({ np_ch_in_id: '9' })
+    expect(channelInputId(node)).toBe(9)
+  })
+
+  it('truncates to a whole channel number', () => {
+    const [node] = nodes(row(1, 0))
+    setChannelInputId(node, 3.7)
+    expect(node.extras['ch_input_id']).toBe('3')
+  })
+})
+
+describe('channelAttributes', () => {
+  const map = parseGvChMap(
+    [
+      MAP_HEADER,
+      mapRow(3, 1, 'translate_z'),
+      mapRow(3, 2, 'color_r'),
+      mapRow(3, 5, 'translate_z'),
+      mapRow(4, 1, 'not_a_field'),
+      mapRow(4, 2, 'scale_x'),
+    ].join('\n'),
+  )
+
+  it('answers in ch-map order with duplicates collapsed', () => {
+    expect(channelAttributes(map, 3)).toEqual(['translate_z', 'color_r'])
+  })
+
+  it('filters to what bindChannels can actually bind', () => {
+    // The same filter binding applies, so the hint promises only what will
+    // happen — not merely what the file says.
+    expect(channelAttributes(map, 4)).toEqual(['scale_x'])
+  })
+
+  it('is empty for a channel the map does not have', () => {
+    expect(channelAttributes(map, 99)).toEqual([])
+  })
+})
+
+describe('rebinding a live animation', () => {
+  const map = parseGvChMap([MAP_HEADER, mapRow(3, 1, 'translate_z')].join('\n'))
+  const tracks = parseGvChTracks('cyclecount,ch1\n0,0\n1,5\n2,9\n')
+
+  it('binds a node the moment its channel id is set', () => {
+    // The whole point of the feature: nothing about the loaded channel data
+    // changes, only the node's id, and re-resolving picks it up.
+    const scene = nodes(row(1, 0, { translate_z: -1 }))
+    expect(bindChannels(map, tracks, scene).bindings).toEqual([])
+
+    setChannelInputId(scene[0], 3)
+    const bound = bindChannels(map, tracks, scene)
+    expect([...bound.boundNodeIds]).toEqual([1])
+    expect([...bound.transformBoundNodeIds]).toEqual([1])
+    applyChannelFrame(bound, 2)
+    expect(scene[0].translate.z).toBe(9)
+  })
+
+  it('restores the SAVED value when reset runs before the re-bind', () => {
+    // Pins the ordering rebindChannels depends on: binding snapshots the
+    // CURRENT field values as the ones Stop restores, so re-binding
+    // mid-animation without resetting first would bake that frame into the
+    // scene permanently.
+    const scene = nodes(row(1, 3, { translate_z: -1 }))
+    let anim = bindChannels(map, tracks, scene)
+    applyChannelFrame(anim, 2)
+    expect(scene[0].translate.z).toBe(9)
+
+    resetChannels(anim)
+    setChannelInputId(scene[0], 0)
+    anim = bindChannels(map, tracks, scene)
+    expect(anim.bindings).toEqual([])
+    expect(scene[0].translate.z).toBe(-1)
+  })
+
+  it('leaves an unselected sibling alone', () => {
+    const scene = nodes(row(1, 0, { translate_z: -1 }), row(2, 0, { translate_z: -2 }))
+    setChannelInputId(scene[0], 3)
+    applyChannelFrame(bindChannels(map, tracks, scene), 2)
+    expect(scene[0].translate.z).toBe(9)
+    expect(scene[1].translate.z).toBe(-2)
+  })
+
+  it('keeps an id the ch-map does not carry, binding nothing', () => {
+    const scene = nodes(row(1, 0))
+    setChannelInputId(scene[0], 99)
+    expect(bindChannels(map, tracks, scene).bindings).toEqual([])
+    expect(channelInputId(scene[0])).toBe(99)
   })
 })
 
