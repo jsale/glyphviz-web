@@ -8,7 +8,8 @@
 // since Jeff has actually flown scenes with it:
 //
 //   left stick   fly, relative to where the head is really looking
-//   right stick  turn (X) and rise/sink (Y)
+//   right stick  turn (X — smoothly, or in steps under Comfort ▸ Snap) and
+//                rise/sink (Y)
 //   squeeze      grab the world and drag it; BOTH hands scale and turn it
 //   trigger      pick the node under the ray
 //   B / Y        play/pause Channels
@@ -49,12 +50,22 @@ import {
   type FocusTransition,
 } from './xrFocus'
 import {
+  advanceVignette,
+  defaultComfort,
+  snapTurnStep,
+  vignetteAperture,
+  vignetteTarget,
+  type ComfortSettings,
+} from './xrComfort'
+import { XrVignette } from './xrVignette'
+import {
   GRAB_OFF_THRESHOLD,
   GRAB_ON_THRESHOLD,
   STICK_DEADZONE,
   TRIGGER_THRESHOLD,
   fitRig,
   flyStep,
+  turnAboutHead,
   headYawOf,
   identityRig,
   oneHandDrag,
@@ -261,6 +272,8 @@ export class XrRig {
   /** The blink's blackout, carried on the camera so its radius is in the same
    *  perceived metres the head pose is. */
   private readonly fade = new XrFade()
+  /** The comfort tunnel, on the camera for the same reason. */
+  private readonly vignette = new XrVignette()
 
   private grabbing = new Set<XrHand>()
   private grabKey = ''
@@ -280,6 +293,20 @@ export class XrRig {
   private focus: FocusTransition | null = null
   private focusElapsed = 0
   private prevStickClick: Record<XrHand, boolean> = { left: false, right: false }
+  /** Comfort options (render/xrComfort.ts). Owned by the host, which drives the
+   *  DOM row and the wrist page from the same object. */
+  private comfort: ComfortSettings = defaultComfort()
+  /** Snap turning: whether the stick has fallen back far enough to fire again. */
+  private snapArmed = true
+  /** The rig at the END of the previous frame, and how closed the tunnel is.
+   *  The vignette is driven by the DIFFERENCE, so every locomotion source is
+   *  covered by one measurement — see `measureMotion`. */
+  private motionPrev: XrRigState = identityRig()
+  private vignetteLevel = 0
+  /** Set for a frame whose rig change was a JUMP rather than travel (a snap
+   *  turn, a blink, a fit): there is no optical flow in one, and measuring it
+   *  would flash the tunnel shut. */
+  private jumped = true
   private pointers: XrPointerTarget[] = []
   /** The hand hovering a pointer target this frame, the target it is on, and
    *  the hand holding a press — a drag belongs to the hand that started it. */
@@ -317,7 +344,7 @@ export class XrRig {
     // camera is the only thing that does that for free. It draws nothing until
     // a blink asks it to, and the camera is off the rig entirely between
     // sessions.
-    camera.add(this.fade.mesh)
+    camera.add(this.fade.mesh, this.vignette.mesh)
 
     renderer.xr.enabled = true
     for (let i = 0; i < 2; i++) {
@@ -439,6 +466,34 @@ export class XrRig {
     if (this.focus) this.focus = shiftFocus(this.focus, d)
   }
 
+  /**
+   * Comfort options (render/xrComfort.ts). The host owns the object and both of
+   * its surfaces — the Scene panel's row and the wrist panel's Comfort page —
+   * write through here, so the two cannot hold different settings.
+   */
+  setComfort(settings: ComfortSettings): void {
+    this.comfort = settings
+    // Switching the tunnel off mid-flight must clear it now rather than easing
+    // it away, or the setting looks like it did not take.
+    if (settings.vignette === 'off') {
+      this.vignetteLevel = 0
+      this.vignette.set(null)
+    }
+    // A mode change re-arms: a stick held over the threshold while the mode
+    // flips must not count as the flick that fires the first snap.
+    this.snapArmed = false
+  }
+
+  get comfortSettings(): ComfortSettings {
+    return this.comfort
+  }
+
+  /** How closed the tunnel is (0..1) and the aperture it is drawing — neither
+   *  reaches the DOM, and the drive harness has no other way to see them. */
+  get vignetteState(): { level: number; aperture: { inner: number; outer: number } | null } {
+    return { level: this.vignetteLevel, aperture: this.vignette.aperture }
+  }
+
   /** Is a focus move running, and what it looks like — the drive harness has no
    *  other way to see any of this, and nothing in the DOM shows it. */
   get focusState(): { active: boolean; style: FocusStyle | null; fade: number } {
@@ -527,6 +582,13 @@ export class XrRig {
     this.focusElapsed = 0
     this.fade.set(0)
     this.prevStickClick = { left: false, right: false }
+    // A stick already held when the session starts must not fire a snap, and
+    // the first frame's rig change is a placement rather than travel.
+    this.snapArmed = false
+    this.jumped = true
+    this.vignetteLevel = 0
+    this.vignette.set(null)
+    this.motionPrev = this.state
     // A provisional fit for the one frame before a real head pose arrives, so
     // the scene is roughly in place rather than wherever the last one left it.
     this.applyFit(vec3(0, 1.6, 0), 0)
@@ -545,6 +607,9 @@ export class XrRig {
     this.focus = null
     this.focusElapsed = 0
     this.fade.set(0)
+    // Both shells ride the camera, which is about to go back to the desk.
+    this.vignetteLevel = 0
+    this.vignette.set(null)
     if (saved) {
       this.group.remove(this.camera)
       saved.parent?.add(this.camera)
@@ -616,6 +681,12 @@ export class XrRig {
         const hand = held ? hands[held] : undefined
         if (hand) this.state = oneHandDrag(this.oneAnchor, hand.grip)
       } else {
+        // Snap turning takes the turn axis away from flyStep entirely rather
+        // than scaling it: the two are different gestures on one stick, and
+        // leaving a residue of the smooth sweep under the steps would put back
+        // exactly the optical flow the snap exists to remove.
+        const snapping = this.comfort.turn === 'snap'
+        if (snapping) this.tickSnapTurn(rightHand?.stickX ?? 0, head)
         // Thumbstick flight is suppressed while a hand is grabbing rather than
         // fighting it for the same nav offset — the desktop's rule.
         this.state = flyStep(
@@ -623,7 +694,9 @@ export class XrRig {
           {
             leftX: left?.stickX ?? 0,
             leftY: left?.stickY ?? 0,
-            rightX: rightHand?.stickX ?? 0,
+            rightX: snapping ? 0 : (rightHand?.stickX ?? 0),
+            // Rise/sink is translation, not rotation, and stays smooth in both
+            // modes — there is nothing to snap it to.
             rightY: rightHand?.stickY ?? 0,
           },
           head,
@@ -633,6 +706,10 @@ export class XrRig {
     }
 
     this.applyState()
+    // After every source that could have moved the rig this frame, and before
+    // anything reads the tunnel — the same point in the loop the desk camera's
+    // smoothing occupies.
+    this.tickVignette(dtMs)
     // Pointer routing runs on the rig just applied, so a hover reads this
     // frame's geometry, and BEFORE the buttons, which need to know whether the
     // ray is on the panel before deciding what a trigger means.
@@ -661,6 +738,56 @@ export class XrRig {
       this.headProxy.quaternion,
       this.headProxy.scale,
     )
+  }
+
+  /**
+   * One frame of snap turning: an instantaneous step about the head on the
+   * rising edge of a stick flick, with nothing drawn in between.
+   *
+   * Marked as a JUMP, which is the point of it — an instantaneous rotation has
+   * no optical flow for the eyes to disagree with the inner ear about, and it
+   * must not be measured as motion or the tunnel would flash shut on every step.
+   */
+  private tickSnapTurn(stickX: number, head: { position: Vec3 }): void {
+    const result = snapTurnStep(this.snapArmed, stickX)
+    this.snapArmed = result.armed
+    if (result.turns === 0) return
+    // Same sign convention as flyStep's rightX: pushing right turns you right,
+    // which decreases the rig's yaw.
+    const delta = (-result.turns * this.comfort.snapDegrees * Math.PI) / 180
+    this.state = turnAboutHead(this.state, head.position, delta)
+    this.jumped = true
+  }
+
+  /**
+   * Drive the tunnel from the rig's MEASURED motion since the last frame.
+   *
+   * Measuring the result rather than the gestures is what makes one piece of
+   * code cover thumbstick flight, a grab-drag, a two-handed pinch, a focus dash
+   * and Follow riding an animating node — and whatever is added next. A frame
+   * flagged as a jump contributes nothing, and re-bases the measurement so the
+   * jump's displacement is not charged to the frame after it either.
+   */
+  private tickVignette(dtMs: number): void {
+    const dtSec = Math.min(Math.max(dtMs, 0), 250) / 1000
+    let target = 0
+    if (!this.jumped && dtSec > 0) {
+      const prev = this.motionPrev
+      const linear =
+        Math.hypot(
+          this.state.nav.x - prev.nav.x,
+          this.state.nav.y - prev.nav.y,
+          this.state.nav.z - prev.nav.z,
+        ) /
+        Math.max(this.state.scale, 1e-9) /
+        dtSec
+      const turnDps = (Math.abs(this.state.yaw - prev.yaw) * 180) / Math.PI / dtSec
+      target = vignetteTarget(this.comfort, linear, turnDps)
+    }
+    this.jumped = false
+    this.motionPrev = this.state
+    this.vignetteLevel = advanceVignette(this.vignetteLevel, target, dtMs)
+    this.vignette.set(vignetteAperture(this.comfort, this.vignetteLevel))
   }
 
   /** Start (or restart) a move to this rig translation. A second go-to while
@@ -699,6 +826,10 @@ export class XrRig {
     }
     this.focusElapsed += Math.min(dtMs, 250)
     const frame = focusFrame(focus, this.focusElapsed)
+    // A blink shows the viewer nothing of the crossing — it is a jump behind a
+    // black screen, so there is no optical flow to tunnel. A DASH is exactly
+    // the case the tunnel exists for and is measured like any other travel.
+    if (focus.style === 'blink') this.jumped = true
     this.fade.set(frame.fade)
     if (frame.done) this.endFocus(frame.nav)
     else this.state = { nav: frame.nav, yaw: this.state.yaw, scale: this.state.scale }
@@ -730,6 +861,8 @@ export class XrRig {
     this.focus = null
     this.focusElapsed = 0
     this.fade.set(0)
+    // A re-placement, not travel: the viewer did not cross the distance.
+    this.jumped = true
     this.state = fitRig({
       center: vec3(target.center.x, target.center.y, target.center.z),
       extent: target.extent,
@@ -994,5 +1127,6 @@ export class XrRig {
     for (const pointer of this.pointersByIndex) pointer.dispose()
     for (const model of this.modelsByIndex) model.dispose()
     this.fade.dispose()
+    this.vignette.dispose()
   }
 }

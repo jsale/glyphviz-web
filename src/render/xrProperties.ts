@@ -62,6 +62,7 @@ import {
   SURFACE_TEXT,
   XrSurface,
   ellipsis,
+  fitFont,
   roundRect,
 } from './xrSurface'
 
@@ -126,6 +127,12 @@ export interface XrPropertiesActions {
   goToSelection(): void
   /** Follow Selected: the SAME flag F and the DOM checkbox drive. */
   setFollow(follow: boolean): void
+
+  // --- Comfort page. Viewer settings (render/xrComfort.ts), shared with the
+  // Scene panel's row — the host owns the object and applies the cycle rules.
+  stepTurnMode(step: number): void
+  stepSnapAngle(step: number): void
+  stepVignette(step: number): void
 
   // --- Draw page. Every rule is gv/drawMode.ts's, unchanged; these are the
   // same settings the DOM Draw panel edits, so the two surfaces cannot drift.
@@ -304,6 +311,7 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     }
     if (this.applySelectPress(id)) return
     if (this.applyDrawPress(id)) return
+    if (this.applyComfortPress(id)) return
     if (id === 'axis-x' || id === 'axis-y' || id === 'axis-z') {
       this.axis = id.slice(5) as XrPropAxis
       this.refresh()
@@ -366,6 +374,37 @@ export class XrProperties extends XrSurface<XrPropWidget> {
         // The flag lives in main.ts (it is the desk's Follow Selected), so this
         // asks rather than sets, and the next frame's input reports the answer.
         a.setFollow(!this.input?.followSelected)
+        return true
+      default:
+        return false
+    }
+  }
+
+  /**
+   * The Comfort page's presses. Like the Select and Draw pages', these skip
+   * `commit`: they change no node data at all — they are viewer settings, and
+   * nothing about the scene needs rebuilding for them.
+   */
+  private applyComfortPress(id: XrPropId): boolean {
+    const a = this.actions
+    switch (id) {
+      case 'turn-prev':
+        a.stepTurnMode(-1)
+        return true
+      case 'turn-next':
+        a.stepTurnMode(1)
+        return true
+      case 'snap-prev':
+        a.stepSnapAngle(-1)
+        return true
+      case 'snap-next':
+        a.stepSnapAngle(1)
+        return true
+      case 'vignette-prev':
+        a.stepVignette(-1)
+        return true
+      case 'vignette-next':
+        a.stepVignette(1)
         return true
       default:
         return false
@@ -681,7 +720,19 @@ export class XrProperties extends XrSurface<XrPropWidget> {
     if (!widget.label) return
     ctx.fillStyle = widget.disabled ? SURFACE_DIM : SURFACE_TEXT
     ctx.textAlign = 'center'
-    ctx.font = `${widget.active ? 'bold ' : ''}${Math.round(h * 0.46)}px system-ui, sans-serif`
+    const weight = widget.active ? 'bold ' : ''
+    if (isPageWidget(widget.id)) {
+      // A mode button's label has to be READ, so it shrinks to fit rather than
+      // being ellipsised — "Comfor…" is not a mode. And it is centred in the
+      // space LEFT of the active marker rather than in the whole button, or the
+      // longest label runs under the bar (which is exactly what "Comfort" did,
+      // and what the dumped texture caught after every assertion had passed).
+      const room = w * 0.8
+      fitFont(ctx, widget.label, room, h * 0.46, h * 0.3, weight)
+      ctx.fillText(widget.label, x + w * 0.45, y + h / 2)
+      return
+    }
+    ctx.font = `${weight}${Math.round(h * 0.46)}px system-ui, sans-serif`
     ctx.fillText(ellipsis(ctx, widget.label, w * 0.88), x + w / 2, y + h / 2)
   }
 

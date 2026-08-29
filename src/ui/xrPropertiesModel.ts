@@ -37,6 +37,11 @@
 // (shape), where it is (move), how it looks (look). Five rows a page is what
 // fits at a row height a ray can reliably hit.
 
+import {
+  TURN_MODE_LABELS,
+  VIGNETTE_LABELS,
+  type ComfortSettings,
+} from '../render/xrComfort'
 import { paletteIndexCount, PALETTE_NAMES } from '../gv/colorPalette'
 import { CRITERION_LABELS } from '../gv/selectionOps'
 import type { CriterionValue, SelectCriterion } from '../gv/selectionOps'
@@ -44,7 +49,7 @@ import type { GvNode, Rgba } from '../gv/types'
 import { GEOMETRY_NAMES, NODE_TYPE_NAMES, NodeType, TOPO_NAMES } from '../gv/types'
 import { rect, type XrRect, type XrWidgetBase } from './xrWidget'
 
-export type XrPropPage = 'select' | 'shape' | 'move' | 'look' | 'draw'
+export type XrPropPage = 'select' | 'shape' | 'move' | 'look' | 'draw' | 'comfort'
 export type XrPropAxis = 'x' | 'y' | 'z'
 export type XrPropVectorField = 'translate' | 'rotate' | 'scale'
 
@@ -72,6 +77,13 @@ export type XrPropId =
   | 'page-move'
   | 'page-look'
   | 'page-draw'
+  | 'page-comfort'
+  | 'turn-prev'
+  | 'turn-next'
+  | 'snap-prev'
+  | 'snap-next'
+  | 'vignette-prev'
+  | 'vignette-next'
   | 'criterion-prev'
   | 'criterion-next'
   | 'value-prev'
@@ -248,6 +260,9 @@ export interface XrPropState {
    * Channels; at the desk it re-centres the orbit pivot. One idea, two surfaces.
    */
   followSelected: boolean
+  /** Comfort options (render/xrComfort.ts) — the same object the Scene panel's
+   *  row edits, so the two surfaces cannot disagree. */
+  comfort: ComfortSettings
 }
 
 /** The three criteria, in the desktop Select By combo's own order. */
@@ -412,10 +427,15 @@ export const PAGES: ReadonlyArray<[XrPropId, XrPropPage, string]> = [
   ['page-shape', 'shape', 'Shape'],
   ['page-move', 'move', 'Move'],
   ['page-look', 'look', 'Look'],
-  // Last, and a MODE rather than a property page — which is why it is the one
-  // entry whose own button turns something on rather than only changing what
-  // the panel shows.
+  // A MODE rather than a property page — which is why it is the one entry whose
+  // own button turns something on rather than only changing what the panel
+  // shows.
   ['page-draw', 'draw', 'Draw'],
+  // Last, and the sixth of six slots the column has room for. It belongs IN the
+  // headset and not only on the monitor: the person who needs it is the one
+  // wearing the thing, and asking them to take it off to stop feeling ill is
+  // the wrong answer to feeling ill.
+  ['page-comfort', 'comfort', 'Comfort'],
 ]
 
 /** Is this widget one of the mode buttons? The painter marks the open one, and
@@ -460,6 +480,23 @@ export function propLayout(state: XrPropState): XrPropLayout {
       subtitle: `${state.select.selectable} nodes available`,
       empty: null,
       color: node ? node.color : null,
+      rows,
+      widgets,
+    }
+  }
+
+  // Comfort is about the VIEWER, not about any node, so it renders whatever is
+  // or is not selected — like Select and Draw, and for a sharper reason than
+  // either: someone reaching for it may be reaching for it because they feel
+  // unwell, and a page that answers "select something first" would be useless
+  // at exactly that moment.
+  if (state.page === 'comfort') {
+    buildComfort(state.comfort, rows, widgets)
+    return {
+      title: 'Comfort',
+      subtitle: comfortSubtitle(state.comfort),
+      empty: null,
+      color: null,
       rows,
       widgets,
     }
@@ -724,6 +761,79 @@ function buildSelect(state: XrPropState, rows: XrPropRow[], widgets: XrPropWidge
       checked: state.followSelected,
     },
   )
+}
+
+/**
+ * The Comfort page: the two measures against VR sickness, and a line saying
+ * what they are currently set to.
+ *
+ * Three steppers rather than any richer control, because these are exactly the
+ * enum-ish fields a stepper is for — and the snap-angle row GREYS under smooth
+ * turning rather than disappearing, so the page does not change shape under the
+ * pointer when the mode above it is toggled (the same rule the Shape page's
+ * frozen rows follow).
+ */
+function buildComfort(
+  comfort: ComfortSettings,
+  rows: XrPropRow[],
+  widgets: XrPropWidget[],
+): void {
+  stepperRow(
+    rows,
+    widgets,
+    0,
+    'turn',
+    TURN_MODE_LABELS[comfort.turn],
+    'turn-prev',
+    'turn-next',
+    false,
+  )
+  stepperRow(
+    rows,
+    widgets,
+    1,
+    'step',
+    `${comfort.snapDegrees}°`,
+    'snap-prev',
+    'snap-next',
+    comfort.turn !== 'snap',
+  )
+  stepperRow(
+    rows,
+    widgets,
+    2,
+    'tunnel',
+    VIGNETTE_LABELS[comfort.vignette],
+    'vignette-prev',
+    'vignette-next',
+    false,
+  )
+  // A headset has no tooltips, so what each setting is FOR has to be on the
+  // panel. Two short lines rather than one long one: at this row height a
+  // sentence that wraps three times is not read.
+  rows.push({
+    y: rowY(3),
+    caption: '',
+    value: '',
+    note:
+      comfort.turn === 'snap'
+        ? 'Turning jumps in steps — nothing sweeps past you.'
+        : 'Turning sweeps smoothly. Snap if that unsettles you.',
+  })
+  rows.push({
+    y: rowY(4),
+    caption: '',
+    value: '',
+    note:
+      comfort.vignette === 'off'
+        ? 'The view stays full while you move.'
+        : 'The view narrows while you move, and opens when you stop.',
+  })
+}
+
+function comfortSubtitle(comfort: ComfortSettings): string {
+  const turn = comfort.turn === 'snap' ? `Snap ${comfort.snapDegrees}°` : 'Smooth turn'
+  return `${turn} · tunnel ${VIGNETTE_LABELS[comfort.vignette].toLowerCase()}`
 }
 
 /** Three equal buttons across a row — the bulk and visibility commands. */

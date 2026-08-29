@@ -149,6 +149,18 @@ import { invertLocalRotation } from './render/rotationInverse'
 import { eyeForX, StereoRig } from './render/stereo'
 import type { StereoEye } from './render/stereo'
 import { XrRig } from './render/xrSession'
+import {
+  SNAP_ANGLES,
+  TURN_MODES,
+  TURN_MODE_LABELS,
+  VIGNETTE_LABELS,
+  VIGNETTE_LEVELS,
+  cycleSnapDegrees,
+  cycleTurnMode,
+  cycleVignette,
+  defaultComfort,
+} from './render/xrComfort'
+import type { ComfortSettings, TurnMode, VignetteLevel } from './render/xrComfort'
 import { XrLabel } from './render/xrLabel'
 import { XrPanel } from './render/xrPanel'
 import {
@@ -582,6 +594,14 @@ const xrProperties = new XrProperties({
   // status wording, so F, the HUD checkbox and this button are one control.
   setFollow: (follow) => setFollowSelected(follow),
 
+  // Comfort page. The cycle rules are xrComfort's, so the wrist steppers and
+  // the Scene panel's selects offer the same values and wrap the same way.
+  stepTurnMode: (step) => setComfort({ ...comfort, turn: cycleTurnMode(comfort.turn, step) }),
+  stepSnapAngle: (step) =>
+    setComfort({ ...comfort, snapDegrees: cycleSnapDegrees(comfort.snapDegrees, step) }),
+  stepVignette: (step) =>
+    setComfort({ ...comfort, vignette: cycleVignette(comfort.vignette, step) }),
+
   // Draw page. `setDrawMode` is the SAME function the D key and the HUD button
   // call, so the mode is one mode however it was armed.
   toggleDraw: () => setDrawMode(!drawMode),
@@ -817,6 +837,15 @@ hud.innerHTML = `
       <button id="hud-xr">Enter VR</button>
       <span id="hud-xr-note"></span>
     </div>
+    <div class="hud-create-row" id="hud-xr-turn-row" hidden title="How the right thumbstick turns you in the headset.&#10;Smooth sweeps continuously — the single largest cause of VR sickness for most people.&#10;Snap jumps in fixed steps instead: an instantaneous turn gives the eyes no motion for the inner ear to disagree with.&#10;Also on the headset's own Comfort page, and never written to the CSV.">
+      <span>VR turn</span>
+      <select id="hud-xr-turn"></select>
+      <select id="hud-xr-snap"></select>
+    </div>
+    <div class="hud-create-row" id="hud-xr-vignette-row" hidden title="Tunnel vision while moving in the headset: the view narrows to a soft circle whenever you fly, turn or drag the world, and opens again when you stop.&#10;Peripheral vision is what drives the false sense of self-motion, so hiding it during travel is what settles most people's stomachs.&#10;Light only bites at the far edge of the field; Strong closes to about half of it.">
+      <span>VR tunnel</span>
+      <select id="hud-xr-vignette"></select>
+    </div>
   </div>
   <div id="hud-hint">or drop a scene folder, .zip or CSV anywhere</div>
 `
@@ -883,12 +912,91 @@ const stereoSepValue = hud.querySelector<HTMLSpanElement>('#hud-stereo-sep-value
 const xrRow = hud.querySelector<HTMLDivElement>('#hud-xr-row')!
 const xrButton = hud.querySelector<HTMLButtonElement>('#hud-xr')!
 const xrNote = hud.querySelector<HTMLSpanElement>('#hud-xr-note')!
+const xrTurnRow = hud.querySelector<HTMLDivElement>('#hud-xr-turn-row')!
+const xrTurnSelect = hud.querySelector<HTMLSelectElement>('#hud-xr-turn')!
+const xrSnapSelect = hud.querySelector<HTMLSelectElement>('#hud-xr-snap')!
+const xrVignetteRow = hud.querySelector<HTMLDivElement>('#hud-xr-vignette-row')!
+const xrVignetteSelect = hud.querySelector<HTMLSelectElement>('#hud-xr-vignette')!
 
-// The row appears only where an immersive session can actually start, which is
+// --- Comfort options (render/xrComfort.ts) ------------------------------------
+// Snap turn and the tunnelling vignette, reachable from the monitor AND from
+// inside the headset. Two surfaces, ONE object: the person setting them up for
+// somebody else is at the desk, and the person who discovers they need them is
+// wearing the thing — asking them to take it off to stop feeling ill would be
+// the wrong answer to feeling ill.
+//
+// A viewer setting like Show Grid and the Global Scale: it survives a scene
+// load and no writer knows about it.
+let comfort: ComfortSettings = defaultComfort()
+
+for (const mode of TURN_MODES) {
+  xrTurnSelect.appendChild(
+    Object.assign(document.createElement('option'), {
+      value: mode,
+      textContent: TURN_MODE_LABELS[mode],
+    }),
+  )
+}
+for (const degrees of SNAP_ANGLES) {
+  xrSnapSelect.appendChild(
+    Object.assign(document.createElement('option'), {
+      value: String(degrees),
+      textContent: `${degrees}°`,
+    }),
+  )
+}
+for (const level of VIGNETTE_LEVELS) {
+  xrVignetteSelect.appendChild(
+    Object.assign(document.createElement('option'), {
+      value: level,
+      textContent: VIGNETTE_LABELS[level],
+    }),
+  )
+}
+
+/**
+ * Adopt a comfort setting, from either surface, and push it at the rig.
+ *
+ * `report` is off for the load-time sync, so merely opening the app does not
+ * announce a setting nobody touched. The DOM controls are written every time —
+ * a change made on the wrist panel has to show on the monitor, which is where
+ * whoever handed over the headset is watching from.
+ */
+function setComfort(next: ComfortSettings, report = true) {
+  comfort = next
+  xrTurnSelect.value = next.turn
+  xrSnapSelect.value = String(next.snapDegrees)
+  // The angle means nothing under smooth turning, and a live control that does
+  // nothing is worse than a greyed one.
+  xrSnapSelect.disabled = next.turn !== 'snap'
+  xrVignetteSelect.value = next.vignette
+  xrRig.setComfort(next)
+  if (!report) return
+  const turn =
+    next.turn === 'snap' ? `Snap turn, ${next.snapDegrees}° a flick` : 'Smooth turn'
+  status(`VR comfort: ${turn}. Tunnel ${VIGNETTE_LABELS[next.vignette].toLowerCase()}.`)
+}
+
+xrTurnSelect.addEventListener('change', () => {
+  setComfort({ ...comfort, turn: xrTurnSelect.value as TurnMode })
+})
+xrSnapSelect.addEventListener('change', () => {
+  setComfort({ ...comfort, snapDegrees: Number(xrSnapSelect.value) })
+})
+xrVignetteSelect.addEventListener('change', () => {
+  setComfort({ ...comfort, vignette: xrVignetteSelect.value as VignetteLevel })
+})
+setComfort(comfort, false)
+
+// The rows appear only where an immersive session can actually start, which is
 // a headset browser (or a desktop one with a runtime/emulator attached) over
 // HTTPS — never on a plain http:// page, where navigator.xr does not exist.
+// The comfort rows travel with the button: they are settings FOR the thing that
+// button starts, and they are meaningless without it.
 void XrRig.isSupported().then((supported) => {
   xrRow.hidden = !supported
+  xrTurnRow.hidden = !supported
+  xrVignetteRow.hidden = !supported
 })
 xrButton.addEventListener('click', () => {
   if (xrRig.presenting) {
@@ -1734,6 +1842,12 @@ renderer.domElement.addEventListener(
   get xrFocusState() {
     return { ...xrRig.focusState, following: followSelected, target: selectionFocusTarget() }
   },
+  // Comfort: the settings, and how closed the tunnel actually is this frame.
+  // The vignette is a shader on a shell in front of the eye, so nothing about
+  // it reaches the DOM or shows up as a measurable change to the scene graph.
+  get xrComfortState() {
+    return { ...comfort, ...xrRig.vignetteState }
+  },
   // The wrist panel's own readouts, which exist nowhere else while a session
   // is running: what is drawn, and where the transport stands.
   get drawState() {
@@ -1937,6 +2051,7 @@ function updateXrProperties() {
     select: xrSelectData(xrProperties.criterion),
     draw: xrDrawData(),
     followSelected,
+    comfort,
   })
 }
 

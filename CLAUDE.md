@@ -3683,6 +3683,122 @@ something to decide now).
        belong with the comfort options — snap turn and vignette — which is the
        next item on the list), and no scale-changing "spyglass" toggle beyond the
        Fit row's three buttons.
+   - **P10, snap turn and the comfort vignette** (shipped 2026-08-29, item 2 of
+     the VR priority list). Immersive mode had been driven by one person who does
+     not get sick in it, which is exactly why this had not bitten yet: smooth
+     stick turning is the single largest cause of VR nausea for most people, and
+     the day the headset goes to Steve — or to one of the patients in Dr.
+     Warner's cohort, already part of why camera smoothing exists (6y) — it stops
+     being theoretical. `src/render/xrComfort.ts` is the model, pure and DOM-free
+     like xrNav.ts and xrFocus.ts beside it.
+     - Both measures work on one principle, which is what explains their shape:
+       sickness comes from the eyes reporting motion the inner ear does not. So
+       either REMOVE THE VISUAL MOTION (a snap turn is instantaneous — there is
+       no optical flow to conflict with) or remove the part of the retina that
+       reports it most insistently (the vignette narrows the field of view while
+       you move; peripheral vision is what drives vection, and the centre is what
+       you are actually looking at).
+     - **SNAP TURN** takes the turn axis away from `flyStep` entirely rather than
+       scaling it: leaving a residue of the sweep under the steps would put back
+       exactly the flow the snap exists to remove. One step per flick, with
+       hysteresis (fire at 0.7, re-arm under 0.35 — both well past the 0.15
+       flight dead zone, so a stick nudged enough to fly never also snaps) and
+       deliberately NO auto-repeat, which is where most headset software lands: a
+       repeat is a slower strobe rather than a different thing, and someone who
+       wants to get round faster is better served by a bigger angle. 15/30/45/60,
+       default 30. Rise/sink stays smooth in both modes — it is translation, and
+       there is nothing to snap it to.
+       - `turnAboutHead` was factored OUT of `flyStep` so the two turns cannot
+         pivot about different points. A snap that swung the viewer sideways
+         where a smooth turn did not would be a worse gesture, not merely a
+         different one. Measured: the head holds its world point to under a
+         micrometre across a 30° step, and a flick is 30.0000° exactly.
+     - **THE VIGNETTE** is driven by the rig's MEASURED motion, not by the
+       gestures. That is the whole design: one measurement covers thumbstick
+       flight, a grab-drag, a two-handed pinch, a focus dash and Follow riding an
+       animating node — including whatever is added next — and a viewer standing
+       still is free by construction. Rotation and translation share one
+       reference each (the app's own 3 m/s and 90°/s) and the WORSE of the two
+       wins rather than their sum: they are one discomfort reported twice.
+       - What must not reach it is a discontinuous JUMP, which has no optical
+         flow at all and would flash the tunnel shut for a frame. A snap turn, a
+         blink (6dd's focus, P9) and a fit all set the flag; a DASH does not,
+         being exactly the case the tunnel exists for. Measured: a 30° snap peaks
+         the tunnel at 0.002, a blink at 0.008, a dash at 0.994.
+       - It closes in ~110 ms and opens over ~1.2 s (measured). Asymmetric on
+         purpose: it has to be there BEFORE the flow builds, and a tunnel that
+         snaps away the instant a stick crosses its dead zone flickers on every
+         small correction and is more distracting than the motion it masked.
+     - **PER-EYE EXACT**, which is the one thing worth getting right in
+       `src/render/xrVignette.ts`. The darkening is a function of the angle from
+       the eye's own forward, computed in VIEW space in the fragment shader — and
+       view space in an immersive frame is per eye. Baking a radial gradient into
+       geometry or a texture on a shell would put ONE aperture between the two
+       eyes, which each then sees offset by half the IPD: several degrees of
+       mismatch on a soft edge the eyes are trying to fuse. A dozen lines of GLSL
+       avoids the question and makes the shell's radius irrelevant.
+     - **THE APERTURE IS FIXED BY THE LEVEL AND THE OPACITY TRACKS THE SPEED** —
+       the other way round from the obvious design, and the drive is what settled
+       it. Widening the aperture with slowness cannot work: to be invisible at
+       rest it has to open past what a headset displays (~55° horizontal
+       half-angle on a Quest 3, ~63° into the corners), so most of the intensity
+       range is spent off-screen. Measured on the first build: **nothing at all
+       was visible below an intensity of 0.71** — the tunnel appeared to pop in
+       at three-quarter speed rather than fade in. Ramping opacity uses the whole
+       range and keeps the level's meaning steady: Light is the same shaped
+       tunnel whether you are drifting or at full pelt, only fainter. The
+       apertures (45° / 35° / 25° half-angle, 10° soft edge) are calibrated
+       against that same field of view, and a test asserts Light is INSIDE it —
+       an aperture wider than the headset can show is not a light vignette, it is
+       no vignette.
+     - TWO SURFACES, ONE OBJECT: a **Comfort page** on the wrist panel's mode
+       column and a pair of rows in the Scene panel, both writing the same
+       settings. The person setting them up for somebody else is at the desk; the
+       person who discovers they need them is wearing the thing, and asking them
+       to take it off to stop feeling ill is the wrong answer to feeling ill. The
+       page renders with nothing selected (like Select and Draw) for a sharper
+       reason than either — someone reaching for it may be reaching because they
+       feel unwell.
+       - Comfort is the SIXTH of the six slots P7's column has room for, so the
+         column is now FULL: a seventh mode is a layout decision (a taller
+         lattice, a scrolling column, a page hosting two) and not another line in
+         `PAGES`. The test that used to assert "room for modes that do not exist
+         yet" now says so.
+     - DEFAULTS, a deliberate split: turn stays **Smooth** because Jeff has flown
+       every scene this way and confirmed it feels good, and snap is a large
+       change in feel to impose on someone it suits; the tunnel defaults to
+       **Light** because it is the half that protects a newcomer without a
+       veteran noticing, and a comfort option nobody finds protects nobody.
+     - Verified to FAIL four ways: without the snap hysteresis (fires every frame
+       while held), summing translation and rotation instead of taking the worse,
+       an opacity that ignores the speed, and a Light aperture wider than the
+       headset shows.
+     - Driven in Chrome against the emulated Quest 3, **44 measured checks**:
+       both DOM rows' options, defaults, size and that neither overflows the
+       300px panel; smooth turn still sweeping and still pivoting about the head;
+       a flick turning 30.0000° and a HELD stick turning 30.0000° over 900 ms
+       (no repeat); the angle setting; the tunnel's close/open timing, its
+       aperture at 45.00° and 25.00°, and that a partly-closed one is a FAINT
+       tunnel at the same angle rather than a wider one; Off drawing nothing at
+       full flight; and the wrist page's steppers reaching the Scene panel's own
+       selects.
+       - And in REAL PIXELS, which is the only thing that could say the shader
+         measures the right axis: two frames at an IDENTICAL pose, one taken the
+         instant flight stops and one 1.2 s later, DIFFERENCED so the scene
+         cancels and what is left is the vignette alone. Peripheral luminance
+         21.7 → 14.1 with the centre unchanged at 25.8, and the clear region a
+         round disc whose centroid lands **1.7 px** from the eye's optical axis.
+       - The PICTURE caught the one defect again, after every assertion had
+         passed: **"Comfort" overflowed its mode button**, running under the
+         yellow active-marker bar. `fitFont` (xrSurface.ts) now shrinks a mode
+         label to fit instead of ellipsising it — "Comfor…" is not a mode — and
+         centres it in the space LEFT of the marker rather than in the whole
+         button. Ellipsis stays right for a phrase, where the beginning carries
+         the meaning.
+     - Not done: no per-setting persistence (nothing in this app stores viewer
+       settings across a reload), and no comfort control over the focus
+       constants — those are named in xrFocus.ts and are the next thing to tune
+       on hardware.
    - Context worth having for both: the Armillary World is a scene of NESTED
      CONCENTRIC rings, so it exercises immersive navigation harder than anything
      driven before — the viewer is inside a structure whose parts surround them
@@ -3700,12 +3816,10 @@ something to decide now).
      worse than a mouse, discoverability is near zero, smooth motion makes people
      sick, and long traverses are tiring.
      1. ~~Focus / go-to, and Follow in a headset~~ — **shipped 2026-08-29, P9.**
-     2. **Snap turn + comfort vignette.** Already on the list below and it should
-        be higher: smooth 90°/s turning is the largest nausea source for most
-        people, and Jeff is the only tester, which is exactly why it has not
-        bitten yet. It gets expensive the day the headset goes to Steve or to a
-        patient in Dr. Warner's cohort. Small, and it gates who else can use it.
-        The focus constants (P9) want in-VR tuning at the same time.
+     2. ~~Snap turn + comfort vignette~~ — **shipped 2026-08-29, P10.** The focus
+        constants (P9) still want in-VR tuning; they are named in xrFocus.ts and
+        are NOT exposed on the Comfort page, which deliberately carries only the
+        two settings a queasy viewer reaches for.
      3. **World-in-miniature map.** The overview problem for large scenes and the
         teleport target for long hops. NOT a shrunken copy of the scene — cloning
         209k objects is unaffordable and the detail would not read at that size —
@@ -3745,7 +3859,8 @@ something to decide now).
    - PENDING after that, in the order agreed: passthrough AR (`immersive-ar` on
      Quest 3, small once the rig exists, and the demo that impresses people) —
      Jeff deferred it 2026-08-14 in favour of the desktop-feature catch-up; then
-     hand tracking and comfort options (snap turn, vignette). The authoring
+     hand tracking (the comfort options that used to sit here shipped as P10).
+     The authoring
      gestures are largely done: grab-to-move/turn/size shipped as P4+P5 and Draw
      Mode as P8, with add-select on the RIGHT thumbstick click and go-to on the
      LEFT one (P9) — **both stick clicks are now spent, and the input budget is

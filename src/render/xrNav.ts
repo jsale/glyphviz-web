@@ -158,16 +158,31 @@ export interface HeadPose {
 }
 
 /**
+ * Turn the world about the viewer's HEAD by `deltaYaw` radians — the world
+ * point under the head stays put.
+ *
+ * Shared by the smooth turn below and by snap turning (render/xrComfort.ts), so
+ * the two cannot end up pivoting about different points; a snap that swung the
+ * viewer sideways where a smooth turn did not would be a worse gesture, not
+ * merely a different one.
+ *
+ * Divergence from the desktop spike, which is why this is a solve rather than
+ * an addition: it accumulates `nav_yaw` and rotates the world about the
+ * TRACKING ORIGIN, which swings a viewer standing away from it sideways through
+ * the scene as they turn.
+ */
+export function turnAboutHead(state: XrRigState, headPos: Vec3, deltaYaw: number): XrRigState {
+  if (deltaYaw === 0) return state
+  const pinned = rigApply(state, headPos)
+  const yaw = state.yaw + deltaYaw
+  return { nav: solveNav(pinned, headPos, yaw, state.scale), yaw, scale: state.scale }
+}
+
+/**
  * One tick of thumbstick flight, ported from `ControllerNav.update`'s
  * locomotion block: left stick moves relative to where the head is really
  * looking (flattened to the horizontal plane), right stick turns and rises,
  * both at the desktop's speeds.
- *
- * Divergence: turning pivots about the HEAD, not about the tracking-space
- * origin. The desktop accumulates `nav_yaw` and rotates the world about the
- * origin, which swings a viewer standing away from it sideways through the
- * scene as they turn. Pinning the world point under the head is a strict
- * improvement and costs one solve.
  */
 export function flyStep(
   state: XrRigState,
@@ -181,14 +196,10 @@ export function flyStep(
   const ry = deadzone(sticks.rightY)
   if (lx === 0 && ly === 0 && rx === 0 && ry === 0) return state
 
-  let yaw = state.yaw
-  let nav = state.nav
-  if (rx !== 0) {
-    // Right-stick X turns; the world under the head stays put.
-    const pinned = rigApply(state, head.position)
-    yaw = state.yaw - rx * TURN_SPEED_RAD * dtSec
-    nav = solveNav(pinned, head.position, yaw, state.scale)
-  }
+  // Right-stick X turns; the world under the head stays put.
+  const turned = turnAboutHead(state, head.position, -rx * TURN_SPEED_RAD * dtSec)
+  let yaw = turned.yaw
+  let nav = turned.nav
   if (lx !== 0 || ly !== 0 || ry !== 0) {
     const forward = flattenXr(head.forward)
     const right = flattenXr(head.right)

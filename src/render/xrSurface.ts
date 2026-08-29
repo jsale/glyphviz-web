@@ -297,3 +297,30 @@ export function ellipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: 
   while (cut.length > 1 && ctx.measureText(`${cut}…`).width > maxWidth) cut = cut.slice(0, -1)
   return `${cut}…`
 }
+
+/**
+ * Set `ctx.font` to the largest size at or under `nominalPx` at which `text`
+ * fits `maxWidth`, down to `minPx`.
+ *
+ * For a label that has to be READ RATHER THAN FITTED — a mode name, where
+ * "Comfor…" is not a mode and a couple of points of type size is not something
+ * anyone notices. Ellipsis remains right for a phrase, where the beginning
+ * carries the meaning and the reader can infer the rest.
+ *
+ * Caller supplies the rest of the font string, since weight and family are its
+ * business; this only chooses the size.
+ */
+export function fitFont(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  nominalPx: number,
+  minPx: number,
+  prefix = '',
+): void {
+  for (let size = Math.round(nominalPx); size > minPx; size--) {
+    ctx.font = `${prefix}${size}px system-ui, sans-serif`
+    if (ctx.measureText(text).width <= maxWidth) return
+  }
+  ctx.font = `${prefix}${Math.round(minPx)}px system-ui, sans-serif`
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { blankNode, NEW_OBJECT_DEFAULTS } from '../gv/createNode'
 import { CRITERION_LABELS } from '../gv/selectionOps'
+import { defaultComfort } from '../render/xrComfort'
 import type { GvNode } from '../gv/types'
 import { GEOMETRY_NAMES, Geometry, NodeType, Topo } from '../gv/types'
 import {
@@ -69,6 +70,7 @@ function state(overrides: Partial<XrPropState> = {}): XrPropState {
     valueIndex: 0,
     addToSelection: false,
     followSelected: false,
+    comfort: defaultComfort(),
     ...overrides,
   }
 }
@@ -88,6 +90,7 @@ describe('propLayout — chrome that every state carries', () => {
       'page-move',
       'page-look',
       'page-draw',
+      'page-comfort',
     ])
   })
 
@@ -128,6 +131,12 @@ describe('propLayout — geometry of the quad', () => {
     state({ page: 'draw', draw: draw({ gridId: null }) }),
     state({ page: 'draw', draw: draw({ gridIsGlobe: true }) }),
     state({ page: 'draw', draw: draw({ brushes: ['Single Object', 'Tree'], brushIndex: 1 }) }),
+    state({ page: 'comfort' }),
+    state({ page: 'comfort', node: null, count: 0 }),
+    state({
+      page: 'comfort',
+      comfort: { turn: 'snap', snapDegrees: 60, vignette: 'strong' },
+    }),
   ]
 
   it('keeps every widget inside the panel', () => {
@@ -197,13 +206,69 @@ describe('propLayout — geometry of the quad', () => {
     }
   })
 
-  it('has room in the column for modes that do not exist yet', () => {
-    // The whole reason the tabs moved off the top edge: a row of four had run
-    // out of width by construction, where a column is bounded by height and the
-    // panel has spare rows. Draw Mode is the next one in.
-    expect(PAGES.length).toBeLessThan(MAX_ROWS)
+  it('fills the mode column exactly, and its last entry still fits the quad', () => {
+    // The tabs moved off the top edge because a row of four had run out of width
+    // by construction; a column is bounded by height instead, and the panel had
+    // room for six. Draw took the fifth slot and Comfort the sixth, so the
+    // column is now FULL — a seventh mode is a layout decision (a taller row
+    // lattice, a scrolling column, or a page that hosts two), not another line
+    // in PAGES. This assertion is what will say so.
+    expect(PAGES.length).toBe(MAX_ROWS)
     const lowest = rowY(MAX_ROWS - 1) + 0.115
     expect(lowest).toBeLessThanOrEqual(0.97)
+  })
+})
+
+describe('propLayout — the Comfort page', () => {
+  it('offers the two comfort measures, with the snap angle between them', () => {
+    const widgets = propLayout(state({ page: 'comfort' })).widgets.map((w) => w.id)
+    expect(widgets).toContain('turn-prev')
+    expect(widgets).toContain('turn-next')
+    expect(widgets).toContain('snap-prev')
+    expect(widgets).toContain('vignette-prev')
+    expect(widgets).toContain('vignette-next')
+  })
+
+  it('renders with NOTHING selected — someone reaching for it may feel unwell', () => {
+    const layout = propLayout(state({ page: 'comfort', node: null, count: 0 }))
+    expect(layout.empty).toBeNull()
+    expect(layout.title).toBe('Comfort')
+  })
+
+  it('greys the snap angle under smooth turning rather than hiding it', () => {
+    // The page must not change shape under the pointer when the mode above is
+    // toggled — the Shape page's frozen-row rule.
+    const greyed = (turn: 'smooth' | 'snap') =>
+      propLayout(state({ page: 'comfort', comfort: { ...defaultComfort(), turn } })).widgets.find(
+        (w) => w.id === 'snap-next',
+      )?.disabled
+    expect(greyed('smooth')).toBe(true)
+    expect(greyed('snap')).toBe(false)
+  })
+
+  it('shows the settings it is actually holding', () => {
+    const layout = propLayout(
+      state({
+        page: 'comfort',
+        comfort: { turn: 'snap', snapDegrees: 45, vignette: 'strong' },
+      }),
+    )
+    const value = (caption: string) => layout.rows.find((r) => r.caption === caption)?.value
+    expect(value('turn')).toBe('Snap')
+    expect(value('step')).toBe('45°')
+    expect(value('tunnel')).toBe('Strong')
+    expect(layout.subtitle).toBe('Snap 45° · tunnel strong')
+  })
+
+  it('says what each setting DOES — a headset has no tooltips', () => {
+    const notes = (c: Partial<XrPropState['comfort']>) =>
+      propLayout(state({ page: 'comfort', comfort: { ...defaultComfort(), ...c } }))
+        .rows.map((r) => r.note)
+        .filter((n): n is string => typeof n === 'string')
+    expect(notes({ turn: 'smooth' }).join(' ')).toContain('Snap')
+    expect(notes({ turn: 'snap' }).join(' ')).toContain('steps')
+    expect(notes({ vignette: 'off' }).join(' ')).toContain('full')
+    expect(notes({ vignette: 'light' }).join(' ')).toContain('narrows')
   })
 })
 
@@ -216,6 +281,7 @@ describe('propLayout — the Select page', () => {
       'page-move',
       'page-look',
       'page-draw',
+      'page-comfort',
       'criterion-prev',
       'criterion-next',
       'value-prev',
@@ -343,6 +409,7 @@ describe('propLayout — the Shape page', () => {
       'page-move',
       'page-look',
       'page-draw',
+      'page-comfort',
       'topo-prev',
       'topo-next',
       'geometry-prev',
@@ -403,6 +470,7 @@ describe('propLayout — the Move page', () => {
       'page-move',
       'page-look',
       'page-draw',
+      'page-comfort',
       'axis-x',
       'axis-y',
       'axis-z',
@@ -486,6 +554,7 @@ describe('propLayout — the Look page', () => {
       'page-move',
       'page-look',
       'page-draw',
+      'page-comfort',
       'palette-prev',
       'palette-next',
       'index-prev',
@@ -533,6 +602,7 @@ describe('propLayout — the Draw page', () => {
       'page-move',
       'page-look',
       'page-draw',
+      'page-comfort',
       'draw-toggle',
       'brush-prev',
       'brush-next',
