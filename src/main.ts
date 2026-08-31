@@ -20,6 +20,15 @@ import type { PlacementSettings } from './gv/placement'
 import { generateNodes, recipeFromJson } from './gv/glyphRecipe'
 import type { GlyphRecipe } from './gv/glyphRecipe'
 import { buildHyperglyphNodes } from './gv/hyperglyph'
+import {
+  buildChannels,
+  buildEpicycleNodes,
+  frameCount as epicycleFrameCount,
+  slug as epicycleSlug,
+  writeChMapCsv,
+  writeChTracksCsv,
+} from './gv/epicycles'
+import type { EpicycleDesign } from './gv/epicycles'
 import { applyDragDelta, MIN_DRAG_SCALE, snapshotTransform, uniformScaleFactor } from './gv/multiEdit'
 import type { DragMode, DragSnapshot } from './gv/multiEdit'
 import { findScenes, normalizePath, resolveRelative } from './gv/bundle'
@@ -190,6 +199,7 @@ import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
 import { BasemapWindow } from './ui/basemapWindow'
 import type { BasemapApplyPayload } from './ui/basemapWindow'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
+import { EpicycleWindow } from './ui/epicycleWindow'
 import { FpsMeter } from './ui/fpsMeter'
 import { GlyphComposerWindow } from './ui/glyphComposerWindow'
 import { HyperglyphWindow } from './ui/hyperglyphWindow'
@@ -725,6 +735,9 @@ hud.innerHTML = `
       <button id="hud-hyperglyph" title="Procedurally generate a randomized multi-level hyperglyph from a branch-level count and a node budget, preview it, and drop it into the scene.&#10;The same seed produces the same design in desktop GlyphViz.">Hyperglyph… (Ctrl+H)</button>
       <button id="hud-composer" title="Build a hierarchical glyph by hand, one branch level at a time — count, geometry, topology, placement, transform and colour — with a live preview.&#10;Templates are the same .json desktop GlyphViz reads and writes.">Composer… (Ctrl+G)</button>
     </div>
+    <div class="hud-create-buttons">
+      <button id="hud-epicycles" title="Design an epicycle chain — a Fourier series built from nested Torus-topology parents — and let the pen at the end draw its own path.&#10;One row per arm: Rate X is the harmonic, Length the amplitude, Phase X the starting angle, and Tilt or Tube take the figure out of the plane.&#10;Writes a complete scene (node + tag CSVs, plus the Channels pair for a self-drawing trail).">Epitrochoid… (Ctrl+Shift+E)</button>
+    </div>
     <div class="hud-create-row"><span>Geometry</span><select id="hud-new-geo"></select></div>
     <div class="hud-create-row"><span>Topology</span><select id="hud-new-topo"></select></div>
     <div class="hud-create-row"><span>Scale</span><input id="hud-new-scale" type="number" min="0.001" step="0.1" value="1"></div>
@@ -879,6 +892,7 @@ const placementChildZInput = hud.querySelector<HTMLInputElement>('#hud-placement
 const importMeshInput = hud.querySelector<HTMLInputElement>('#hud-import-mesh input')!
 const hyperglyphButton = hud.querySelector<HTMLButtonElement>('#hud-hyperglyph')!
 const composerButton = hud.querySelector<HTMLButtonElement>('#hud-composer')!
+const epicycleButton = hud.querySelector<HTMLButtonElement>('#hud-epicycles')!
 const copyButton = hud.querySelector<HTMLButtonElement>('#hud-copy')!
 const pasteButton = hud.querySelector<HTMLButtonElement>('#hud-paste')!
 const deleteButton = hud.querySelector<HTMLButtonElement>('#hud-delete')!
@@ -3979,6 +3993,11 @@ window.addEventListener('keydown', (e) => {
     if (key === 'b' && e.shiftKey) {
       selectionCommands.setShowSelectionBox(!selection.boxVisible)
     } else if (key === 'p') inspector.panel.cycle()
+    // The desktop puts the Epitrochoid Generator on a bare Ctrl+E, which is
+    // already the Selection panel here — the same divergence Show Selection
+    // Box makes for its Ctrl+B, and for the same reason: the panel chord
+    // predates the feature and is muscle memory in this app.
+    else if (key === 'e' && e.shiftKey) epicycleWindow.toggle()
     else if (key === 'e') selectionPanel.panel.cycle()
     else if (key === 'b') scenePanel.cycle()
     // The desktop's own chords for Tools ▸ Hyperglyph Generator… and
@@ -5324,6 +5343,79 @@ const composerWindow = new GlyphComposerWindow({
 app.appendChild(composerWindow.element)
 composerButton.addEventListener('click', () => composerWindow.toggle())
 
+// --- Epitrochoid Generator (Ctrl+Shift+E) --------------------------------------
+// Ported from the desktop's Tools ▸ Epitrochoid Generator… dialog. The engine is
+// src/gv/epicycles.ts (diffed against the desktop's own `epicycles.py` in
+// epicycles.parity.test.ts) and the traced curve src/render/epicyclePath.ts; the
+// window is src/ui/epicycleWindow.ts. What is here is the insertion and the
+// files, which are the two things the host owns on both sides.
+
+const epicycleWindow = new EpicycleWindow({
+  // Desktop `_insert_into_scene`: ROOTS, deliberately, and unlike the other two
+  // tool windows — the hub and the trail parent are two independent roots, and
+  // the trail's beads are Cartesian world positions that only mean anything at
+  // the top level. Dropping the chain under a selected node would put the pen
+  // in one coordinate system and its own traced path in another.
+  insert(design, path) {
+    const nodes = buildEpicycleNodes(design, {
+      startId: nextNodeId(currentNodes),
+      parentId: 0,
+      includeWorld: false,
+      path,
+    })
+    if (nodes.length === 0) return
+    currentNodes.push(...nodes)
+    rebuildScene(false)
+    setSelection(nodes[0].id)
+    status(
+      `Epitrochoid Generator: inserted ${nodes.length} nodes ` +
+        `(ids ${nodes[0].id}-${nodes[nodes.length - 1].id})`,
+    )
+  },
+  saveScene(design, path) {
+    writeEpicycleScene(design, path)
+  },
+  status,
+})
+app.appendChild(epicycleWindow.element)
+epicycleButton.addEventListener('click', () => epicycleWindow.toggle())
+
+/**
+ * The desktop writes a scene FOLDER; a browser writes downloads, so the files
+ * arrive one by one under a shared stem and putting them in a folder of their
+ * own is the user's step — the same trade Save Selection and Save PNG already
+ * make. The status line says so rather than leaving it to be discovered,
+ * because GlyphViz auto-loads Channels only when it finds exactly ONE ch-map
+ * and one ch-tracks file beside the node CSV: two candidates in a directory
+ * disable Channels entirely, and silently.
+ *
+ * Labels go to the companion tag file rather than into inline `text` columns —
+ * the desktop's epicycle writer has no text column at all, and it is the same
+ * rule the Save button follows for a scene that was authored that way.
+ */
+function writeEpicycleScene(design: EpicycleDesign, path: readonly Vec3[]) {
+  const stem = epicycleSlug(design.name || 'epitrochoid')
+  const frames = epicycleFrameCount(design)
+  const nodes = buildEpicycleNodes(design, { startId: 1, includeWorld: true, path })
+
+  const written = [`${stem}_gv_node.csv`, `${stem}_gv_tag.csv`]
+  download(writeGvNodeCsv(nodes, { inlineLabels: false }), written[0])
+  download(writeGvTagCsv(nodes), written[1])
+
+  if (design.selfDrawing) {
+    const channels = buildChannels(design, frames)
+    written.push(`${stem}_gv_ch-map.csv`, `${stem}_gv_ch-tracks.csv`)
+    download(writeChMapCsv(channels), written[2])
+    download(writeChTracksCsv(channels, frames), written[3])
+  }
+
+  status(
+    `Epitrochoid Generator: saved ${written.length} files (${written.join(', ')}) — ` +
+      'put them in one folder of their own, then drop that folder on the window' +
+      (design.selfDrawing ? '; press Space to watch the curve draw itself.' : '.'),
+  )
+}
+
 // --- Imported meshes (.obj / .stl) ---------------------------------------------
 // Ported from the desktop's Meshes > Import Mesh File… (_import_mesh_file),
 // including its target rule, which is Paste's: exactly one node selected →
@@ -6071,4 +6163,5 @@ renderer.setAnimationLoop(() => {
   // viewport only.
   hyperglyphWindow.renderFrame(dtMs)
   composerWindow.renderFrame(dtMs)
+  epicycleWindow.renderFrame(dtMs)
 })

@@ -2298,6 +2298,160 @@ something to decide now).
         transport on screen anyway, then node 1 bound to channel 3 and frame 2
         driving translate_z to 9 and color_r to 30 with its sibling untouched
         at 0 / 90, the desktop test's own numbers.
+   jj. Epitrochoid Generator (shipped 2026-08-31, Jeff's request — a port of
+      desktop `862fffc`, landed there the same day): a THIRD tool window,
+      beside the Hyperglyph Generator and the Glyph Composer, that designs an
+      **epicycle chain** and lets the pen at the end draw its own path.
+      **Ctrl+Shift+E**, or a Create-panel button.
+      - THE IDEA, and why it is a GlyphViz feature rather than a plotting one:
+        a chain of nested Torus-topology parents, each spinning its own
+        `translate_x`, IS a Fourier series. Each level's angle is measured in
+        its PARENT's rotating frame, so the angles compose down the chain and
+        the glyph at the end traces the SUM of the arms. Nothing new is added
+        to the format — every scene it writes is ordinary rows that save, load,
+        animate and edit like any other. The construction is Jeff's, ported on
+        the desktop from an ANTz scene of several years ago (fourier_v1),
+        including its original starting phases (0, 90, 90, 90).
+      - THE HARMONIC LADDER is the subtlety, and it is measured rather than
+        assumed: `h_k = h_{k-1} + (−1)^(k−1)·r_k`. The sign alternates because
+        each level's `rotate = (90, 90, 0)` cancels Torus topology's base
+        rotation and leaves the frame's handedness FLIPPED — so the rate
+        magnitudes ADD, and (1, −1, 1, −1) climbs to 1, 2, 3, 4 rather than
+        collapsing to 1, 0, 1, 0. That rotation is load-bearing, not a pose:
+        without it the chain corkscrews off the z = 0 plane (pinned by a test
+        that measures 10+ units of drift).
+      - TWO WAYS OUT OF THE PLANE. `tilt` leans an arm's orbit exactly, written
+        as the PARENT's `rotate_y` — the one rotation field that tips a ring
+        plane at this base pose (verified at 0/15/30/60/90°). `tube` gives an
+        arm a second circle around the torus tube, which in spectrum terms is a
+        SIDEBAND generator (h → h, h−r, h+r, plus pure out-of-plane motion at
+        r), and with two arms is a torus knot.
+      - The tube is the PARENT's `ratio`, not the child's `translate_z`.
+        `topoOffset` reads that same ratio for the child's tube radius AND it
+        is the torus glyph's drawn thickness, so setting them equal makes the
+        drawn ring literally BE the circle its child rides and keeps `length`
+        the true arm length. Rings past ratio 0.15 draw WIREFRAME — a solid one
+        at that size renders as an opaque ball that hides the mechanism (found
+        on the desktop by rendering it, not by maths).
+      - Arm lengths are authored in WORLD units at any depth; the builder
+        telescopes them into per-node scales, since a node's torus is the circle
+        its CHILD rides.
+      - SPLIT, and it is the one this repo keeps making: `src/gv/epicycles.ts`
+        is the pure half (design model, ladder, closure, node builder, spectrum,
+        Channels, presets, the seeded Randomize) with no THREE and no DOM in it,
+        and `src/render/epicyclePath.ts` traces the pen. The desktop's
+        `trace_path` builds a live `Scene` and reads `world_pos` deliberately
+        rather than reimplementing the topology maths; the web composes
+        `applyFrameTransform` — the scene builder's OWN rule — along the chain,
+        which is `selectionExport.ts` / `selectionPlacement.ts` one level up.
+        The path is INJECTED into `buildEpicycleNodes`, so the pure module never
+        reaches for the renderer. A test pins the fast linear walk against
+        `worldPlacements`, so the shortcut cannot become a third opinion.
+      - CLOSURE is computed in exact RATIONALS (`N = 360 / gcd(rates)`), because
+        the readout's claim is that the curve closes: 1/2 must answer 720 and
+        1/3 must answer 1080, not a float near-miss. CPython's `Fraction(float)`
+        and `Fraction.limit_denominator` are transcribed onto BigInt — the
+        numerators do not fit a double. A rate too small to survive
+        `limit_denominator(360)` contributes NOTHING rather than poisoning the
+        running gcd (gcd(0, x) = x), which is why the zero test is on the final
+        value and not on each step.
+      - The SPECTRUM is a complex DFT of `x + iy`, so it separates +h from −h —
+        the difference between a term rotating one way and the other. numpy on
+        the desktop; here a general Cooley–Tukey with a naive prime base case,
+        no dependency, for the same reason the CSV tokenizer, the zip reader and
+        the mesh parser have none. Every frame count this tool produces (360,
+        720, 1080, 3600) is highly composite, so it bottoms out fast.
+      - WHAT IT WRITES: node CSVs, not a recipe .json. The Composer hands out a
+        template because a glyph IS a recipe; an epicycle chain's whole point is
+        the traced curve, which only exists once the chain has been walked. Save
+        Scene therefore writes the scene — node CSV + tag CSV, plus the
+        ch-map/ch-tracks pair when Self-drawing is on. A design .json is the
+        small secondary convenience for reopening a hand-tuned design HERE, in
+        the desktop's own snake_case keys so one written by either app opens in
+        the other.
+      - THE TRAIL is a transparent Plot-topology parent holding one Point bead
+        per sampled frame, at the pen's world position. Three things it depends
+        on: the parent must be `color_a = 0` and NOT `hide = 1` (a hidden Plot
+        parent suppresses the polyline entirely — the desktop commit settles
+        that open question in its own README); the line takes its COLOUR from
+        each bead and its WIDTH from the parent's `ratio × 20` px; and Plot
+        draws through its children in CSV ROW ORDER, so the beads are emitted
+        frame by frame. Self-drawing steps each bead's alpha on as the pen
+        arrives, in small GROUPS to keep the tracks file compact — and a group
+        lights when its LAST bead is reached, so the line LAGS the pen rather
+        than ever drawing a curve it has not travelled.
+      - Divergences, each platform rather than behaviour except the last two:
+        - CHORD. Ctrl+E is this app's Selection panel and predates the feature,
+          so the web key is Ctrl+Shift+E — the same substitution Show Selection
+          Box already makes for the desktop's Ctrl+B (item 6h).
+        - OUTPUT is downloads, not a folder the app creates, so putting the
+          files in one folder is the user's step. The status line SAYS so,
+          because Channels auto-load only when exactly one ch-map and one
+          ch-tracks sit beside the node CSV — two candidates disable Channels
+          entirely, and silently.
+        - The node CSV goes through this app's own `writeGvNodeCsv` rather than
+          the desktop module's private column list, so it carries `facet` and
+          the write-only-when-needed optional columns like every other file this
+          app saves. Labels go to the tag COMPANION (`inlineLabels: false`),
+          which is what the desktop's writer does too — it has no `text` column
+          at all.
+        - INSERT lands the design as ROOTS, unlike the other two tool windows,
+          and that is the desktop's rule: the hub and the trail parent are two
+          independent roots, and the trail's beads are Cartesian world positions
+          that only mean anything at the top level. Dropping the chain under a
+          selected node would put the pen in one coordinate system and its own
+          traced path in another.
+        - The path is RE-TRACED on Insert and on Save rather than reusing the
+          preview's (`self._path`), so neither can act on a stale curve with
+          Auto-preview off. Tracing is deterministic and costs a few ms.
+        - GLOBAL SCALE. A Torus base radius IS the Global Scale, so the whole
+          chain draws B times larger at scale B while the trail's root-level
+          Cartesian beads do not move at all. The trace therefore uses whatever
+          the app is currently drawing at, so the preview, an Insert and a Save
+          all agree with what is on screen — the `selectionPlacement.ts`
+          principle ("the transform baked has to be the one this app composed").
+          The consequence, which the desktop shares in reverse (its `trace_path`
+          hardcodes 1.0 while its preview renders at the app's own scale): a
+          scene saved at a Global Scale other than 1 is only true at that scale.
+      - Parity: `tools/dump_epicycles.py` runs the REAL desktop module — its
+        ladder, its `Fraction` closure search, its `build_nodes` and its
+        `trace_path` off a live `Scene` — over five blocks;
+        `src/gv/epicycles.parity.test.ts` diffs 58 cases. The `scenes` block is
+        the one that pays: all eight presets plus four insertion/self-drawing
+        variants, every node field for field INCLUDING the %g-formatted labels,
+        with the beads carrying the traced path at 1e-6 (the CSV's own write
+        precision amplified by the parent scales). Verified to FAIL three ways —
+        29 tests without the alternating sign, 24 without the (90, 90)
+        cancellation, 6 with the tube taken off the parent's ratio.
+        - One tie is compared loosely, on purpose: at the spectrum's 12-entry
+          cut-off two symmetric sidebands can agree to within an ulp (Deep
+          chain: ±3 and 7 at 0.2535709570444…), and which of them numpy's
+          argsort — quicksort, not stable — kept is a fact about neither
+          engine. The AMPLITUDES are still diffed in order.
+      - Driven in Chrome, 61 measured checks: the window's size and that it fits
+        the viewport; the table's seven columns in the desktop's order, its
+        tooltips, and that every arm row is visible without scrolling at the
+        default design AND reachable at MAX_ARMS; the readout's ladder, closure,
+        spectrum and planar/3-D verdict, and each of them MOVING with an edit
+        (rate −1 → −4 stepping the ladder to 1 → 5 → 6 → 7, a tube taking the
+        figure 37.7 units deep); the square wave preset's 12 / 4 / 2.4 / 1.7143
+        at the table's own four decimals; Randomize keeping the scene-dressing
+        choices; Insert landing 370 contiguous ids as two roots with the hub
+        selected; the saved CSV's 371 rows, its `child_id`/`ch_input_id`
+        columns and its 11 tag labels; the Channels pair at 124 bindings × 360
+        frames; the saved scene REOPENED whole; and the design .json round trip.
+        - The one that matters most: **the pen rides its own traced trail** —
+          sampled three times while the rate animation runs, the pen is never
+          more than ~0.27 units from a bead. That is the trail and the chain
+          agreeing through two entirely separate code paths (the tracer, and the
+          live scene graph integrating `translate_rate`).
+        - The PICTURE caught what all 59 checks of the first pass missed, for
+          the sixth time in seven sessions: the footer had grown to five stacked
+          rows (169 px), which pushed the FOURTH arm row below the fold at the
+          default design. A table you have to scroll to read is not showing you
+          every arm's rate at once, which is the only reason it is a table. The
+          footer is three rows now, the controls take whatever the preview does
+          not, and a check measures the last row against the scroller's box.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -3963,6 +4117,15 @@ something to decide now).
       most-demanded features. Read `tests/test_channel_binding.py` and
       `test_channel_binding_gui.py` on that side; the second file's tag-default
       tests are the desktop's own statement of the pair rule.
+    - ~~**Epitrochoid Generator**~~ (desktop `862fffc`, 2026-08-31) — **shipped
+      2026-08-31, see roadmap 6jj**, the same day it landed there. Its six
+      worked scenes (`examples/Fourier_Epicycles_Example/`) are NOT vendored as
+      built-ins — this app's built-in scenes are CSV-only and two of those
+      carry a Channels pair — but they open here as a folder or a zip, and the
+      generator writes the same files. Worth reading that folder's README: it
+      is the desktop's own explanation of what each mechanism does to the
+      curve, and it settles the Plot-parent question (`color_a = 0`, never
+      `hide = 1`) that Topology_Animation_Examples had left open.
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

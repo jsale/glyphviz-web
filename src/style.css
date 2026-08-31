@@ -1350,3 +1350,155 @@ canvas {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* --- Epitrochoid Generator -------------------------------------------------
+   The widest of the three tool windows, because its defining control is a
+   TABLE — one row per arm, seven columns — and seeing every arm's rate at once
+   is what makes the harmonic ladder legible. The desktop spreads the same
+   pieces across a 1240x780 dialog with a splitter; here they stack, and the
+   table gets the width instead. */
+
+#epicycle-window {
+  width: 620px;
+  height: 800px;
+}
+
+/* Same split as the Composer: the controls scroll, the preview, the readout
+   and the footer stay pinned where they can be seen while the table above
+   them is worked through. */
+#epicycle-window .float-window-body {
+  overflow: hidden;
+}
+
+/* The controls take whatever is left after the preview, rather than splitting
+   it in a fixed ratio the way the Composer does. The reason is the arms table:
+   it is this window's defining control, and a ratio that leaves an arm row
+   below the fold at the DEFAULT design is a table you have to scroll to read.
+   The preview keeps a generous fixed basis and may shrink a little; dragging
+   the window taller grows the controls. */
+.epicycle-scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#epicycle-window .glyph-preview {
+  flex: 0 1 240px;
+  min-height: 150px;
+}
+
+#epicycle-window .hud-create-row span:first-child {
+  flex: 0 0 66px;
+}
+
+/* A one-digit spinner has no business spanning the row. */
+#epicycle-window .hud-create-row > input[type='number'] {
+  flex: 0 0 90px;
+}
+
+/* Auto + the two preview buttons share one line, and the two primary actions
+   share the next. */
+.epicycle-footer-row {
+  margin-bottom: 4px;
+}
+
+.epicycle-actions button {
+  padding: 5px 0;
+}
+
+/* Several controls sharing one row's value column (preset + Apply, seed +
+   3-D + Randomize, the two Show checkboxes, Trail + its point count). */
+.epicycle-inline {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.epicycle-inline select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The preset list is the only control on these rows that wants the width. A
+   seed and a bead count are short numbers, and a 400px box for "720" reads as
+   a mistake. */
+.epicycle-inline input[type='number'] {
+  flex: 0 0 120px;
+}
+
+.epicycle-inline .sel-check {
+  flex: 0 0 auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.epicycle-inline button {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid #3a4256;
+  border-radius: 4px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+.epicycle-inline button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Wide content scrolls inside its own box rather than widening the window:
+   seven number columns do not fit a narrow one, and the alternative is a
+   window that cannot be dragged small. */
+.epicycle-table-wrap {
+  flex: 0 0 auto;
+  margin: 2px 0 4px;
+  overflow-x: auto;
+}
+
+.epicycle-table {
+  border-collapse: collapse;
+  font: inherit;
+}
+
+.epicycle-table th {
+  padding: 0 4px 3px;
+  color: #9aa3b8;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.epicycle-table tbody th {
+  padding-right: 6px;
+  color: #7d8496;
+  text-align: right;
+}
+
+.epicycle-table td {
+  padding: 1px 2px;
+}
+
+.epicycle-table input {
+  width: 66px;
+}
+
+.epicycle-readout {
+  flex: 0 0 auto;
+  min-height: 52px;
+}
+
+.epicycle-dim {
+  opacity: 0.6;
+}
+
+.epicycle-warn {
+  color: #e9a0a0;
+}
