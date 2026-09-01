@@ -2452,6 +2452,118 @@ something to decide now).
           every arm's rate at once, which is the only reason it is a table. The
           footer is three rows now, the controls take whatever the preview does
           not, and a check measures the last row against the scroller's box.
+      - **32 ARMS, SYMMETRY, AND A GRADIENT TRAIL** (2026-09-01, Jeff's request
+        the day after the port: he wanted the arm cap lifted — "my vision was for
+        these epitrochoids to be massively complex" — a way to make Randomize
+        produce symmetry rather than "truly random wormy structure", presets that
+        show that symmetry off, a gradient palette along the trail, and some way
+        to edit a column of a table that now has hundreds of cells).
+        - MAX_ARMS 8 → 32, and there is no computational wall at all: MEASURED,
+          a 32-arm chain traces in 8 ms and builds in 1 ms at the 360-frame
+          default, 80 ms in the worst case the controls allow. An arm costs two
+          rows where the trail costs up to 1441, so 32 arms is 426 nodes against
+          8 arms' 378. So the honest answer to "warn me before it crashes" is
+          that nothing crashes.
+        - What DOES degrade is NYQUIST, and that is what the readout now reports.
+          A trail samples the pen once every `step` frames, so it cannot describe
+          a harmonic above `180 / step`; past that the beads still sit ON the
+          curve while the polyline between them draws something else. The rate
+          range widened 60 → 180 for the same reason — 180°/frame is the fastest
+          angle a once-per-frame sample can follow — and `describeDesign` gained
+          `peakHarmonic` (tube sidebands included), `nyquist` and `aliased`.
+        - SYMMETRY IS EXACT, not a heuristic. The pen traces
+          `z(t) = Σ A_k·e^(i(h_k·t + p_k))`, so the figure turns onto itself
+          every `2π/m` exactly when every harmonic leaves the same remainder mod
+          m — the harmonics are then the arithmetic progression `1, 1±m, 1±2m, …`
+          (`symmetricHarmonics`). Two things fall out of that and are what make
+          the feature usable, both pinned by tests:
+          - The AMPLITUDES are free. Symmetry is a fact about the harmonics
+            alone, so any amplitudes keep the figure m-fold. That is the whole
+            decomposition symmetric Randomize rests on — **the harmonics carry
+            the symmetry, the amplitudes carry the character** — and it is why
+            the generator does not roll the one thing that matters.
+          - The PHASES buy the extra MIRROR, and getting them right needed a
+            MEASUREMENT rather than the obvious guess. All-zero phases do NOT
+            give a mirror: the `(90, 90, 0)` cancellation leaves a fixed 90° on
+            every EVEN arm (measured — a chain of unit arms at zero phase points
+            +x, +y, +x, +y…), so aligning them takes `(0, 90, 90, 90, …)`. Which
+            is exactly the phase pattern of Jeff's original ANTz scene, recovered
+            from a file saved mid-flight and arbitrary-looking ever since: it was
+            the mirror-symmetric configuration all along. `alignedPhases` is that
+            inverse, and it runs through `ratesForHarmonics` — a phase composes
+            down the chain by the same alternating ladder an angle does.
+          - `ratesForHarmonics` is the ladder INVERSE, `r_k = (−1)^(k−1)·(h_k −
+            h_{k−1})`, and it is what makes symmetry designable: an author states
+            harmonics, the chain needs rates. Checked against the square wave,
+            whose rates the desktop wrote out longhand (1, 3, 5, 7 → 1, −2, 2, −2).
+          - A TUBE keeps the symmetry only when its rate is a multiple of the
+            fold — the sidebands `h, h±r` stay in the progression and the
+            out-of-plane motion at r is itself invariant — so `symmetricArms`
+            SNAPS it onto that lattice. A spun symmetric figure trades the mirror
+            for a HALF TURN about the x axis, because the z motion is odd in t
+            where the mirror needs it even; both forms are pinned.
+        - THE WEAVE is the second knob, and the one the PICTURES forced. The
+          first build laid amplitudes as `base/|h|^decay`, which at fold 12 makes
+          term two a twelfth of term one — so every design came out as a circle
+          with spikes, and 32 arms bought nothing but hair. Rendering a contact
+          sheet of the parameter space (30-odd curves as one SVG, far cheaper
+          than one guess at a time) showed two things: amplitude must go by the
+          PROGRESSION index, not the harmonic, so each successive ring of petals
+          is a comparable fraction of the last; and the amplitude PEAK must move
+          off the fundamental. At peak 0 the pen goes round once and the figure
+          is an m-pointed star however many terms are piled on; at peak w it is
+          harmonic `1 + w·fold`, the pen winds that many times, and the passes
+          interleave. Keeping the fundamental as a second peak is what reads as
+          a rose window — a bold outer ring of petals and a fine woven annulus —
+          and it shows in the readout as two equal spectrum lines.
+        - The seven web-only presets run simple to complex and every one of them
+          was TUNED BY RENDERING IT: Rosette ×5, Snowflake ×6, Star ×12, then the
+          three that need the weave — Mandala ×7 (24), Rose window ×12 (28),
+          Great weave ×11 (32) — plus the 3-D Spun rosette. The last three open
+          with linkage rods OFF, since 30 rods over a woven figure is a hairball
+          and the rods are one checkbox away. Two of them are sized by the
+          ceiling rather than by taste: fold 12 reaches harmonic 193 by 32 arms,
+          so the rose window is 28 arms and the 32-arm one is fold 11
+          (`maxFoldForArms(32)`). A test caught both.
+        - RANDOMIZE is now two generators. With Symmetry off it is the desktop's
+          own, seed for seed, untouched; with a fold set it is
+          `randomSymmetricDesign`, which rolls the amplitude profile, the decay,
+          the weave, per-term sign flips and the tube — everything EXCEPT the
+          harmonics. It clamps the fold to what the arm count can carry and steps
+          the tube rate down the lattice to whatever headroom the harmonics left,
+          so no roll can produce an aliased design.
+        - THE TRAIL PALETTE answers the other half of the ask. The trail is the
+          one place in this scene where position means TIME — the pen visits the
+          beads in order — so a GlyphViz palette swept once across the cycle says
+          WHEN each part of the figure was drawn, which is exactly what a complex
+          closed curve hides. Beads carry `palette_id` and `color_index` as well
+          as the resolved literal colour, so they arrive as ordinary
+          palette-authored nodes the Properties panel and the =/− keys
+          understand, and the pair reaches the CSV. The sweep divides by the bead
+          COUNT and not the last index, because the last bead is one sampling
+          step short of closing the loop. Null (the desktop's plain amber) is the
+          default and the load default, so a desktop design opens unchanged.
+        - COLUMN FILL is the bulk edit: a `↓` in every header writes arm 1's
+          value down the column. A plain U+2193 and not one of the prettier
+          arrow-to-bar glyphs — this app has been caught once assuming a
+          browser's fallback font carries a symbol (roadmap 9 P2).
+        - The parity harness still passes untouched, which is the point of the
+          split: `designToJson` now carries one key the desktop has no notion of
+          (`trail_palette`), so the random-design diff is over the desktop's own
+          keys and asserts separately that the extra one stays null — a generator
+          that started inventing palettes would be changing what a seed names.
+        - Verified to FAIL five ways: one-sided harmonics, phases left at zero,
+          an unsnapped tube rate, a non-alternating ladder inverse, and a palette
+          sweep divided by the last index (which needed a five-bead trail to show
+          at all — at 360 beads the clamp hides it).
+        - Driven in Chrome, 42 measured checks, and the PICTURE earned its keep
+          twice more. The Symmetry note rendered at HEIGHT ZERO — it had its
+          text and a width of 524 px and nothing on screen — because
+          `.composer-note` carries `overflow: hidden`, which zeroes a flex item's
+          automatic minimum size, the same trap `.composer-levels` documents. And
+          the weave box read 0 for a design built with weave 3, which is why
+          `weaveOf` measures it off the arms the way `symmetryFold` measures the
+          fold.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

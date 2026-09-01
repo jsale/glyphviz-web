@@ -69,6 +69,7 @@
 // terms give the textbook epitrochoid / hypotrochoid (the Spirograph curve); n
 // terms give an epicyclic curve, or a truncated Fourier series curve.
 
+import { paletteIndexCount, resolvePaletteColor } from './colorPalette'
 import { blankNode } from './createNode'
 import type { PythonRandom } from './pythonRandom'
 import type { GvNode, Vec3 } from './types'
@@ -77,7 +78,31 @@ import { Geometry, NodeType, Topo } from './types'
 // ---------------------------------------------------------------- constants
 
 export const MIN_ARMS = 2
-export const MAX_ARMS = 8
+
+/**
+ * Terms in the series. The desktop stops at 8; this app goes to 32, because
+ * MEASUREMENT says nothing is in the way — a 32-arm chain traces in 8 ms and
+ * builds in 1 ms at the 360-frame default, and 80 ms in the worst case the
+ * controls allow (3600 frames, 1440 beads). The node count barely moves either:
+ * an arm costs two rows where the trail costs up to 1441, so 32 arms is 426
+ * nodes against 8 arms' 378.
+ *
+ * The real ceiling is NYQUIST, not the machine — see `peakHarmonic` below. A
+ * trail samples the pen once every `step` frames, so it cannot represent a
+ * harmonic above `180 / step`, and a design that reaches past that draws a
+ * smear rather than the figure it actually is. 32 is where this stops, because
+ * a symmetric design filling 32 arms already spans harmonics ±180 at a fold of
+ * 11, which is the whole of what a 360-frame trail can show.
+ */
+export const MAX_ARMS = 32
+
+/**
+ * Rate ceiling, degrees per frame, and it is the Nyquist bound rather than a
+ * round number: the trail cannot sample faster than once a frame, so 180 is the
+ * fastest angle whose motion a trail can still describe. Past it the beads land
+ * on the curve and the polyline between them does not.
+ */
+export const RATE_LIMIT = 180
 
 /**
  * Torus glyph thickness. The minor radius is `ratio × size`, so the ring a node
@@ -198,6 +223,19 @@ export interface EpicycleDesign {
   armRatio: number
   trail: boolean
   trailPoints: number
+  /**
+   * Colour the trail with a GlyphViz palette, swept once across the cycle —
+   * null keeps the single amber the desktop uses.
+   *
+   * Web-only, and the reason it is worth having is that the trail is the one
+   * part of this scene where position means TIME: the pen visits the beads in
+   * order, so a gradient along them says where in the cycle each part of the
+   * figure was drawn — which is exactly the thing a complex closed curve hides.
+   * A design .json written here carries the extra key and one written by the
+   * desktop simply has no opinion about it, which is the same contract the
+   * Glyph Composer's templates already keep.
+   */
+  trailPalette: number | null
   /** Channels + a per-bead alpha step, so the curve draws itself. */
   selfDrawing: boolean
   beadGroup: number
@@ -216,6 +254,7 @@ export function defaultDesign(overrides: Partial<EpicycleDesign> = {}): Epicycle
     armRatio: 0.25,
     trail: true,
     trailPoints: 720,
+    trailPalette: null,
     selfDrawing: false,
     beadGroup: DEFAULT_BEAD_GROUP,
     frames: null,
@@ -255,6 +294,7 @@ export function designToJson(design: EpicycleDesign): Record<string, unknown> {
     arm_ratio: design.armRatio,
     trail: design.trail,
     trail_points: design.trailPoints,
+    trail_palette: design.trailPalette,
     self_drawing: design.selfDrawing,
     bead_group: design.beadGroup,
     frames: design.frames,
@@ -309,6 +349,12 @@ export function designFromJson(data: unknown): EpicycleDesign {
     armRatio: num(raw.arm_ratio, base.armRatio),
     trail: bool(raw.trail, base.trail),
     trailPoints: num(raw.trail_points, base.trailPoints),
+    // Absent (a desktop design, which has no such field) means the plain amber,
+    // which is what the desktop draws — so a file from there opens unchanged.
+    trailPalette:
+      raw.trail_palette === null || raw.trail_palette === undefined
+        ? null
+        : num(raw.trail_palette, 0),
     selfDrawing: bool(raw.self_drawing, base.selfDrawing),
     beadGroup: num(raw.bead_group, base.beadGroup),
     frames: raw.frames === null || raw.frames === undefined ? null : num(raw.frames, 0) || null,
@@ -332,6 +378,209 @@ export function harmonicsOf(rates: readonly number[]): number[] {
     out.push(h)
   })
   return out
+}
+
+/**
+ * The INVERSE of the harmonic ladder: the rates that produce a wanted harmonic
+ * sequence. `h_k = h_{k-1} + (−1)^(k−1)·r_k` rearranges to
+ * `r_k = (−1)^(k−1)·(h_k − h_{k−1})`, with `h_0 = 0`.
+ *
+ * This is what makes symmetry designable rather than something to stumble on.
+ * A curve's symmetry is a property of its HARMONICS (see `symmetricHarmonics`),
+ * and the harmonics are what an author wants to state — but the chain is driven
+ * by rates, and the alternating sign makes the translation from one to the
+ * other error-prone by hand. Checked against the square wave, whose rates the
+ * desktop wrote out longhand: harmonics 1, 3, 5, 7 come back as 1, −2, +2, −2.
+ */
+export function ratesForHarmonics(harmonics: readonly number[]): number[] {
+  const rates: number[] = []
+  let previous = 0
+  harmonics.forEach((h, index) => {
+    rates.push((index % 2 === 0 ? 1 : -1) * (h - previous))
+    previous = h
+  })
+  return rates
+}
+
+/**
+ * Harmonics whose curve has `fold`-fold ROTATIONAL symmetry, `count` of them.
+ *
+ * THE RULE, and it is exact rather than a heuristic. The pen traces
+ * `z(t) = Σ A_k · e^(i(h_k·t + p_k))`. Rotating the figure by `2π/m` and asking
+ * it to land on itself means `z(t + 2π/m) = e^(iα)·z(t)` for some fixed α,
+ * which needs `h_k · 2π/m ≡ α` for EVERY k — that is, every harmonic congruent
+ * to the same value mod m. Taking that value to be 1 gives a figure that maps
+ * onto itself under a turn of exactly `2π/m`.
+ *
+ * So the harmonics are an arithmetic progression of step `m` through 1:
+ * `…, 1−2m, 1−m, 1, 1+m, 1+2m, …`. Note two things that FALL OUT of this and
+ * are worth stating, because they are what make the feature usable:
+ *
+ * - The AMPLITUDES are free. Symmetry is a fact about the harmonics alone, so
+ *   any amplitudes at all keep the figure `m`-fold symmetric. That is the whole
+ *   decomposition symmetric Randomize rests on: the harmonics carry the
+ *   symmetry, the amplitudes carry the character.
+ * - The PHASES are free too, for rotational symmetry. Setting them all equal
+ *   buys the extra MIRROR — `z(−t) = conj(z(t))` when every composed phase is
+ *   the same — and rotation plus mirror is the dihedral symmetry of a rose
+ *   window, which is the look worth aiming at.
+ *
+ * The window is centred on 1 so the progression runs both ways: a one-sided run
+ * (1, 1+m, 1+2m, …) is also m-fold, but every term then winds the same way and
+ * the figure comes out as a spiral rather than a rosette. Returned ASCENDING,
+ * which is not cosmetic — consecutive harmonics then differ by exactly m, so
+ * `ratesForHarmonics` gives a rate column of one carrier followed by a clean
+ * alternating ±m, well inside RATE_LIMIT at any arm count this app allows.
+ */
+export function symmetricHarmonics(fold: number, count: number): number[] {
+  const m = Math.max(2, Math.round(fold))
+  const n = Math.max(1, Math.round(count))
+  const below = Math.floor((n - 1) / 2)
+  return Array.from({ length: n }, (_, i) => 1 + m * (i - below))
+}
+
+/**
+ * The largest fold whose `count`-arm window still fits inside `limit`.
+ *
+ * A generator has to answer this, because a fold the arm count cannot carry is
+ * not a prettier figure — it is an aliased one. The span is set by the top of
+ * the window, `1 + m·ceil((n−1)/2)`.
+ */
+export function maxFoldForArms(count: number, limit: number = RATE_LIMIT): number {
+  const above = Math.max(1, Math.ceil((Math.max(1, count) - 1) / 2))
+  return Math.max(2, Math.floor((limit - 1) / above))
+}
+
+/**
+ * The FIXED angle the construction gives arm k before any phase is authored,
+ * in degrees: 0 on the odd arms and 90 on the even ones.
+ *
+ * MEASURED, not derived — a chain of unit arms with every `phase_x` at zero
+ * puts arm 1 along +x, arm 2 along +y, arm 3 along +x again, and so on. It is
+ * the residue of the `rotate = (90, 90, 0)` cancellation: the same 90° that
+ * flips the frame's handedness at each level (and makes the harmonic magnitudes
+ * ADD) also leaves half the levels a quarter turn out.
+ *
+ * This is what makes a design of all-zero phases NOT mirror-symmetric, which is
+ * the trap `alignedPhases` exists to avoid — and it explains a detail of the
+ * original ANTz scene the desktop ported from. Its phases (0, 90, 90, 90) were
+ * recovered from a file saved mid-flight and have looked arbitrary ever since;
+ * they are exactly `alignedPhases(4)`, the setting that points all four arms
+ * the same way at t = 0. Jeff's scene was built on the mirror all along.
+ */
+function constructionOffset(index: number): number {
+  return index % 2 === 1 ? 90 : 0
+}
+
+/**
+ * The `phase_x` values that put every arm's composed angle at 0 — or at 180
+ * where `flips[k]` is set, which contributes that term with its sign reversed
+ * and costs no symmetry, −1 being real.
+ *
+ * A phase composes down the chain by the SAME alternating ladder an angle does
+ * (it is the constant term of the same angle), so the wanted composed sequence
+ * inverts through `ratesForHarmonics` exactly as a harmonic sequence does.
+ */
+export function alignedPhases(count: number, flips: readonly boolean[] = []): number[] {
+  const wanted = Array.from(
+    { length: Math.max(0, Math.round(count)) },
+    (_, k) => (flips[k] ? 180 : 0) - constructionOffset(k),
+  )
+  return ratesForHarmonics(wanted).map((p) => ((p % 360) + 360) % 360)
+}
+
+export interface SymmetricArmOptions {
+  fold: number
+  count: number
+  /** World radius of the LONGEST arm; the rest are scaled against it. */
+  base?: number
+  /**
+   * How fast the amplitude falls away from its peak, in progression steps.
+   * ~1 gives an open flower, ~1.5 a crisp one, past ~2 the far terms stop
+   * contributing at all.
+   */
+  decay?: number
+  /**
+   * WHERE the amplitude peaks, counted in progression steps out from the
+   * fundamental — and the one knob that decides whether the figure is a star or
+   * a piece of lace.
+   *
+   * At 0 the biggest term is the fundamental (harmonic 1): the pen goes round
+   * ONCE per cycle and everything else decorates that single loop, so the
+   * figure is an m-pointed star however many terms are piled on. Measured, and
+   * the reason the first attempt at these presets came out as circles with
+   * spikes.
+   *
+   * At w > 0 the biggest term is harmonic `1 + w·fold`, so the pen winds that
+   * many times before the cycle closes and the passes interleave — which is
+   * where the density comes from. The fundamental is kept in the mix as a
+   * second peak, and it is that pairing that reads as a rose window: a bold
+   * outer ring of petals from the fundamental, a fine woven annulus from the
+   * high one.
+   */
+  weave?: number
+  /** Per-arm amplitude multipliers, if the caller has its own (Randomize does). */
+  weights?: readonly number[]
+  /** Tube radius as a FRACTION of each arm's length, 0 = flat. */
+  tubeFraction?: number
+  /**
+   * Tube rate. Rounded to a multiple of `fold` — a tube at harmonic h with rate
+   * r contributes h, h−r and h+r in the plane and pure out-of-plane motion at
+   * r, so the sidebands stay in the progression (and the z motion stays
+   * invariant under the turn) only when r is itself a multiple of the fold.
+   * A tube off that lattice is the one way to have a symmetric plan and an
+   * unsymmetric solid.
+   */
+  tubeRate?: number
+  /** Terms to contribute with their sign reversed — see `alignedPhases`. */
+  flips?: readonly boolean[]
+}
+
+/**
+ * A whole arm set laid out as a `fold`-fold rosette, with the phases ALIGNED so
+ * the figure carries the mirror as well as the rotation.
+ */
+export function symmetricArms(options: SymmetricArmOptions): Arm[] {
+  const { fold, count } = options
+  const base = options.base ?? 12
+  const decay = options.decay ?? 1
+  const weave = Math.max(0, Math.round(options.weave ?? 0))
+  const tubeFraction = options.tubeFraction ?? 0
+  const harmonics = symmetricHarmonics(fold, count)
+  const rates = ratesForHarmonics(harmonics)
+  const m = Math.max(2, Math.round(fold))
+  const below = Math.floor((Math.max(1, Math.round(count)) - 1) / 2)
+
+  // Amplitude is a function of the PROGRESSION index, not of the harmonic
+  // itself. Against |h| the fundamental takes almost the whole amplitude —
+  // 1/|h| makes term two a twelfth of term one at fold 12 — so the figure is a
+  // circle with spikes whatever else is added. Against |j| each successive
+  // ring of petals is a comparable fraction of the last, which is what lets
+  // thirty-two terms all show.
+  const shape = (j: number) =>
+    1 / Math.pow(1 + Math.abs(j), decay) +
+    (weave > 0 ? 1 / Math.pow(1 + Math.abs(j - weave), decay) : 0)
+  const raw = harmonics.map((_h, k) => shape(k - below))
+  const peak = Math.max(...raw, 1e-9)
+  // A tube whose rate is not a multiple of the fold breaks the very symmetry
+  // this function exists to build, so it is snapped onto the lattice.
+  const tubeRate = options.tubeRate
+    ? Math.max(m, Math.round(options.tubeRate / m) * m)
+    : 0
+  const phases = alignedPhases(harmonics.length, options.flips)
+  return harmonics.map((_h, k) => {
+    const weight = options.weights?.[k] ?? 1
+    // Normalised on the peak, so `base` means "the longest arm" and a design's
+    // overall size does not swing with the decay or the weave.
+    const length = pyRound((base * weight * raw[k]) / peak, 4)
+    return defaultArm({
+      length: Math.max(0.01, length),
+      rateX: rates[k],
+      phaseX: phases[k],
+      tube: tubeFraction > 0 ? pyRound(length * tubeFraction, 4) : 0,
+      rateY: tubeFraction > 0 ? tubeRate : 0,
+    })
+  })
 }
 
 // --- exact rationals, so 1/2 and 1/3 give the right closure period ---------
@@ -670,10 +919,25 @@ function trailNodes(
   plot.text =
     'trail - a Plot-topology parent; its polyline runs through the beads below in CSV row order'
   const nodes = [plot]
+  const palette = design.trailPalette
+  // The last bead is one sampling step short of closing the loop, so the sweep
+  // runs over `points.length` rather than `length − 1`: dividing by the last
+  // INDEX would put the palette's end on a bead that is not the cycle's end,
+  // and on a gradient that wraps (Rainbow returns to red) it is what makes the
+  // colour close exactly as the curve does.
+  const span = Math.max(1, points.length)
+  const indexCount = palette === null ? 0 : paletteIndexCount(palette)
   points.forEach((p, i) => {
     const channel = design.selfDrawing
       ? 1 + design.arms.length + Math.floor(i / Math.max(1, design.beadGroup))
       : 0
+    let color = { r, g, b, a: design.selfDrawing ? 0 : a }
+    let colorIndex = 0
+    if (palette !== null) {
+      colorIndex = Math.min(indexCount - 1, Math.floor((i / span) * indexCount))
+      const resolved = resolvePaletteColor(palette, colorIndex)
+      color = { ...resolved, a: design.selfDrawing ? 0 : a }
+    }
     const bead = epicycleNode(startId + 1 + i, {
       parentId: startId,
       branchLevel: baseBranch + 1,
@@ -682,7 +946,13 @@ function trailNodes(
       ratio: TRAIL_BEAD_RATIO,
       translate: vec3(p.x, p.y, p.z),
       scale: vec3(0.2, 0.2, 0.2),
-      color: { r, g, b, a: design.selfDrawing ? 0 : a },
+      color,
+      // The literal colour is what renders (that IS the palette model — see
+      // colorPalette.ts), but writing the pair as well means the trail arrives
+      // as ordinary palette-authored nodes: the Properties panel's palette rows
+      // and the = / − keys understand it, and it survives to the CSV.
+      paletteId: palette ?? 0,
+      colorIndex: palette === null ? 0 : colorIndex,
     })
     bead.extras.ch_input_id = String(channel)
     nodes.push(bead)
@@ -818,6 +1088,94 @@ export interface EpicycleReport {
   halfSpan: number
   zExtent: number
   planar: boolean
+  /** Fastest harmonic the design contains, tube sidebands included. */
+  peakHarmonic: number
+  /** Fastest harmonic this trail's bead spacing can represent. */
+  nyquist: number
+  /** True when the trail is too coarse to draw the curve it is sampling. */
+  aliased: boolean
+  /**
+   * The rotational symmetry the harmonics actually carry — 1 for none. Measured
+   * off the design rather than remembered from how it was built, so a hand-typed
+   * design reports its symmetry too.
+   */
+  fold: number
+}
+
+/**
+ * The rotational symmetry a set of harmonics carries: the largest m for which
+ * every harmonic is congruent to the same value mod m, with that value coprime
+ * to m (otherwise the figure repeats at a coarser turn than m suggests).
+ *
+ * `gcd` of the differences gives the modulus directly — every harmonic is
+ * congruent mod m exactly when m divides every gap between them.
+ */
+export function symmetryFold(harmonics: readonly number[]): number {
+  const whole = harmonics.map((h) => Math.round(h))
+  if (whole.some((h, i) => Math.abs(h - harmonics[i]) > 1e-9)) return 1
+  let g = 0
+  for (const h of whole) g = gcd(g, Math.abs(h - whole[0]))
+  if (g === 0) g = Math.abs(whole[0]) // one distinct harmonic: a plain circle
+  if (g <= 1) return 1
+  // The turn is 2π·c/m for c = h mod m, so the figure only closes onto itself
+  // after m/gcd(c, m) of them.
+  const c = ((whole[0] % g) + g) % g
+  return c === 0 ? g : g / gcd(c, g)
+}
+
+function gcd(a: number, b: number): number {
+  let x = Math.abs(a)
+  let y = Math.abs(b)
+  while (y) {
+    const t = x % y
+    x = y
+    y = t
+  }
+  return x
+}
+
+/**
+ * The weave a design carries, measured: how far out its LONGEST arm sits, in
+ * progression steps from the fundamental.
+ *
+ * Reported rather than remembered, for the same reason `symmetryFold` is — the
+ * control has to describe the design in hand, not the last thing typed into it.
+ * A woven profile peaks twice, at the fundamental and at the weave, and those
+ * two are equal by construction; the LARGER index is the answer, since a peak at
+ * the fundamental alone is what weave 0 means.
+ */
+export function weaveOf(design: EpicycleDesign): number {
+  const count = design.arms.length
+  if (count === 0) return 0
+  const below = Math.floor((count - 1) / 2)
+  const longest = Math.max(...design.arms.map((a) => a.length))
+  let weave = 0
+  design.arms.forEach((arm, k) => {
+    if (arm.length >= longest * 0.999) weave = Math.max(weave, k - below)
+  })
+  return weave
+}
+
+/**
+ * The fastest angle anywhere in the design. An arm's own harmonic, plus — where
+ * it wears a tube — the two sidebands it generates and the out-of-plane motion
+ * at the tube rate itself.
+ */
+export function peakHarmonic(design: EpicycleDesign): number {
+  const harmonics = harmonicsOf(design.arms.map((a) => a.rateX))
+  let peak = 0
+  design.arms.forEach((arm, k) => {
+    peak = Math.max(peak, Math.abs(harmonics[k]))
+    if (arm.tube > 0) {
+      peak = Math.max(
+        peak,
+        Math.abs(arm.rateY),
+        Math.abs(harmonics[k] - arm.rateY),
+        Math.abs(harmonics[k] + arm.rateY),
+      )
+    }
+  })
+  return peak
 }
 
 /**
@@ -839,15 +1197,25 @@ export function describeDesign(
     zHi = Math.max(zHi, p.z)
   }
   const zExtent = path.length > 0 ? zHi - zLo : 0
+  const harmonics = harmonicsOf(design.arms.map((a) => a.rateX))
+  const peak = peakHarmonic(design)
+  // A bead every `step` frames samples an angle once per `step` degrees of
+  // frame time, so RATE_LIMIT/step is the fastest harmonic it can describe.
+  const [step] = trailSampling(design, frames)
+  const nyquist = RATE_LIMIT / step
   return {
     arms: design.arms.length,
     frames,
     closes: closureFrames(design),
-    harmonics: harmonicsOf(design.arms.map((a) => a.rateX)),
+    harmonics,
     spectrum: spectrum(path),
     halfSpan: maxAbs,
     zExtent,
     planar: zExtent < 1e-6,
+    peakHarmonic: peak,
+    nyquist,
+    aliased: design.trail && peak > nyquist,
+    fold: symmetryFold(harmonics),
   }
 }
 
@@ -955,7 +1323,13 @@ function squareWaveArms(terms = 4, base = 12): Arm[] {
   return arms
 }
 
-/** The eight presets, in the desktop combo's own order. */
+/**
+ * The presets. The first eight are the desktop's, in its combo's own order and
+ * with its own values — they are what the parity harness diffs, so nothing here
+ * may reorder or retune them. The rest are web-only, and exist because raising
+ * the arm count to 32 is no use without something already built at that size to
+ * look at: each is a symmetric design that a hand cannot reasonably type.
+ */
 export const PRESET_NAMES = [
   "Jeff's ANTz original",
   'Cardioid (2 terms)',
@@ -965,6 +1339,13 @@ export const PRESET_NAMES = [
   'Inclined orrery (tilt)',
   'Rose in space',
   'Deep chain (6 arms)',
+  'Rosette ×5 (8 arms)',
+  'Snowflake ×6 (12 arms)',
+  'Star ×12 (16 arms)',
+  'Mandala ×7 (24 arms)',
+  'Rose window ×12 (28 arms)',
+  'Great weave ×11 (32 arms)',
+  'Spun rosette ×6 (16 arms, 3-D)',
 ] as const
 
 const PRESETS: Record<string, EpicycleDesign> = {
@@ -1025,6 +1406,82 @@ const PRESETS: Record<string, EpicycleDesign> = {
       defaultArm({ length: 1.4, rateX: -1 }),
     ],
     penSize: 0.8,
+  }),
+
+  // --- web-only, and every one of them built by symmetricArms -------------
+  // Tuned by RENDERING them, not by reasoning: the first set used an amplitude
+  // law in |h| and came out as circles with spikes, which is what led to the
+  // `weave` parameter above. Trail palettes are chosen so the sweep reads as
+  // one pass round the cycle rather than as decoration; Rainbow closes back on
+  // its own first colour, so a closed curve comes out with no seam.
+  //
+  // They run simple to complex on purpose — the point of the last three is
+  // that a hand cannot type them.
+  'Rosette ×5 (8 arms)': defaultDesign({
+    name: 'Rosette_5',
+    arms: symmetricArms({ fold: 5, count: 8, base: 13, decay: 1 }),
+    penSize: 0.7,
+    trailPalette: 2, // Rainbow Heatmap
+  }),
+  'Snowflake ×6 (12 arms)': defaultDesign({
+    name: 'Snowflake_6',
+    arms: symmetricArms({ fold: 6, count: 12, base: 13, decay: 1.1 }),
+    penSize: 0.6,
+    trailPalette: 22, // White → Blue
+    trailPoints: 1080,
+  }),
+  'Star ×12 (16 arms)': defaultDesign({
+    name: 'Star_12',
+    arms: symmetricArms({ fold: 12, count: 16, base: 14, decay: 1.2 }),
+    penSize: 0.5,
+    trailPalette: 10, // Purple → Yellow
+    trailPoints: 1440,
+  }),
+  // The three that need the weave. Their peak term is harmonic 1 + w·fold, so
+  // the pen winds that many times and the passes interleave.
+  'Mandala ×7 (24 arms)': defaultDesign({
+    name: 'Mandala_7',
+    arms: symmetricArms({ fold: 7, count: 24, base: 14, decay: 1.5, weave: 6 }),
+    penSize: 0.35,
+    showArms: false,
+    trailPalette: 8, // Blue → Red
+    trailPoints: 1440,
+  }),
+  // 28 arms and not 32: at fold 12 the window's own top term reaches harmonic
+  // 193 by 32 arms, past what a 360-frame trail can draw. The test says so.
+  'Rose window ×12 (28 arms)': defaultDesign({
+    name: 'Rose_Window_12',
+    arms: symmetricArms({ fold: 12, count: 28, base: 14, decay: 1.5, weave: 3 }),
+    penSize: 0.3,
+    showArms: false,
+    trailPalette: 2, // Rainbow Heatmap
+    trailPoints: 1440,
+  }),
+  // The one that spends the whole budget: 32 arms at the largest fold they can
+  // carry (maxFoldForArms(32) === 11).
+  'Great weave ×11 (32 arms)': defaultDesign({
+    name: 'Great_Weave_11',
+    arms: symmetricArms({ fold: 11, count: 32, base: 14, decay: 1.2, weave: 4 }),
+    penSize: 0.3,
+    showArms: false,
+    trailPalette: 6, // Green → Red, which reads as a sweep where Blue → Green does not
+    trailPoints: 1440,
+  }),
+  // The 3-D one: a tube rate of 6 is a multiple of the fold, so the solid keeps
+  // the plan's symmetry instead of merely looking like it might.
+  'Spun rosette ×6 (16 arms, 3-D)': defaultDesign({
+    name: 'Spun_Rosette_6',
+    arms: symmetricArms({
+      fold: 6,
+      count: 16,
+      base: 14,
+      decay: 1.2,
+      tubeFraction: 0.45,
+      tubeRate: 6,
+    }),
+    penSize: 0.5,
+    trailPalette: 16, // Black → Blue
+    trailPoints: 1440,
   }),
 }
 
@@ -1089,6 +1546,105 @@ export function randomDesign(
     name: name ?? 'Epicycles',
     arms,
     penSize: pyRound(Math.max(0.5, length * 0.8), 3),
+  })
+}
+
+export interface SymmetricRandomOptions {
+  /** Rotational order to build. Clamped to what the arm count can carry. */
+  fold: number
+  count: number
+  /** Let the design leave the plane, on the fold's own tube lattice. */
+  allow3d?: boolean
+  name?: string
+}
+
+/**
+ * A RANDOM design that is still exactly `fold`-fold symmetric.
+ *
+ * The desktop's `randomDesign` (kept beside this, untouched and still
+ * seed-for-seed identical to that app's) rolls every rate independently, which
+ * is why its output reads as a wormy tangle: with the harmonics unconstrained
+ * there is no symmetry to find, and a curve with no symmetry is a scribble
+ * however carefully its amplitudes decay.
+ *
+ * What makes this one work is the decomposition `symmetricHarmonics` documents:
+ * THE HARMONICS CARRY THE SYMMETRY AND THE AMPLITUDES CARRY THE CHARACTER. So
+ * the harmonics are not rolled at all — they are the arithmetic progression the
+ * fold demands — and everything else is free to be random:
+ *
+ * - AMPLITUDES. A decaying power law times a per-arm multiplier. Symmetry does
+ *   not depend on them at all, so this is where the variety lives: the
+ *   amplitude profile is what shapes the petals.
+ * - PHASE, restricted to 0 or 180. A term at 180 contributes with its sign
+ *   flipped, which changes the figure completely — and because −1 is REAL, the
+ *   mirror survives (`z(−t) = conj(z(t))` still holds), so the result keeps the
+ *   full dihedral symmetry of a rose window rather than only the rotation.
+ *   Note the phases go through `ratesForHarmonics` too: a phase composes down
+ *   the chain by the same alternating ladder an angle does, being the constant
+ *   term of the same angle.
+ * - THE TUBE, when 3-D is allowed, at a rate on the fold's own lattice so the
+ *   sidebands stay in the progression and the solid keeps the plan's symmetry.
+ *
+ * Not seeded against anything on the desktop — there is nothing there to match,
+ * this generator being web-only. The same seed and settings still name the same
+ * design here, which is what the Seed field promises.
+ */
+export function randomSymmetricDesign(
+  rng: PythonRandom,
+  options: SymmetricRandomOptions,
+): EpicycleDesign {
+  const count = Math.max(MIN_ARMS, Math.min(MAX_ARMS, Math.round(options.count)))
+  // A fold the arm count cannot carry is not a finer figure, it is an aliased
+  // one — so it is clamped here rather than left to spoil the result.
+  const fold = Math.max(2, Math.min(Math.round(options.fold), maxFoldForArms(count)))
+
+  const base = rng.uniform(11, 15)
+  const decay = rng.uniform(0.9, 1.7)
+  // The weave is the biggest character lever there is — a roll at 0 is a star
+  // and a roll at 5 is a piece of lace — so a third of rolls stay plain and the
+  // rest interleave. Bounded by the window's own half-width, since a peak
+  // outside the progression is just a lopsided star.
+  const maxWeave = Math.max(0, Math.ceil((count - 1) / 2) - 1)
+  const weave = rng.random() < 0.34 ? 0 : rng.randint(1, Math.max(1, Math.min(7, maxWeave)))
+
+  const flips: boolean[] = []
+  const weights: number[] = []
+  for (let k = 0; k < count; k++) {
+    // A modest multiplier on the profile: enough to break the perfect fall-off
+    // into something with its own character, not enough to make it noise.
+    weights.push(rng.uniform(0.65, 1.4))
+    flips.push(rng.random() < 0.35)
+  }
+
+  const arms = symmetricArms({ fold, count, base, decay, weave, weights, flips })
+
+  // One tube for the whole design rather than one per arm: several independent
+  // sidebands stack into haze, where a single one reads as the figure lifting
+  // off the plane and turning.
+  const wantsTube = (options.allow3d ?? true) && rng.random() < 0.5
+  const tubeArm = wantsTube ? rng.randint(0, count - 1) : -1
+  const tubeRate = wantsTube ? fold * rng.choice([1, 1, 2]) : 0
+  const tubeFraction = wantsTube ? rng.uniform(0.3, 0.7) : 0
+  if (wantsTube) {
+    // A tube puts sidebands at h ± rate, so its rate spends the headroom the
+    // harmonics have LEFT — a full window at the largest fold the arm count can
+    // carry already reaches the ceiling, and adding a tube on top of it would
+    // take the design past what the trail can draw. The rate steps down the
+    // lattice to whatever fits, and the tube is dropped when nothing does.
+    const spread = Math.max(...harmonicsOf(arms.map((a) => a.rateX)).map(Math.abs))
+    const headroom = Math.max(0, RATE_LIMIT - spread)
+    const fitted = Math.floor(Math.min(tubeRate, headroom) / fold) * fold
+    if (fitted >= fold) {
+      arms[tubeArm].tube = pyRound(arms[tubeArm].length * tubeFraction, 4)
+      arms[tubeArm].rateY = fitted
+    }
+  }
+
+  const smallest = Math.min(...arms.map((a) => a.length))
+  return defaultDesign({
+    name: options.name ?? `Rosette_${fold}`,
+    arms,
+    penSize: pyRound(Math.max(0.25, smallest * 0.7), 3),
   })
 }
 

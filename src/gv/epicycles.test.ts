@@ -9,26 +9,38 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  alignedPhases,
   buildChannels,
   buildEpicycleNodes,
   closureFrames,
   continuedArm,
   defaultArm,
   defaultDesign,
+  describeDesign,
   designFromJson,
   designToJson,
   formatG,
+  harmonicsOf,
   MAX_TRAIL_POINTS,
   MAX_TUBE_FRACTION,
+  maxFoldForArms,
   chainNodes,
   frameCount,
+  peakHarmonic,
   preset,
   PRESET_NAMES,
+  ratesForHarmonics,
+  RATE_LIMIT,
   slug,
+  symmetricArms,
+  symmetricHarmonics,
+  symmetryFold,
+  weaveOf,
   trailSampling,
   writeChMapCsv,
   writeChTracksCsv,
 } from './epicycles'
+import { paletteIndexCount, resolvePaletteColor } from './colorPalette'
 import type { Vec3 } from './types'
 import { Geometry, NodeType, Topo } from './types'
 
@@ -274,6 +286,211 @@ describe('design housekeeping', () => {
   })
 })
 
+describe('the ladder inverse', () => {
+  it('produces the square wave rates the desktop wrote out longhand', () => {
+    // The one case where both sides of the translation are already known, so it
+    // is the check that the sign convention is the right way round.
+    expect(ratesForHarmonics([1, 3, 5, 7])).toEqual([1, -2, 2, -2])
+  })
+
+  it('round-trips against harmonicsOf for any sequence', () => {
+    for (const h of [
+      [1, 2, 3, 4],
+      [1, -4, 6, -9, 11],
+      [-14, -9, -4, 1, 6, 11, 16, 21],
+      [2.5, -0.5, 1.25],
+      [0, 0, 0],
+    ]) {
+      expect(harmonicsOf(ratesForHarmonics(h))).toEqual(h.map((v) => expect.closeTo(v, 12)))
+    }
+  })
+
+  it('is what makes a phase alignable, phases composing the same way', () => {
+    // alignedPhases runs the wanted composed sequence through the same inverse.
+    expect(alignedPhases(4)).toEqual([0, 90, 90, 90])
+    expect(alignedPhases(6)).toEqual([0, 90, 90, 90, 90, 90])
+    // ...which is exactly the ANTz original's own phase pattern.
+    expect(preset("Jeff's ANTz original").arms.map((a) => a.phaseX)).toEqual(alignedPhases(4))
+  })
+
+  it('a flip asks for 180 and gets it, mod 360', () => {
+    const phases = alignedPhases(4, [false, false, true, false])
+    expect(phases.every((p) => p >= 0 && p < 360)).toBe(true)
+    expect(phases).not.toEqual(alignedPhases(4))
+  })
+})
+
+describe('symmetric harmonics', () => {
+  it('are an arithmetic progression of the fold through 1', () => {
+    expect(symmetricHarmonics(5, 4)).toEqual([-4, 1, 6, 11])
+    expect(symmetricHarmonics(6, 5)).toEqual([-11, -5, 1, 7, 13])
+    expect(symmetricHarmonics(2, 1)).toEqual([1])
+  })
+
+  it('run both ways, so the figure is a rosette and not a spiral', () => {
+    const h = symmetricHarmonics(4, 8)
+    expect(h.some((v) => v < 0)).toBe(true)
+    expect(h.some((v) => v > 0)).toBe(true)
+  })
+
+  it('leave consecutive gaps of exactly the fold, which keeps the rates small', () => {
+    const h = symmetricHarmonics(7, 24)
+    const rates = ratesForHarmonics(h)
+    // One carrier, then a clean alternating ±fold.
+    expect(rates.slice(1).map(Math.abs)).toEqual(Array(23).fill(7))
+    expect(Math.max(...rates.map(Math.abs))).toBeLessThanOrEqual(RATE_LIMIT)
+  })
+
+  it('maxFoldForArms keeps the whole window inside the rate limit', () => {
+    for (const count of [2, 4, 8, 16, 24, 32]) {
+      const fold = maxFoldForArms(count)
+      const h = symmetricHarmonics(fold, count)
+      expect(Math.max(...h.map(Math.abs)), `${count} arms at fold ${fold}`)
+        .toBeLessThanOrEqual(RATE_LIMIT)
+      // ...and it is the LARGEST such fold, not merely a safe one.
+      const tooBig = symmetricHarmonics(fold + 1, count)
+      expect(Math.max(...tooBig.map(Math.abs))).toBeGreaterThan(RATE_LIMIT)
+    }
+  })
+})
+
+describe('measuring symmetry off a design', () => {
+  it('reads the fold back out of the harmonics', () => {
+    for (const fold of [2, 3, 5, 6, 7, 12]) {
+      expect(symmetryFold(symmetricHarmonics(fold, 9))).toBe(fold)
+    }
+  })
+
+  it('says 1 when there is none', () => {
+    expect(symmetryFold([1, 2, 3, 4])).toBe(1)
+    expect(symmetryFold([1, 4, 6])).toBe(1)
+    expect(symmetryFold([1.5, 4, 6])).toBe(1) // fractional rates have no fold
+  })
+
+  it('reports the fold the FIGURE has, not the modulus', () => {
+    // Harmonics all ≡ 2 mod 4 turn onto themselves every half revolution, not
+    // every quarter — the remainder has to be coprime to the modulus.
+    expect(symmetryFold([2, 6, 10])).toBe(2)
+    expect(symmetryFold([3, 9, 15])).toBe(2)
+  })
+
+  it('a single harmonic is a circle, symmetric at its own order', () => {
+    expect(symmetryFold([5])).toBe(5)
+  })
+})
+
+describe('the Nyquist ceiling', () => {
+  it('counts tube sidebands, not just the arms own harmonics', () => {
+    const design = defaultDesign({
+      arms: [defaultArm({ rateX: 3 }), defaultArm({ rateX: 2, tube: 4, rateY: 40 })],
+    })
+    // Arm 2 sits at harmonic 1, and its tube puts a sideband at 1 + 40.
+    expect(peakHarmonic(design)).toBe(41)
+  })
+
+  it('flags a design the trail is too coarse to draw', () => {
+    // 3600 frames at 1440 points is a bead every 2 frames, so the ceiling
+    // halves to 90 — and a harmonic of 120 no longer fits under it.
+    const arms = [defaultArm({ rateX: 120 }), defaultArm({ rateX: 0 })]
+    const coarse = describeDesign(
+      defaultDesign({ arms, frames: 3600, trailPoints: 1440 }),
+      [],
+      3600,
+    )
+    expect(coarse.nyquist).toBe(90)
+    expect(coarse.peakHarmonic).toBe(120)
+    expect(coarse.aliased).toBe(true)
+
+    const fine = describeDesign(defaultDesign({ arms, trailPoints: 1440 }), [], 360)
+    expect(fine.nyquist).toBe(180)
+    expect(fine.aliased).toBe(false)
+  })
+
+  it('says nothing about a design with no trail to alias', () => {
+    const arms = [defaultArm({ rateX: 170 }), defaultArm({ rateX: 0 })]
+    const design = defaultDesign({ arms, frames: 3600, trailPoints: 1440, trail: false })
+    expect(describeDesign(design, [], 3600).aliased).toBe(false)
+  })
+})
+
+describe('the trail palette', () => {
+  it('defaults to the desktop amber and writes no palette metadata', () => {
+    const nodes = build()
+    const plot = nodes.find((n) => n.topo === Topo.Plot)!
+    const beads = nodes.filter((n) => n.parentId === plot.id)
+    expect(beads.every((b) => b.color.r === 255 && b.color.g === 193 && b.color.b === 7)).toBe(true)
+    expect(beads.every((b) => b.paletteId === 0 && b.colorIndex === 0)).toBe(true)
+  })
+
+  it('sweeps a gradient once across the cycle', () => {
+    const design = preset('Cardioid (2 terms)')
+    design.trailPalette = 24 // Greyscale — monotone, so the sweep is checkable
+    const nodes = build(design)
+    const plot = nodes.find((n) => n.topo === Topo.Plot)!
+    const beads = nodes.filter((n) => n.parentId === plot.id)
+    // One pass: the index climbs from 0 to the palette's last, never repeating
+    // the sweep and never running past the end.
+    expect(beads[0].colorIndex).toBe(0)
+    expect(beads[beads.length - 1].colorIndex).toBe(paletteIndexCount(24) - 1)
+    for (let i = 1; i < beads.length; i++) {
+      expect(beads[i].colorIndex).toBeGreaterThanOrEqual(beads[i - 1].colorIndex)
+    }
+    // The literal colour is what renders, and it is the resolved one.
+    for (const bead of beads) {
+      expect(bead.color).toEqual({ ...resolvePaletteColor(24, bead.colorIndex), a: 235 })
+      expect(bead.paletteId).toBe(24)
+    }
+
+    // UNIFORMLY: every palette index gets the same share of the curve to within
+    // one bead. The sweep divides by the bead COUNT and not by the last index,
+    // because the last bead is one sampling step short of closing the loop —
+    // dividing by the index would run the final bead off the end of the palette
+    // and pile an extra one onto whatever the clamp caught.
+    const perIndex = new Map<number, number>()
+    for (const bead of beads) perIndex.set(bead.colorIndex, (perIndex.get(bead.colorIndex) ?? 0) + 1)
+    const shares = [...perIndex.values()]
+    expect(perIndex.size).toBe(paletteIndexCount(24))
+    expect(Math.max(...shares) - Math.min(...shares)).toBeLessThanOrEqual(1)
+  })
+
+  it('places the last bead where it actually is, not at the end of the palette', () => {
+    // The visible form of the same rule, on a trail short enough to read: five
+    // beads sample the cycle at 0, 20, 40, 60 and 80 per cent — the last one is
+    // one step SHORT of closing the loop — so over a 20-colour palette they
+    // take colours 0, 4, 8, 12, 16. Dividing by the last INDEX instead would
+    // stretch them to 0, 5, 10, 15, 19, which claims the final bead sits at the
+    // end of the cycle when it does not, and needs a clamp to say so.
+    const design = preset('Cardioid (2 terms)')
+    design.trailPalette = 0 // 20 Distinct Colors
+    design.trailPoints = 5
+    const nodes = build(design)
+    const plot = nodes.find((n) => n.topo === Topo.Plot)!
+    const beads = nodes.filter((n) => n.parentId === plot.id)
+    expect(beads.map((b) => b.colorIndex)).toEqual([0, 4, 8, 12, 16])
+  })
+
+  it('keeps the self-drawing alpha at zero, so Channels still draws it on', () => {
+    const design = preset('Cardioid (2 terms)')
+    design.trailPalette = 2
+    design.selfDrawing = true
+    const nodes = build(design)
+    const plot = nodes.find((n) => n.topo === Topo.Plot)!
+    const beads = nodes.filter((n) => n.parentId === plot.id)
+    expect(beads.every((b) => b.color.a === 0)).toBe(true)
+    expect(new Set(beads.map((b) => `${b.color.r},${b.color.g},${b.color.b}`)).size)
+      .toBeGreaterThan(10)
+  })
+
+  it('round-trips through the design JSON, and a desktop file has none', () => {
+    const design = preset('Cardioid (2 terms)')
+    design.trailPalette = 10
+    expect(designFromJson(designToJson(design)).trailPalette).toBe(10)
+    // A design written by desktop GlyphViz simply has no such key.
+    const { trail_palette: _omitted, ...desktopStyle } = designToJson(design)
+    expect(designFromJson(desktopStyle).trailPalette).toBeNull()
+  })
+})
+
 describe('formatters', () => {
   it('formatG is Python %g', () => {
     expect(formatG(10)).toBe('10')
@@ -292,5 +509,23 @@ describe('formatters', () => {
     expect(slug('Fourier_V1')).toBe('fourier_v1')
     expect(slug('  My Design  ')).toBe('my_design')
     expect(slug('!!!')).toBe('epicycles')
+  })
+})
+
+describe('measuring the weave off a design', () => {
+  it('reports 0 for a plain rosette and the peak index for a woven one', () => {
+    for (const weave of [0, 1, 3, 6]) {
+      const design = defaultDesign({
+        arms: symmetricArms({ fold: 6, count: 20, base: 13, decay: 1.3, weave }),
+      })
+      expect(weaveOf(design), `weave ${weave}`).toBe(weave)
+    }
+  })
+
+  it('reads a hand-built design too, since it is a measurement', () => {
+    const design = defaultDesign({ arms: [defaultArm({ length: 1 }), defaultArm({ length: 9 })] })
+    // Two arms: below = 0, so the longest arm sits at progression index 1.
+    expect(weaveOf(design)).toBe(1)
+    expect(weaveOf(defaultDesign({ arms: [] }))).toBe(0)
   })
 })

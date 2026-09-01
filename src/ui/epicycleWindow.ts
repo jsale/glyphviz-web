@@ -74,13 +74,19 @@ import {
   MAX_ARMS,
   MAX_CLOSURE_FRAMES,
   MAX_TRAIL_POINTS,
+  maxFoldForArms,
+  weaveOf,
   MIN_ARMS,
   preset,
   PRESET_NAMES,
   pyRound,
   randomDesign,
+  randomSymmetricDesign,
+  RATE_LIMIT,
+  symmetricArms,
 } from '../gv/epicycles'
 import type { Arm, EpicycleDesign } from '../gv/epicycles'
+import { PALETTE_NAMES } from '../gv/colorPalette'
 import { PythonRandom } from '../gv/pythonRandom'
 import { traceEpicyclePath } from '../render/epicyclePath'
 import type { Vec3 } from '../gv/types'
@@ -92,6 +98,15 @@ const PREVIEW_DELAY_MS = 350
 
 /** Seed field range: CPython's own `random.randrange(2 ** 31)`. */
 const MAX_SEED = 2 ** 31 - 1
+
+/**
+ * Rotational orders the Symmetry control offers. 1 is "off" — the free,
+ * desktop-parity Randomize, and no constraint on a hand-typed rate. The top is
+ * 16 because a fold that high already wants 16+ arms to show more than one ring
+ * of petals, and `maxFoldForArms` clamps it down where the arm count cannot
+ * carry it.
+ */
+const MAX_FOLD = 16
 
 interface ArmColumn {
   label: string
@@ -126,14 +141,16 @@ const ARM_COLUMNS: ArmColumn[] = [
   {
     label: 'Rate X',
     key: 'rateX',
-    min: -60,
-    max: 60,
+    min: -RATE_LIMIT,
+    max: RATE_LIMIT,
     decimals: 2,
     step: 1,
     title:
       'Orbit angle, degrees per frame. This is what sets the harmonic,\n' +
       'through h_k = h_(k-1) + (-1)^(k-1) * r_k — the frame flips at every\n' +
-      'level, so the MAGNITUDES add. Whole numbers close in 360 frames.',
+      'level, so the MAGNITUDES add. Whole numbers close in 360 frames.\n' +
+      'Symmetry ▸ Apply writes this whole column for you: a rosette wants\n' +
+      'one carrier followed by an alternating ±fold.',
   },
   {
     label: 'Phase X',
@@ -161,8 +178,8 @@ const ARM_COLUMNS: ArmColumn[] = [
   {
     label: 'Rate Y',
     key: 'rateY',
-    min: -60,
-    max: 60,
+    min: -RATE_LIMIT,
+    max: RATE_LIMIT,
     decimals: 2,
     step: 1,
     title: 'Tube angle, degrees per frame. Does nothing while Tube is 0.',
@@ -219,7 +236,12 @@ export class EpicycleWindow {
   private readonly seedInput: HTMLInputElement
   private readonly allow3d: HTMLInputElement
   private readonly armCount: HTMLInputElement
+  private readonly fold: HTMLInputElement
+  private readonly weave: HTMLInputElement
+  private readonly foldApply: HTMLButtonElement
+  private readonly foldNote: HTMLDivElement
   private readonly tableBody: HTMLTableSectionElement
+  private readonly trailPalette: HTMLSelectElement
   private readonly penSize: HTMLInputElement
   private readonly showRings: HTMLInputElement
   private readonly showArms: HTMLInputElement
@@ -337,13 +359,94 @@ export class EpicycleWindow {
     this.armCount.addEventListener('change', () => this.onArmCount())
     scroll.appendChild(windowRow('Arms', this.armCount))
 
+    // --- Symmetry ---------------------------------------------------------
+    // The answer to "setting hundreds of parameters": at 32 arms nobody is
+    // typing 224 numbers, and the ones worth having are not independent anyway.
+    // A rosette's harmonics are an arithmetic progression, so ONE number — the
+    // fold — determines the whole Rate X column, and Apply writes it.
+    this.fold = el('input', {
+      type: 'number',
+      min: '1',
+      max: String(MAX_FOLD),
+      step: '1',
+      value: '1',
+      title:
+        'Rotational order to build: 6 makes a six-fold figure, 12 a rose\n' +
+        'window. 1 is off — no constraint at all.\n\n' +
+        'It is exact, not an approximation: a curve turns onto itself every\n' +
+        '1/fold of a revolution precisely when every harmonic leaves the same\n' +
+        'remainder mod the fold, so the harmonics run 1, 1±fold, 1±2·fold, …\n' +
+        'Phases of 0 or 180 add the MIRROR on top, giving the full dihedral\n' +
+        'symmetry of a rose window.',
+    })
+    // The second knob, and the difference between a star and a piece of lace.
+    // At 0 the biggest term is the fundamental, so the pen goes round once and
+    // the figure is a clean m-pointed star however many arms are piled on; past
+    // 0 the biggest term is a high harmonic, the pen winds that many times, and
+    // the passes interleave. Measured — see `symmetricArms`.
+    this.weave = el('input', {
+      type: 'number',
+      min: '0',
+      max: '8',
+      step: '1',
+      value: '0',
+      title:
+        'How far out the longest arm sits, in steps of the fold.\n\n' +
+        '0 — the longest arm IS the fundamental: the pen goes round once and\n' +
+        'the figure is a clean star, however many arms it has.\n' +
+        'Higher — the longest arm is a fast harmonic, so the pen winds that\n' +
+        'many times before the cycle closes and the passes interleave. This is\n' +
+        'where the lace comes from, and it needs arms to spend: try 3 or 4 at\n' +
+        '24 arms and up.',
+    })
+    this.weave.addEventListener('change', () => this.syncFoldNote())
+    this.foldApply = el('button', {
+      type: 'button',
+      textContent: 'Apply',
+      title:
+        'Re-lay every arm as a rosette of this order, at the current arm\n' +
+        'count: harmonics from the progression, amplitudes falling as 1/|h|,\n' +
+        'phases zeroed.\n\n' +
+        'This is how you build a big design — set Arms to 32 and press this.\n' +
+        'Adding arms one at a time halves each length and the deep ones\n' +
+        'vanish, which is right for a short chain and useless for a long one.',
+    })
+    this.foldApply.addEventListener('click', () => this.applySymmetry())
+    this.fold.addEventListener('change', () => this.syncFoldNote())
+    const foldRow = el('div', { className: 'epicycle-inline' })
+    foldRow.append(this.fold, el('span', { textContent: 'weave' }), this.weave, this.foldApply)
+    scroll.appendChild(windowRow('Symmetry', foldRow))
+    this.foldNote = el('div', { className: 'composer-note' })
+    scroll.appendChild(this.foldNote)
+
     const tableWrap = el('div', { className: 'epicycle-table-wrap' })
     const table = el('table', { className: 'epicycle-table' })
     const head = el('thead')
     const headRow = el('tr')
     headRow.appendChild(el('th', { textContent: '#' }))
     for (const column of ARM_COLUMNS) {
-      headRow.appendChild(el('th', { textContent: column.label, title: column.title }))
+      // The label, plus a fill button — the other half of the "hundreds of
+      // parameters" problem. Length, Phase, Tube, Rate Y and Tilt are the
+      // columns a symmetric design wants UNIFORM, and one click beats 32 edits.
+      const cell = el('th', { title: column.title })
+      cell.append(el('span', { textContent: column.label }))
+      const fill = el('button', {
+        type: 'button',
+        className: 'epicycle-fill',
+        // A plain U+2193, not one of the prettier arrow-to-bar glyphs: this
+        // app has been caught once already assuming a browser's fallback font
+        // carries a symbol (the wrist panel's transport, roadmap 9 P2).
+        textContent: '↓',
+        title:
+          `Set every arm's ${column.label} to arm 1's.\n` +
+          (column.key === 'rateX'
+            ? 'On Rate X this flattens the ladder to one alternating harmonic —\n' +
+              'usually you want Symmetry ▸ Apply instead.'
+            : 'Uniform down the chain, which is what a symmetric design wants.'),
+      })
+      fill.addEventListener('click', () => this.fillColumn(column))
+      cell.append(fill)
+      headRow.appendChild(cell)
     }
     head.appendChild(headRow)
     this.tableBody = el('tbody')
@@ -400,6 +503,28 @@ export class EpicycleWindow {
     const trailRow = el('div', { className: 'epicycle-inline' })
     trailRow.append(trailLabel, el('span', { textContent: 'points:' }), this.trailPoints)
     scroll.appendChild(windowRow('', trailRow))
+
+    // The trail is the one place in this scene where position means TIME — the
+    // pen visits the beads in order — so a palette swept once across the cycle
+    // says WHEN each part of the figure was drawn, which is exactly what a
+    // complex closed curve hides. The beads carry palette_id and color_index as
+    // well as the literal colour, so they arrive as ordinary palette-authored
+    // nodes that the Properties panel and the = / − keys understand.
+    this.trailPalette = el('select', {
+      title:
+        'Sweep a GlyphViz palette along the trail, start of the cycle to end.\n' +
+        'Solid is the plain amber, which is what desktop GlyphViz draws.\n' +
+        'Rainbow Heatmap closes back on its own first colour, so a closed\n' +
+        'curve comes out with no seam.',
+    })
+    this.trailPalette.appendChild(el('option', { value: '', textContent: 'Solid (amber)' }))
+    for (const id of Object.keys(PALETTE_NAMES).map(Number).sort((a, b) => a - b)) {
+      this.trailPalette.appendChild(
+        el('option', { value: String(id), textContent: `${id} · ${PALETTE_NAMES[id]}` }),
+      )
+    }
+    this.trailPalette.addEventListener('change', () => this.onChange())
+    scroll.appendChild(windowRow('Trail color', this.trailPalette))
 
     this.selfDrawing = el('input', { type: 'checkbox' })
     const selfLabel = el('label', {
@@ -545,11 +670,103 @@ export class EpicycleWindow {
       this.showArms.checked = design.showArms
       this.trail.checked = design.trail
       this.trailPoints.value = String(Math.trunc(design.trailPoints))
+      this.trailPalette.value = design.trailPalette === null ? '' : String(design.trailPalette)
       this.selfDrawing.checked = design.selfDrawing
       this.framesInput.value = String(design.frames ?? 0)
+      // The fold is MEASURED off the arms rather than remembered, so loading a
+      // design (or a preset, or a hand-edited file) shows the symmetry it
+      // actually has instead of whatever the box was last set to.
+      const measured = describeDesign(design, [], 1).fold
+      this.fold.value = String(Math.min(MAX_FOLD, measured))
+      this.weave.value = String(Math.min(8, weaveOf(design)))
+      this.syncFoldNote()
     } finally {
       this.loading = false
     }
+  }
+
+  /** The Symmetry row's own state line — what the number will do if applied. */
+  private syncFoldNote(): void {
+    const asked = Math.round(Number(this.fold.value) || 1)
+    const count = this.arms.length
+    const usable = maxFoldForArms(count)
+    this.foldApply.disabled = asked < 2
+    if (asked < 2) {
+      this.foldNote.textContent = 'Off — Randomize rolls every rate freely.'
+      return
+    }
+    const applied = Math.min(asked, usable)
+    const weave = Math.max(0, Math.round(Number(this.weave.value) || 0))
+    const petals = `${applied}-fold, ${count} terms`
+    const shape =
+      weave > 0
+        ? `woven on harmonic ${1 + weave * applied}`
+        : `harmonics 1, 1±${applied}, 1±${2 * applied}, …`
+    // "Apply builds", because this row describes the PENDING action. The fold
+    // and weave boxes are filled from the design on load, but the moment either
+    // is touched they are a request rather than a report — and what the design
+    // in hand actually IS gets measured and said in the readout below.
+    this.foldNote.textContent =
+      applied === asked
+        ? `Apply builds ${petals} — ${shape}`
+        : `Apply builds ${petals} — ${asked} needs fewer arms to stay inside ±${RATE_LIMIT}.`
+  }
+
+  /** Set every arm's value in one column to arm 1's. */
+  private fillColumn(column: ArmColumn): void {
+    if (this.arms.length === 0) return
+    const value = this.arms[0][column.key]
+    for (const arm of this.arms) arm[column.key] = value
+    this.loading = true
+    try {
+      this.rebuildTable()
+    } finally {
+      this.loading = false
+    }
+    this.host.status(
+      `Epitrochoid Generator: set ${column.label} to ${formatG(value)} on all ` +
+        `${this.arms.length} arms.`,
+    )
+    this.onChange()
+  }
+
+  /**
+   * Re-lay the current arms as a rosette of the chosen order, keeping the arm
+   * count and the scene dressing. The tube is carried across from whichever arm
+   * had one, snapped onto the fold's lattice so the solid keeps the symmetry.
+   */
+  private applySymmetry(): void {
+    const asked = Math.round(Number(this.fold.value) || 0)
+    if (asked < 2) return
+    const count = this.arms.length
+    const applied = Math.min(asked, maxFoldForArms(count))
+    const tubeArm = this.arms.find((a) => a.tube > 0)
+    const base = Math.max(...this.arms.map((a) => a.length), 1)
+    this.arms = symmetricArms({
+      fold: applied,
+      count,
+      base,
+      // 1.3 rather than 1: measured across the presets as the falloff that
+      // reads as a crisp figure at any arm count, where 1 leaves the far terms
+      // strong enough to fuzz the line.
+      decay: 1.3,
+      weave: Math.max(0, Math.round(Number(this.weave.value) || 0)),
+      tubeFraction: tubeArm ? Math.min(0.9, tubeArm.tube / Math.max(1e-6, tubeArm.length)) : 0,
+      tubeRate: tubeArm ? tubeArm.rateY : 0,
+    })
+    this.loading = true
+    try {
+      this.fold.value = String(applied)
+      this.rebuildTable()
+      this.syncFoldNote()
+    } finally {
+      this.loading = false
+    }
+    this.host.status(
+      `Epitrochoid Generator: laid ${count} arms as a ${applied}-fold rosette` +
+        (applied === asked ? '.' : ` (${asked} would alias at this arm count).`),
+    )
+    this.doPreview(true)
   }
 
   /** The design the controls currently describe. */
@@ -565,6 +782,7 @@ export class EpicycleWindow {
       armRatio: base.armRatio,
       trail: this.trail.checked,
       trailPoints: Number(this.trailPoints.value),
+      trailPalette: this.trailPalette.value === '' ? null : Number(this.trailPalette.value),
       selfDrawing: this.selfDrawing.checked,
       beadGroup: base.beadGroup,
       frames: Number(this.framesInput.value) || null,
@@ -614,6 +832,7 @@ export class EpicycleWindow {
     this.loading = true
     try {
       this.rebuildTable()
+      this.syncFoldNote()
     } finally {
       this.loading = false
     }
@@ -625,15 +844,31 @@ export class EpicycleWindow {
     this.doPreview(true)
   }
 
+  /**
+   * Roll a design. With Symmetry off this is the desktop's own generator,
+   * seed for seed; with a fold set it is `randomSymmetricDesign`, which rolls
+   * everything EXCEPT the harmonics — those are what the symmetry is, and the
+   * reason the free version reads as a wormy tangle is that it rolls them too.
+   */
   private randomize(): void {
     const seed = Math.floor(Math.random() * (MAX_SEED + 1))
     this.seedInput.value = String(seed)
-    const design = randomDesign(
-      new PythonRandom(seed),
-      Math.round(Number(this.armCount.value)),
-      this.allow3d.checked,
-      `Epitrochoid_${seed}`,
-    )
+    const count = Math.round(Number(this.armCount.value))
+    const asked = Math.round(Number(this.fold.value) || 0)
+    const design =
+      asked >= 2
+        ? randomSymmetricDesign(new PythonRandom(seed), {
+            fold: asked,
+            count,
+            allow3d: this.allow3d.checked,
+            name: `Rosette_${Math.min(asked, maxFoldForArms(count))}_${seed}`,
+          })
+        : randomDesign(
+            new PythonRandom(seed),
+            count,
+            this.allow3d.checked,
+            `Epitrochoid_${seed}`,
+          )
     // Keep the scene-dressing choices the user has made; only the arms and the
     // pen are what Randomize is for.
     const current = this.designFromUi()
@@ -641,8 +876,13 @@ export class EpicycleWindow {
     design.showArms = current.showArms
     design.trail = current.trail
     design.trailPoints = current.trailPoints
+    design.trailPalette = current.trailPalette
     design.selfDrawing = current.selfDrawing
     this.loadDesign(design)
+    // loadDesign measures the fold off the arms, which for a free roll is
+    // usually 1 — the box is the user's setting, so put it back.
+    this.fold.value = String(asked)
+    this.syncFoldNote()
     this.doPreview(true)
   }
 
@@ -693,7 +933,15 @@ export class EpicycleWindow {
       this.readout.appendChild(div)
     }
 
-    const ladder = info.harmonics.map((h) => formatG(h)).join(' → ')
+    // Every rung at a handful of arms; at 32 the full ladder wraps to four
+    // lines and pushes the preview off the bottom, so it elides the middle —
+    // the ends are what say what the design spans, and the count says the rest.
+    const rungs = info.harmonics.map((h) => formatG(h))
+    const ladder =
+      rungs.length <= 10
+        ? rungs.join(' → ')
+        : `${rungs.slice(0, 4).join(' → ')} → … → ${rungs.slice(-2).join(' → ')}` +
+          ` (${rungs.length} terms)`
     const closes =
       info.closes !== null
         ? `closes in ${info.closes} frames`
@@ -717,10 +965,37 @@ export class EpicycleWindow {
     line('Spectrum', spectrum)
 
     const shape = info.planar ? 'planar (z = 0)' : `3-D, ${info.zExtent.toFixed(1)} units deep`
+    // The fold is MEASURED off the harmonics, so it reports the symmetry a
+    // hand-typed design turns out to have as readily as one Apply built.
+    const symmetry = info.fold > 1 ? `${info.fold}-fold symmetric` : 'no rotational symmetry'
     line(
       'Figure',
-      `${shape}, half-span ${info.halfSpan.toFixed(1)}  |  ${nodeCount} nodes`,
+      `${shape}, ${symmetry}, half-span ${info.halfSpan.toFixed(1)} | ${nodeCount} nodes`,
     )
+
+    // The one real ceiling on how complex a design can be, and it is NYQUIST
+    // rather than the machine: a bead every `step` frames cannot describe an
+    // angle faster than 180/step, so past that the beads still land ON the
+    // curve while the polyline between them draws something else entirely.
+    // This is the honest version of 'that many arms might be too many' -
+    // nothing crashes, and what DOES degrade is measurable and says its own
+    // remedy.
+    if (info.aliased) {
+      const warn = el('div')
+      warn.appendChild(
+        el('span', {
+          className: 'epicycle-warn',
+          textContent:
+            `Harmonic ${formatG(info.peakHarmonic)} is past the ` +
+            `${formatG(info.nyquist)} this trail can sample`,
+        }),
+      )
+      warn.append(
+        ' - raise Trail points, or lower Frames. The beads sit on the curve; ' +
+          'the line between them does not.',
+      )
+      this.readout.appendChild(warn)
+    }
   }
 
   renderFrame(dtMs: number): void {

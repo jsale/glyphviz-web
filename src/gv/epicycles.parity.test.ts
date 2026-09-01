@@ -131,6 +131,9 @@ function designOf(dict: Record<string, unknown>): EpicycleDesign {
     armRatio: Number(dict.arm_ratio),
     trail: Boolean(dict.trail),
     trailPoints: Number(dict.trail_points),
+    // The desktop has no such field, so every parity case is the plain amber
+    // trail — which is exactly what has to keep matching.
+    trailPalette: null,
     selfDrawing: Boolean(dict.self_drawing),
     beadGroup: Number(dict.bead_group),
     frames: (dict.frames as number | null) ?? null,
@@ -306,7 +309,15 @@ describe('epicycle parity: a seed names the same design', () => {
         c.allow_3d,
         `Epitrochoid_${c.seed}`,
       )
-      expect(designToJson(design)).toEqual(c.design)
+      // The web design carries ONE key the desktop's has no notion of, the
+      // trail palette — so the diff is over the desktop's own keys, and the
+      // extra one is checked separately to be absent-in-effect. A generator
+      // that started inventing palettes would be changing what a seed names.
+      const json = designToJson(design)
+      const { trail_palette: palette, ...desktopKeys } = json
+      expect(desktopKeys).toEqual(c.design)
+      expect(palette).toBeNull()
+      expect(Object.keys(json).filter((k) => !(k in c.design))).toEqual(['trail_palette'])
     })
   }
 })

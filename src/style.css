@@ -1386,7 +1386,18 @@ canvas {
 
 #epicycle-window .glyph-preview {
   flex: 0 1 240px;
-  min-height: 150px;
+  min-height: 180px;
+}
+
+/* `flex: 0 0 auto` is load-bearing, not tidiness — the same trap
+   `.composer-levels` documents. `.composer-note` carries `overflow: hidden`,
+   which sets a flex item's AUTOMATIC minimum size to zero, so as a child of
+   this scrolling flex column it was crushed to a height of 0 the moment the
+   controls overflowed: the Symmetry line had its text, a width of 524px, and
+   nothing on screen at all. Found by looking at the window, not by measuring
+   the text. */
+#epicycle-window .composer-note {
+  flex: 0 0 auto;
 }
 
 #epicycle-window .hud-create-row span:first-child {
@@ -1453,11 +1464,47 @@ canvas {
 
 /* Wide content scrolls inside its own box rather than widening the window:
    seven number columns do not fit a narrow one, and the alternative is a
-   window that cannot be dragged small. */
+   window that cannot be dragged small.
+
+   It scrolls VERTICALLY past about ten arms too, with the header sticky. At 32
+   arms the table is ~900px tall on its own, and letting it push the Scene group
+   and the preview off the bottom would trade one unreachable control for
+   another — the arms are what you scroll THROUGH, so they get their own box.
+   The header has to stay put or a column's meaning is lost halfway down. */
 .epicycle-table-wrap {
   flex: 0 0 auto;
   margin: 2px 0 4px;
-  overflow-x: auto;
+  max-height: 230px;
+  overflow: auto;
+}
+
+.epicycle-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0d101a;
+}
+
+/* One click writes arm 1's value down the whole column. Small and quiet: it
+   sits in a header cell and must not push the columns wider than the number
+   fields below them. */
+.epicycle-fill {
+  margin-left: 3px;
+  padding: 0 3px;
+  border: 1px solid #3a4256;
+  border-radius: 3px;
+  background: none;
+  color: #9aa3b8;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.2;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.epicycle-fill:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #eef2ff;
 }
 
 .epicycle-table {
