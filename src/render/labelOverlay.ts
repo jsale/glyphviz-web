@@ -11,6 +11,7 @@ import * as THREE from 'three'
 import { linkChildId } from '../gv/links'
 import { NodeType, TAG_DEFAULT_TEXT_RGB, TAG_SHADOW_RGBA, TAG_TEXT_ALPHA, TagColorMode } from '../gv/types'
 import type { GvNode, Rgb } from '../gv/types'
+import type { PointPositions } from './pointCloudOverlay'
 
 /**
  * Frame-rate safety valve, matching the desktop: in show-all mode at most 500
@@ -73,6 +74,47 @@ export interface LabelOverlayState {
    * way the desktop's `_tag_painter` trusts `_tag_font_size()`.
    */
   tagFontSize: number
+  /**
+   * Where a Point Cloud point sits, since it has no frame to ask
+   * (render/pointCloudOverlay.ts). Null for a scene without clouds, which is
+   * the state every existing scene is in.
+   */
+  points?: PointPositions | null
+  /**
+   * Ids of the Point Cloud parents, for the "is this node a point?" test below.
+   * A handful at most, so the test is one Set lookup per candidate.
+   */
+  cloudParents?: ReadonlySet<number>
+}
+
+/**
+ * The scene's taggable nodes: everything except the points inside a cloud that
+ * are not individually pinned. Recompute on scene rebuild, and pass THIS to
+ * `placeLabels` rather than the raw node list.
+ *
+ * It is a performance filter and a load-bearing one. The label pass runs every
+ * frame over the whole node list, and at a cloud's scale that dominates the
+ * frame outright: the desktop measured `_project_tagged_nodes` costing 109 ms
+ * of a 111 ms frame on a 442,768-node scene — 97% of it — for a loop whose every
+ * iteration immediately skipped the node it was looking at. Filtering first took
+ * that scene from 9 fps to about 400.
+ *
+ * Filtering on cloud MEMBERSHIP rather than on `text` is what makes it safe to
+ * cache: membership changes only when the scene does, whereas `text` changes on
+ * every keystroke in the inspector — the same reason `pinnedTagNodes` is
+ * deliberately not ANDed with `text`.
+ *
+ * A point that PINS itself with `show_text` is kept, because a pin outranks
+ * every scene-wide tag setting. A point that is merely SELECTED cannot be baked
+ * in — selection does not rebuild the scene — so the caller adds those back per
+ * frame, exactly as the desktop does.
+ */
+export function taggableNodes(
+  nodes: readonly GvNode[],
+  cloudParents: ReadonlySet<number>,
+): readonly GvNode[] {
+  if (cloudParents.size === 0) return nodes
+  return nodes.filter((n) => !cloudParents.has(n.parentId) || n.showText !== 0)
 }
 
 /** The scene's pinned-label nodes, in file order. Recompute on scene rebuild. */
@@ -116,6 +158,7 @@ function labelAnchor(
   node: GvNode,
   frames: ReadonlyMap<number, THREE.Object3D>,
   out: THREE.Vector3,
+  points?: PointPositions | null,
 ): void {
   if (node.type === NodeType.Link) {
     const a = frames.get(node.parentId)
@@ -128,8 +171,13 @@ function labelAnchor(
     }
   }
   const frame = frames.get(node.id)
-  if (frame) frame.getWorldPosition(out)
-  else out.set(node.translate.x, node.translate.y, node.translate.z)
+  if (frame) {
+    frame.getWorldPosition(out)
+    return
+  }
+  // A cloud point has no frame at all; its position lives in the batch.
+  if (points?.pointPosition(node.id, out)) return
+  out.set(node.translate.x, node.translate.y, node.translate.z)
 }
 
 /**
@@ -177,8 +225,23 @@ export function placeLabels(
     if (node.text === '') return false
     if (nonVisual(node.type)) return false
     if (node.hide !== 0 && !state.showHidden) return false
+    // A point inside a Point Cloud. In the unscoped all-tags mode a 100k-point
+    // cloud would otherwise hand this pass 100k labels to lay out: the frame cap
+    // would hold the frame rate, but the result is an unreadable wall of text
+    // over the cloud, and WHICH 500 labels survived would be file order rather
+    // than anything the user chose. So a point labels only when it is
+    // individually pinned or selected — the two cases where the label is a
+    // deliberate act. Selected-only mode (the default) already behaves this way
+    // for every node, so this changes nothing there.
+    if (
+      state.cloudParents?.has(node.parentId) &&
+      node.showText === 0 &&
+      !state.isSelected(node.id)
+    ) {
+      return false
+    }
 
-    labelAnchor(node, frames, world)
+    labelAnchor(node, frames, world, state.points)
     clip.set(world.x, world.y, world.z, 1).applyMatrix4(viewProjection)
     const w = clip.w
     if (w <= 0) return false // behind the camera

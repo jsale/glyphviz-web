@@ -55,7 +55,8 @@ something to decide now).
    (plain Cartesian/None), orbit camera.~~ Done — `src/render/`, verified
    live on iluvdata.org.
 4. ~~Cross-implementation verification harness + topology placement math.~~
-   Done — all 18 topologies in `src/render/topology.ts`;
+   Done — all 19 topologies in `src/render/topology.ts` (18 of them at the
+   time; Point Cloud joined in 2026-09-07, see 6kk);
    `tools/dump_world_transforms.py` dumps the desktop engine's transforms,
    `src/render/parity.test.ts` diffs all 109 Topology_Example nodes at 1e-6.
    Regenerate the vendored JSON when either side's placement math changes.
@@ -2564,6 +2565,173 @@ something to decide now).
           the weave box read 0 for a design built with weave 3, which is why
           `weaveOf` measures it off the arms the way `symmetryFold` measures the
           fold.
+   kk. Point Cloud topology, phase W1 — the renderer (shipped 2026-09-07,
+      Jeff's request — a port of the renderer half of desktop `27cdb75`, whose
+      import half is phase W2 and a session of its own): **`Topo.PointCloud`
+      (18), a parent whose children draw as ONE batched point array instead of
+      a glyph apiece.** `TOPO_MAX` 17 → 18. (The desktop counts the other way —
+      its `TOPO_COUNT` is 19 — so the two numbers never match and neither is
+      wrong.)
+      - It is the ONLY topology that REPLACES its children's rendering rather
+        than decorating it: a Plot parent adds a polyline over its children's
+        glyphs and a Surface parent adds a quad mesh over them, but a cloud
+        parent's children draw no glyphs at all. Placement is untouched — plain
+        Cartesian, exactly as None/Plane/Video/Plot/Surface, so `topoOffset`
+        needed no case and a build predating the id opens a `topo=18` file and
+        places every point correctly. It just draws them the slow way.
+      - NO NEW COLUMN, which is the packaging decision the link geometries and
+        the interior ones already set: a cloud travels in the ordinary node CSV,
+        so it saves, loads, merges, exports and animates for free. `ratio` on
+        the PARENT is the point size in pixels (`ratio × 20`, clamped 1–64, the
+        desktop's own conversion and its own clamp — GL silently ignores a
+        `glPointSize` past its implementation maximum, and so does WebGL).
+      - **THE ARCHITECTURAL DECISION, and the whole port turns on it: a cloud
+        point gets NO Object3D.** The desktop's per-point cost is a vertex; ours
+        would be THREE Object3Ds (frame, glyph, pick proxy), and roadmap 6m had
+        already measured that wall from the other side — `Scene.updateMatrixWorld`
+        recomposes every one of them per frame BEFORE the renderer reads
+        `visible`. Measured here on the same 57,600 rows loaded twice, once as a
+        cloud and once with the parent's topo set to 0:
+        - **16 Object3Ds against 172,813**, 4 frames against 57,604
+        - **8 draw calls against 57,607**
+        - **93.6 fps / 1.1 ms CPU against 4.4 fps / 224.6 ms** — 21× the frame
+          rate and 204× less CPU per frame, same camera, same rows
+        - 0.5 s to open against 13.7 s
+        So a cloud is the SECOND source in this app of a node that is real in
+        every other way and has no frame, after the `\` draw limit — and unlike
+        that one it is a node you are meant to click, label and edit, which is
+        what made the eight ripples below the actual work.
+      - `src/gv/pointCloud.ts` is the data half (the desktop's `point_cloud.py`,
+        no THREE and no DOM, as that one has no Qt and no OpenGL);
+        `src/render/pointCloudOverlay.ts` is the THREE half, structurally
+        `linkOverlay.ts` and `topologyOverlay.ts` again — attach `group` under
+        the root, `update()` per frame, `setResolution` on resize — with the
+        same world-space-vertices trade. The desktop anticipated exactly this:
+        its module docstring says the batch is built as DATA there so "a future
+        non-GL presentation layer (OpenXR, three.js) can take exactly the same
+        arrays and hand them to a VBO".
+      - Points are placed by `framePosition`, the scene builder's OWN rule,
+        which moved to `src/render/framePlacement.ts` so both can import it —
+        restating it in the overlay would have been a second opinion about
+        placement (the thing `selectionPlacement.ts` exists to prevent) and
+        importing it back out of buildScene would have been an ESM cycle, which
+        this app has been broken by once (6s). `drawScaleCorrection` moved to
+        `baseScale.ts` for the same two reasons, and belongs there anyway: it is
+        the second half of the expression `baseScale` and `scaleFloor` are the
+        first half of.
+      - THE EIGHT RIPPLES, each a place that asks "where is node N?" and until
+        now got an Object3D:
+        - PICKING is a ray-to-point pass in the pixels the points are DRAWN at
+          (`CloudPicker`), modelled on `LinkPicker`: the tolerance is re-derived
+          from pixels to world units at each candidate's own depth, or a distant
+          cloud is unclickable and a near one swallows the scene. It pushes into
+          the raycaster's own sorted list, so nearest still wins, a solid World
+          Grid still occludes, and a glyph standing in front of a cloud still
+          takes the click (driven). O(points) per CLICK and never per frame.
+          This is where the desktop draws a per-point colour-ID pick pass; the
+          invariant it states for that pass — "the pick pass draws what the
+          visible pass draws" — is expressed here as the same pixel width.
+        - SELECTION halos are drawn for a selected point, as the desktop's
+          `_draw_selected_outlines` does (it reads `node_draw_data`, which is
+          data rather than a display list). `Selection` grew a `PointHaloSource`
+          and a second slot array, because "no frame" had meant "not in the
+          scene at all" and now does not. Divergence: the box ignores the point's
+          own `rotate_*` — a point draws no shape for a rotation to act on, and a
+          quaternion per point to spin an invisible box is storage spent on
+          nothing. Its SCALE is read (that is all `scale_*` is read for on a
+          point) and follows the Global Scale and the minimum-size toggle live.
+        - LABELS: a point labels only when pinned (`show_text`) or SELECTED —
+          the desktop's rule, and its reason is that the all-tags mode would
+          otherwise hand the pass 100k labels, where the 500-per-frame cap keeps
+          the frame rate but WHICH 500 survive is file order rather than
+          anything the user chose. The performance half is ported too, and it is
+          load-bearing: `taggableNodes` filters the points out BEFORE the loop,
+          where the desktop measured `_project_tagged_nodes` costing 109 ms of a
+          111 ms frame on a 442k-node scene — 97% of it — for a loop that
+          skipped every node it looked at. Selected points cannot be baked into
+          that cached list (selection does not rebuild the scene), so they are
+          gathered per frame, as there. Verified against its own counterfactual:
+          12,715 px of label ink as a cloud against 167,917 px with the same 192
+          labelled rows drawn as glyphs.
+        - The `\` DRAW LIMIT counts a cloud as ONE unit and never decimates it —
+          its parent is what the limit counts, so halving a scene holding a scan
+          thins the glyphs around it and leaves the scan alone. Kept exactly: the
+          desktop's DENOMINATOR still counts every point, so on a scene that is
+          mostly one cloud the first several presses change nothing on screen
+          while the readout falls. That is its arithmetic, and matching it is
+          what lets a number read here compare with one read there.
+        - REGION SELECT sweeps points at their own centres, through
+          `rectSelect`'s existing rule with the position read from the batch —
+          the same centre-projection equivalent of the desktop's pixel sweep that
+          links already take. 49,144 points swept and haloed in the drive.
+        - CHANNELS / RATES: a point a binding or a rate field can move is
+          re-derived from its row each frame (`refreshLive`), which is the
+          desktop's `dynamic` cloud. Only the LIVE points, not the whole cloud.
+        - FOLLOW SELECTED and XR FOCUS reach a point through `worldPosOf` and
+          `selectionFocusTarget`, both of which now fall through to the batch.
+        - The GIZMO gets a proxy frame (`cloudGizmoFrame`): ONE Object3D under
+          the cloud's own frame, placed by the builder's rule, so every existing
+          drag path works on it unchanged — the gizmo writes `frame.position`,
+          `invertFrameTranslate` reads it back into the row, `applyFrameTransform`
+          re-places it, and none of them knows the frame is not in
+          `currentFrames`. The point then FOLLOWS the drag because the selection
+          is handed to `clouds.setLive`. Driven with a real handle drag: 63 units
+          of travel by mid-drag, not at the release.
+      - `update()` SKIPS the pass when nothing moved, which is the method's whole
+        point rather than a micro-optimisation: every overlay here is called once
+        a frame, and the others sweep tens or a few thousand edges where a cloud
+        sweeps a few hundred thousand vertices. Measured: 0.0008 ms/frame
+        standing still against 0.53 ms while the cloud is being dragged. The
+        bounds are gathered in that same pass, so the cloud is frustum-CULLED —
+        unlike linkOverlay and the halos, which switch culling off because
+        keeping a bounding volume in step would cost them a pass they never
+        otherwise make.
+      - THE POINT SPRITE (`src/render/pointSprite.ts`), and it fixes an existing
+        glyph as well as the new cloud. Two things separate a WebGL point from
+        `GL_POINT_SMOOTH`: it is a hard SQUARE, and `gl_PointSize` is in DEVICE
+        pixels, so `ratio × 20` drew at half the intended size on a dpr-2 screen.
+        Both were true of the geometry-22 glyph from the day it shipped and were
+        invisible at one 2 px sprite; a cloud is thousands of them. One
+        `onBeforeCompile` patch (fog.ts's tool, for fog.ts's reason) serves both.
+        `alphaToCoverage` is what lets an OPAQUE cloud keep a soft edge — THREE
+        emits `#define OPAQUE`, which would flatten it back to a square, only
+        when a material is neither transparent NOR alpha-to-coverage. A cloud
+        with any translucent point sets `transparent` instead and blends
+        properly, which is what honours `color_a` the way the desktop's global
+        GL_BLEND does.
+      - Parity: `tools/dump_point_cloud.py` runs the REAL desktop
+        `glyphviz_core.point_cloud` — `cloud_parent_ids`, `point_size`,
+        `drawable_children` and `build_batch`, the last fed from a live `Scene`'s
+        baked transforms exactly as `Viewport._draw_point_clouds` feeds it — over
+        a fixture built for the rules rather than for a picture: a hidden point,
+        a translucent one, a Link parented to the cloud, an empty cloud, a hidden
+        cloud, a cloud under a rotated + non-uniformly scaled ancestor, one at
+        the ANTz `topo_scale`, and one under a World Grid. Both show-hidden
+        states are dumped, since `drawable_children` answers differently.
+        `pointCloudOverlay.parity.test.ts` diffs positions, ids IN ORDER (index i
+        in the vertex array and index i in `ids` are the same node — that is the
+        whole of what makes a point pickable) and per-point colours. Verified to
+        FAIL three ways: raw translate instead of the builder's rule (3 tests),
+        no `drawable_children` filter (4), and a hidden cloud parent still
+        drawing (2).
+      - Driven in Chrome, 20 measured checks on a 57,600-point synthetic survey
+        plus the 5-check counterfactual above: the batch, the object count, the
+        draw calls, the standing-still cost, the sprite's every material flag,
+        a click selecting a point and a glyph in front of it still winning, the
+        halo, the inspector, the sweep, the draw limit, both label modes with the
+        selection cleared, Ctrl+A over 57k points, and a real gizmo drag. Console
+        clean throughout.
+        - The PICTURE settled the one thing no number could, for the seventh
+          session running — though this time it CONFIRMED rather than caught:
+          at 32 px the points render as clean antialiased discs, cloud points and
+          geometry-22 glyphs alike, and none shrinks with distance.
+      - NOT in W1, deliberately: importing a point-cloud FILE. LAS/LAZ/PLY/XYZ
+        import is phase W2 (agreed with Jeff 2026-09-07), including the vendored
+        laz-rs WASM decoder — the first non-`three` runtime dependency this
+        project will have, taken because the desktop's own LIDAR example ships as
+        a `.laz` and because writing a LAZ arithmetic decoder is a project rather
+        than a feature. Until then a cloud reaches this app the way every other
+        scene does: as a CSV the desktop wrote.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -4238,6 +4406,46 @@ something to decide now).
       is the desktop's own explanation of what each mechanism does to the
       curve, and it settles the Plot-parent question (`color_a = 0`, never
       `hide = 1`) that Topology_Animation_Examples had left open.
+    - **Point Cloud topology and LIDAR import** (desktop `27cdb75`, 2026-09-07,
+      with `df186e5` right behind it) — split into two web phases at Jeff's
+      agreement 2026-09-07, because the renderer half is what makes every
+      desktop-exported cloud open here and the import half is a session of its
+      own:
+      - ~~**W1, the renderer**~~ — **shipped 2026-09-07, see roadmap 6kk.**
+      - **W2, importing a point-cloud FILE** — still open. LAS/LAZ/PLY/XYZ, and
+        the work is not the parsing: it is `fit_to_world` (a UTM scan arrives
+        800,000 units from the origin, recentred on a 0.1/99.9 percentile box
+        and scaled UNIFORMLY off the larger horizontal extent), colouring a scan
+        with no RGB (classification and elevation are first-class modes, not
+        fallbacks, and `_is_really_classified` knows an all-0/1 column is not a
+        classification), and decimating honestly (random / stride / voxel, with
+        the class filter running BEFORE the sample so a point budget is spent on
+        the classes actually asked for). Read `point_cloud_loader.py` and
+        `point_cloud_dialog.py` first; the loader is Qt-free and ports almost
+        line for line into `src/gv/pointCloudLoader.ts`, and the dialog's real
+        job — showing what is in the file BEFORE the user commits — is a
+        `FloatWindow` here, on the Basemap window's pattern.
+        - The FORMAT decisions are already taken (with Jeff, 2026-09-07): LAS,
+          PLY and ASCII xyz/pts are written in-house, on the same principle as
+          the CSV tokenizer, the zip reader and the mesh parser; **LAZ takes a
+          vendored `laz-rs` WASM build — the first non-`three` runtime
+          dependency this project will have.** It is the license-matched answer
+          (the desktop took `lazrs`, MIT, precisely to avoid LASzip's LGPL, and
+          laz-perf carries that same LGPL), and it is what lets the desktop's own
+          `LIDAR_Import_Example/aerial_survey.laz` open here — 2.55 MB against
+          17.7 MB as `.las`, which is why the example ships that way. Gate it so
+          a scene with no LAZ never loads it.
+        - Web-side pieces with no desktop counterpart: file intake through
+          `browserFiles.ts`/`bundle.ts` (with `.ply` deliberately staying a MESH
+          on drop, exactly as `drop_router.py` reasons, and reachable as a cloud
+          only through the explicit import); and the desktop's synchronous read
+          — forced there by a QThread that aborted the process — is a decision a
+          browser does not have to inherit, since `File.slice()` and workers
+          carry none of that hazard. Measure before adding a worker: the desktop
+          scans a 10.6M-point tile in 1.0 s.
+        - `df186e5` needs NO port: this app's `writeNodeCsv` has always written
+          only the optional columns a scene uses, which is the change that took
+          the desktop's 442k-point save from 244 MB to 40.7 MB.
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

@@ -35,6 +35,14 @@ export const SELECTION_COLOR = new THREE.Color(1.0, 0.95, 0.1)
 export function pickNodeId(raycaster: THREE.Raycaster, root: THREE.Object3D): number | null {
   for (const hit of raycaster.intersectObject(root, true)) {
     if (hit.object.userData.isGridOccluder) return null
+    if (hit.object.userData.isCloudPicker) {
+      // A batched point cloud reports the node id in `index` — it has no faces
+      // and no per-point Object3D, so there is nothing else to resolve through
+      // (render/pointCloudOverlay.ts). Sorted in with every other hit, so a
+      // glyph in front of the cloud still wins the click.
+      if (hit.index !== undefined) return hit.index
+      continue
+    }
     if (hit.object.userData.isLinkPicker) {
       const ids = hit.object.userData.linkIds as number[] | undefined
       const id = ids?.[hit.faceIndex ?? -1]
@@ -61,6 +69,17 @@ export function pickNodeId(raycaster: THREE.Raycaster, root: THREE.Object3D): nu
 
 /** id → frame, as returned by buildScene. */
 export type FrameLookup = ReadonlyMap<number, THREE.Object3D>
+
+/**
+ * What a frameless Point Cloud point offers the selection instead of a frame:
+ * whether it exists, and the matrix its halo box is built around.
+ * `PointCloudOverlay` satisfies it structurally, so this module imports nothing
+ * from the overlay.
+ */
+export interface PointHaloSource {
+  hasPoint(nodeId: number): boolean
+  pointHaloMatrix(nodeId: number, out: THREE.Matrix4): boolean
+}
 
 /**
  * Ceiling on how many halos are drawn at once — a memory guard, not a draw
@@ -139,6 +158,24 @@ export class Selection {
    * halo-less, matching the desktop's outline pass.
    */
   private linkGlyphs: ReadonlyMap<number, THREE.Object3D> = new Map()
+  /**
+   * Where a selected POINT CLOUD point's halo comes from. A point has no frame
+   * and no glyph — it is a vertex in a batched array
+   * (render/pointCloudOverlay.ts) — so its box is built from a draw matrix the
+   * overlay computes instead. Handed over once per scene build, like
+   * `linkGlyphs`, and for the same reason: a stale one would outline a point
+   * that no longer exists at a position it no longer has.
+   */
+  private points: PointHaloSource | null = null
+  /**
+   * Selected cloud points with a halo, in the order their slots follow the
+   * glyph slots. Two parallel arrays rather than one list of tagged objects:
+   * a Select All over a 209k-point cloud would otherwise allocate a wrapper
+   * per point, and the halos are interchangeable yellow boxes whose order does
+   * not matter.
+   */
+  private pointIds: number[] = []
+  private pointMatrix = new THREE.Matrix4()
   private order: number[] = []
   private members = new Set<number>()
   private overflow = 0
@@ -205,9 +242,9 @@ export class Selection {
     this.syncVisibility()
   }
 
-  /** How many halos are actually being drawn. */
+  /** How many halos are actually being drawn — glyph boxes plus point boxes. */
   get haloCount(): number {
-    return this.glyphs.length
+    return this.glyphs.length + this.pointIds.length
   }
 
   has(nodeId: number): boolean {
@@ -232,21 +269,44 @@ export class Selection {
     this.linkGlyphs = glyphs
   }
 
+  /**
+   * Register the scene's point clouds. Call once per scene build, before any
+   * `set` — same contract as `setLinkGlyphs`, for the same reason.
+   */
+  setPointSource(points: PointHaloSource | null): void {
+    this.points = points
+  }
+
   set(frames: FrameLookup, ids: number | null | Iterable<number>): void {
     this.glyphs.length = 0
     this.zSpans.length = 0
+    this.pointIds.length = 0
     this.order.length = 0
     this.members.clear()
     this.overflow = 0
 
     for (const nodeId of ids === null ? [] : typeof ids === 'number' ? [ids] : ids) {
       const frame = frames.get(nodeId)
-      if (!frame || this.members.has(nodeId)) continue // not in the scene at all
+      if (this.members.has(nodeId)) continue
+      if (!frame) {
+        // No frame is normally "not in the scene at all" — but a Point Cloud
+        // point never has one and is nonetheless a real, selectable node, so
+        // the clouds are asked before it is dropped.
+        if (!this.points?.hasPoint(nodeId)) continue
+        this.members.add(nodeId)
+        this.order.push(nodeId)
+        if (this.glyphs.length + this.pointIds.length >= this.maxHalos) {
+          this.overflow++
+          continue
+        }
+        this.pointIds.push(nodeId)
+        continue
+      }
       this.members.add(nodeId)
       this.order.push(nodeId)
       const glyph = frame.children.find((c) => c.userData.isGlyph) ?? this.linkGlyphs.get(nodeId)
       if (!glyph) continue
-      if (this.glyphs.length >= this.maxHalos) {
+      if (this.glyphs.length + this.pointIds.length >= this.maxHalos) {
         this.overflow++
         continue
       }
@@ -255,8 +315,8 @@ export class Selection {
       this.zSpans.push(z ?? [-SELECTION_BOX_HALF, SELECTION_BOX_HALF])
     }
 
-    this.reserve(this.glyphs.length)
-    this.object.geometry.setDrawRange(0, this.glyphs.length * INDICES)
+    this.reserve(this.haloCount)
+    this.object.geometry.setDrawRange(0, this.haloCount * INDICES)
     this.syncVisibility()
     this.refreshHalos()
   }
@@ -270,36 +330,58 @@ export class Selection {
    * left by the last render pass and never forces a recompute of its own.
    */
   refreshHalos(): void {
-    if (this.glyphs.length === 0) return // nothing drawn, nothing to upload
-    const b = SELECTION_BOX_HALF
-    const p = this.positions.array as Float32Array
+    const count = this.haloCount
+    if (count === 0) return // nothing drawn, nothing to upload
     for (let i = 0; i < this.glyphs.length; i++) {
-      const e = this.glyphs[i].matrixWorld.elements
-      // Half-extent along each of the glyph's own (scaled, rotated) axes.
-      const ax = e[0] * b
-      const ay = e[1] * b
-      const az = e[2] * b
-      const bx = e[4] * b
-      const by = e[5] * b
-      const bz = e[6] * b
-      // Z takes its two bounds separately rather than a half-extent: they are
-      // symmetric for every ordinary glyph and are not for a link's.
       const [zLo, zHi] = this.zSpans[i]
-      let o = i * CORNERS * 3
-      for (let corner = 0; corner < CORNERS; corner++) {
-        const sx = corner & 4 ? 1 : -1
-        const sy = corner & 2 ? 1 : -1
-        const z = corner & 1 ? zHi : zLo
-        p[o++] = e[12] + sx * ax + sy * bx + z * e[8]
-        p[o++] = e[13] + sx * ay + sy * by + z * e[9]
-        p[o++] = e[14] + sx * az + sy * bz + z * e[10]
-      }
+      this.writeBox(i, this.glyphs[i].matrixWorld.elements, zLo, zHi)
+    }
+    // Cloud points continue in the slots after the glyphs. Their box is the
+    // same ±1.05 cube every ordinary glyph gets, around a matrix the overlay
+    // composes rather than one an Object3D carries.
+    for (let i = 0; i < this.pointIds.length; i++) {
+      if (!this.points?.pointHaloMatrix(this.pointIds[i], this.pointMatrix)) continue
+      this.writeBox(
+        this.glyphs.length + i,
+        this.pointMatrix.elements,
+        -SELECTION_BOX_HALF,
+        SELECTION_BOX_HALF,
+      )
     }
     // Upload only the slots in use — the buffer keeps its high-water size, and
     // a 250k-capacity full upload every animated frame would not be free.
     this.positions.clearUpdateRanges()
-    this.positions.addUpdateRange(0, this.glyphs.length * CORNERS * 3)
+    this.positions.addUpdateRange(0, count * CORNERS * 3)
     this.positions.needsUpdate = true
+  }
+
+  /** One halo's 8 world-space corners, from a draw matrix and its z bounds. */
+  private writeBox(
+    slot: number,
+    e: THREE.Matrix4['elements'],
+    zLo: number,
+    zHi: number,
+  ): void {
+    const b = SELECTION_BOX_HALF
+    const p = this.positions.array as Float32Array
+    // Half-extent along each of the matrix's own (scaled, rotated) axes.
+    const ax = e[0] * b
+    const ay = e[1] * b
+    const az = e[2] * b
+    const bx = e[4] * b
+    const by = e[5] * b
+    const bz = e[6] * b
+    let o = slot * CORNERS * 3
+    for (let corner = 0; corner < CORNERS; corner++) {
+      const sx = corner & 4 ? 1 : -1
+      const sy = corner & 2 ? 1 : -1
+      // Z takes its two bounds separately rather than a half-extent: they are
+      // symmetric for every ordinary glyph and are not for a link's.
+      const z = corner & 1 ? zHi : zLo
+      p[o++] = e[12] + sx * ax + sy * bx + z * e[8]
+      p[o++] = e[13] + sx * ay + sy * by + z * e[9]
+      p[o++] = e[14] + sx * az + sy * bz + z * e[10]
+    }
   }
 
   /** Grow the vertex/index buffers to hold `count` halos (never shrink). */
@@ -328,6 +410,6 @@ export class Selection {
   }
 
   private syncVisibility(): void {
-    this.object.visible = this.boxesVisible && this.glyphs.length > 0
+    this.object.visible = this.boxesVisible && this.haloCount > 0
   }
 }

@@ -33,7 +33,7 @@ const TOLERANCE = 1e-6
 
 const FIXTURES: Array<{ name: string; csv: string; reference: Reference }> = [
   {
-    name: 'topology example (all 18 topologies)',
+    name: 'topology example (topologies 0-17; Point Cloud has its own harness)',
     csv: topologyExampleCsv,
     reference: JSON.parse(topologyReferenceRaw) as Reference,
   },
@@ -50,7 +50,7 @@ const FIXTURES: Array<{ name: string; csv: string; reference: Reference }> = [
     // diffed entry by entry rather than asserted. Plus the exempt cases (World
     // Grid parents at absurd values, a root carrying one) and a four-level
     // chain where each level rescales the one below.
-    name: 'topology scale (all 18 topologies, grids and roots exempt, nested)',
+    name: 'topology scale (topologies 0-17, grids and roots exempt, nested)',
     csv: topoScaleCsv,
     reference: JSON.parse(topoScaleReferenceRaw) as Reference,
   },

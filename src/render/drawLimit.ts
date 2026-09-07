@@ -52,6 +52,7 @@
 //     the part of a selection that falls past the cut drops on the press.
 //     Select first at full detail, or restore with Shift+\ before editing.
 
+import { cloudParentIds } from '../gv/pointCloud'
 import type { GvNode } from '../gv/types'
 import { NodeType, Topo } from '../gv/types'
 import { linkChildId } from '../gv/links'
@@ -71,11 +72,21 @@ const NON_VISUAL = new Set<number>([NodeType.World, NodeType.Camera])
 /**
  * Nodes the draw loop would count against the limit, in file order: everything
  * but World/Camera rows, Link rows (drawn as edges by the overlay, never as a
- * glyph) and — unless Show Hidden Nodes is on — hidden rows.
+ * glyph), points inside a Point Cloud, and — unless Show Hidden Nodes is on —
+ * hidden rows.
+ *
+ * A CLOUD COUNTS AS ONE UNIT, which is the desktop's rule and follows from the
+ * batching: the whole cloud is one draw call, so decimating it would save
+ * nothing worth having while destroying the thing the user is looking at. Its
+ * PARENT is counted, like any other node — so halving a scene that holds a
+ * cloud thins the glyphs around it and leaves the scan alone. The desktop skips
+ * its points before its own counter for exactly this, and the cloud pass then
+ * ignores the limit entirely, as the link and plot passes already do.
  */
-function eligible(node: GvNode, showHidden: boolean): boolean {
+function eligible(node: GvNode, showHidden: boolean, clouds: ReadonlySet<number>): boolean {
   if (NON_VISUAL.has(node.type)) return false
   if (node.type === NodeType.Link) return false
+  if (clouds.size > 0 && clouds.has(node.parentId)) return false
   return node.hide === 0 || showHidden
 }
 
@@ -88,6 +99,14 @@ function eligible(node: GvNode, showHidden: boolean): boolean {
  * skips links as well. Matched deliberately, so a readout here compares
  * directly with one read on the desktop for the same scene; the discrepancy
  * only means a scene with links halves to slightly more than half its glyphs.
+ *
+ * The same is true, and much more visibly, of a Point Cloud: its points are in
+ * this total and are never decimated, so on a scene that is mostly one scan the
+ * first several presses of `\` change nothing on screen while the readout falls.
+ * That is the desktop's arithmetic exactly (`_adjust_draw_limit` counts every
+ * non-hidden row), and it is kept rather than corrected so the two apps report
+ * the same numbers for the same file — a cloud scene simply needs more presses
+ * before the limit bites on the glyphs around it.
  */
 export function drawLimitTotal(nodes: readonly GvNode[], options: DrawLimitOptions = {}): number {
   const showHidden = options.showHidden === true
@@ -148,10 +167,13 @@ export function drawLimitPlan(
     if (!byId.has(node.id)) byId.set(node.id, node)
   }
 
+  // Points never consume the limit; their parent does (see `eligible`).
+  const clouds = cloudParentIds(nodes)
+
   const draw = new Set<number>()
   for (const node of nodes) {
     if (draw.size >= limit) break
-    if (eligible(node, showHidden)) draw.add(node.id)
+    if (eligible(node, showHidden, clouds)) draw.add(node.id)
   }
 
   // Overlay participants. Every link row keeps its own frame (its label anchors

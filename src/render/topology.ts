@@ -99,7 +99,15 @@ export interface TopoPlacementInput {
 /**
  * Child's Cartesian offset in the parent's unscaled local frame. Cartesian
  * (tx, ty, tz) is both TOPO_NONE's behavior and the fallback for unknown
- * ids — Plane/Video/Plot/Surface share it.
+ * ids — Plane/Video/Plot/Surface/PointCloud share it.
+ *
+ * Point Cloud (18) therefore needs no case here, which is the desktop's own
+ * reasoning (topology.py _pointcloud_offset): the topology is a RENDERING
+ * contract, not a placement one. Its children place exactly where any
+ * Cartesian parent's would, and what distinguishes it is that they draw as one
+ * batched point array instead of a glyph apiece (render/pointCloudOverlay.ts).
+ * A build predating the id opens a topo=18 file and places every point
+ * correctly — it just draws them the slow way.
  */
 export function topoOffset(p: TopoPlacementInput): THREE.Vector3 {
   const { parentTopo, parentRatio, subspace, baseScale: B } = p

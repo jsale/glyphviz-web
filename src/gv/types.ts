@@ -110,9 +110,10 @@ export const Topo = {
   Video: 15,
   Plot: 16,
   Surface: 17,
+  PointCloud: 18,
 } as const
 
-export const TOPO_MAX = 17
+export const TOPO_MAX = 18
 
 /**
  * `topo_scale` landmarks (the field's own doc is on GvNode.topoScale below).
@@ -230,6 +231,7 @@ export const TOPO_NAMES: Record<number, string> = {
   [Topo.Video]: 'Video',
   [Topo.Plot]: 'Plot',
   [Topo.Surface]: 'Surface',
+  [Topo.PointCloud]: 'Point Cloud',
 }
 
 export const GEOMETRY_NAMES: Record<number, string> = {

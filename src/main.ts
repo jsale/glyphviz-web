@@ -130,7 +130,11 @@ import {
 } from './render/drawLimit'
 import { DynamicNodes } from './render/dynamicNodes'
 import { clearMaterialCache } from './render/glyphGeometry'
-import { LabelOverlay, pinnedTagNodes } from './render/labelOverlay'
+import {
+  LabelOverlay,
+  pinnedTagNodes,
+  taggableNodes as labelTaggableNodes,
+} from './render/labelOverlay'
 import { meshChoices, MeshLibrary } from './render/meshLibrary'
 import type { MeshAsset } from './render/meshLibrary'
 import { applyDesktopColorPipeline, SceneLighting } from './render/lighting'
@@ -144,6 +148,7 @@ import {
 } from './render/textureLibrary'
 import type { AudioMode, TextureLibrary } from './render/textureLibrary'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
+import { setPointSpriteScale } from './render/pointSprite'
 import { TOPO_SCALE_HINT_RATIO, renderedRadius, worstChildPlacementRatio } from './render/scatterHint'
 import { composeScreenshot, downloadCanvasPng, screenshotFilename } from './render/screenshot'
 import { nodeIdsInRect } from './render/rectSelect'
@@ -314,6 +319,11 @@ applyDesktopColorPipeline(renderer)
 // (render/fog.ts). The World row's fog fields then drive scene.fog below.
 installLinearFog()
 renderer.setPixelRatio(window.devicePixelRatio)
+// GL point sizes are in DEVICE pixels, so the ratio the renderer draws at is
+// what turns `ratio × 20` into the number of pixels the desktop means by it
+// (render/pointSprite.ts). Both the single-Point glyph and every point cloud
+// read it.
+setPointSpriteScale(window.devicePixelRatio)
 renderer.setSize(window.innerWidth, window.innerHeight)
 app.appendChild(renderer.domElement)
 
@@ -1474,6 +1484,7 @@ function applyLineResolution() {
   if (layer) {
     currentLinks?.setResolution(layer.framebufferWidth / 2, layer.framebufferHeight)
     currentOverlays?.setResolution(layer.framebufferWidth / 2, layer.framebufferHeight)
+    currentClouds?.setResolution(layer.framebufferWidth / 2, layer.framebufferHeight)
     return
   }
   const width = stereoEyesNow()?.[0].width ?? window.innerWidth
@@ -1481,6 +1492,7 @@ function applyLineResolution() {
   const pixelHeight = window.innerHeight * window.devicePixelRatio
   currentLinks?.setResolution(pixelWidth, pixelHeight)
   currentOverlays?.setResolution(pixelWidth, pixelHeight)
+  currentClouds?.setResolution(pixelWidth, pixelHeight)
 }
 
 function setStereo(on: boolean) {
@@ -1818,6 +1830,17 @@ renderer.domElement.addEventListener(
   get frames() {
     return currentFrames
   },
+  // A Point Cloud draws no Object3D per point and puts nothing about itself in
+  // the DOM beyond one count on the scene line, so how many points a batch
+  // holds, where any one of them IS, and what the per-frame pass actually costs
+  // are all readable only from here.
+  get clouds() {
+    return currentClouds
+  },
+  // Draw calls and triangles, and the scene-graph size the whole point-cloud
+  // design turns on — a scene of 200k points must not be 600k Object3Ds.
+  renderer,
+  scene,
   // Immersive mode: nothing about the rig — where the viewer is, how big the
   // world is, where the headset thinks the head is — reaches the DOM.
   xrRig,
@@ -1929,7 +1952,11 @@ function worldPosOf(nodeId: number): THREE.Vector3 | null {
   // Called per gizmo tick — must stay O(depth): frames map lookup, and
   // getWorldPosition refreshes only the ancestor chain (no full-tree pass).
   const frame = currentFrames?.get(nodeId)
-  return frame ? frame.getWorldPosition(new THREE.Vector3()) : null
+  if (frame) return frame.getWorldPosition(new THREE.Vector3())
+  // A Point Cloud point has no frame; its position is a slot in the batch, as
+  // current as the last `clouds.update()` — which is exactly the staleness rule
+  // every other world-space overlay here already runs on.
+  return currentClouds?.pointPosition(nodeId) ?? null
 }
 
 /**
@@ -1957,9 +1984,17 @@ function selectionFocusTarget(): { center: THREE.Vector3; extent: number } | nul
   // PRIMARY's — which is the one whose rendered radius floors the extent.
   for (const id of selection.ids) {
     const frame = frames.get(id)
-    // No frame means no place: a node past the draw limit, or one that never
-    // drew. The same rule every other selection path follows (roadmap 6m).
-    if (!frame) continue
+    if (!frame) {
+      // A cloud point has no frame but is emphatically somewhere — going to one
+      // is how you inspect a scan. Its radius stays 0, so the extent falls back
+      // to the span of the selection (and, for a single point, to the floor the
+      // caller applies): a point is a pixel-sized sprite with no world size to
+      // frame against.
+      if (currentClouds?.pointPosition(id, pos)) box.expandByPoint(pos)
+      // Otherwise no frame means no place: a node past the draw limit, or one
+      // that never drew. The rule every other selection path follows (6m).
+      continue
+    }
     box.expandByPoint(pos.setFromMatrixPosition(frame.matrixWorld))
     if (radius === 0) radius = renderedRadius(frame)
   }
@@ -2487,6 +2522,11 @@ function setSelection(ids: ReadonlySet<number> | number | null) {
   const set =
     ids === null ? new Set<number>() : typeof ids === 'number' ? new Set([ids]) : ids
   selection.set(currentFrames, orderedIds(set))
+  // A selected cloud point is re-derived from its row every frame, so a gizmo
+  // drag on it is visible while it happens rather than only at the release —
+  // the point has no Object3D of its own to carry the drag (the proxy frame in
+  // `cloudGizmoFrame` carries it, and the row is what they share).
+  if (cloudParents.size > 0) currentClouds?.setLive(selection.asSet())
   refreshSelectionUi()
 }
 
@@ -2727,6 +2767,13 @@ let showTextBoundNodes: GvNode[] = []
  *  its dynamic set each frame, because its cached scan is keyed on a revision
  *  playback never bumps. */
 let animatedPinnedTags: GvNode[] | null = null
+/**
+ * The nodes the label pass walks: every row except the points inside a cloud
+ * that are not individually pinned. Recomputed on scene rebuild — see
+ * labelOverlay.taggableNodes for why filtering here rather than in the loop is
+ * load-bearing rather than a nicety.
+ */
+let taggableNodes: readonly GvNode[] = []
 /** World render_mode as last pushed onto the materials, so the animated path
  *  only pays the material walk on frames that actually change the mode. */
 let appliedWorldRenderMode: number | null = null
@@ -3036,6 +3083,14 @@ function openSelectedLink() {
 let currentRoot: THREE.Group | null = null
 let currentLinks: SceneBuildResult['links'] | null = null
 let currentOverlays: SceneBuildResult['overlays'] | null = null
+/**
+ * The scene's Point Cloud batches. It is also the position source for every
+ * node inside a cloud — those have no frame at all, so `currentFrames` cannot
+ * answer for them (render/pointCloudOverlay.ts).
+ */
+let currentClouds: SceneBuildResult['clouds'] | null = null
+/** Ids of the Point Cloud PARENTS, for the "is this node a point?" tests. */
+let cloudParents: ReadonlySet<number> = new Set()
 let currentFrames: SceneBuildResult['frames'] | null = null
 let currentNodes: GvNode[] = []
 let currentDisplayName = ''
@@ -3363,6 +3418,21 @@ function stepBuiltInScene(delta: number) {
   loadBuiltIn(names[next])
 }
 
+/**
+ * Nodes whose position or colour an animation can change each frame: every
+ * channel-bound node, plus every node carrying a nonzero rate field.
+ *
+ * Only the point-cloud overlay asks — for everything else DynamicNodes and the
+ * rate integrator work on the Object3Ds a cloud point does not have. Computed
+ * from the CSV rather than from `rateNodes`, which is itself recomputed further
+ * down this same rebuild and so is a build behind at this point.
+ */
+function liveCloudPointIds(): ReadonlySet<number> {
+  const ids = new Set<number>(channels.boundNodeIds)
+  for (const node of rateCandidates(currentNodes, channels.rateBoundNodeIds)) ids.add(node.id)
+  return ids
+}
+
 function rebuildScene(fitCamera: boolean) {
   // Geometry and topology are exactly what the VR shape steppers edit, so the
   // Select page's distinct-value lists can move under any rebuild.
@@ -3375,6 +3445,11 @@ function rebuildScene(fitCamera: boolean) {
     drawLimit,
     // A channel striking `hide` needs the glyph alive to blank and restore.
     channelHideBound: channels.hideBoundNodeIds,
+    // A cloud's points are baked into one array rather than given frames, so
+    // the ones an animation can move have to be re-derived per frame; every
+    // other node animates through DynamicNodes, on Object3Ds a point has none
+    // of. Both sources of motion count — a channel binding and a rate field.
+    liveNodeIds: liveCloudPointIds(),
   })
   if (currentRoot) {
     gizmo.detach()
@@ -3385,6 +3460,7 @@ function rebuildScene(fitCamera: boolean) {
   // and its own material clones.
   dynamic?.dispose()
   currentOverlays?.dispose()
+  currentClouds?.dispose()
   currentRoot = built.root
   currentLinks = built.links
   // A link drawn as a stretched glyph gets a halo like any other glyph, but
@@ -3392,6 +3468,10 @@ function rebuildScene(fitCamera: boolean) {
   // the selection is told where to find them, once per build.
   selection.setLinkGlyphs(built.links.glyphObjects)
   currentOverlays = built.overlays
+  currentClouds = built.clouds
+  // A cloud point has no frame, so the selection asks the clouds instead —
+  // both whether the id exists at all and where to draw its halo.
+  selection.setPointSource(built.clouds)
   currentFrames = built.frames
   applyLineResolution()
   scene.add(currentRoot)
@@ -3411,6 +3491,12 @@ function rebuildScene(fitCamera: boolean) {
   // Pinned labels draw whatever the Labels settings say, so the overlay needs
   // this list even with labels off. An inspector edit to show_text lands here.
   pinnedTags = pinnedTagNodes(currentNodes)
+  // Cloud points are filtered out of the label pass BEFORE the loop, not inside
+  // it: the desktop measured that walking them one at a time cost 109 ms of a
+  // 111 ms frame on a 442k-point scene (labelOverlay.taggableNodes). Membership
+  // only changes when the scene does, so this is the right place for it.
+  cloudParents = built.clouds.parentIds
+  taggableNodes = labelTaggableNodes(currentNodes, cloudParents)
   // The channel-driven slice of that list starts from the fresh rows; the
   // per-frame refresh (refreshAnimatedPinnedTags) takes over from here.
   showTextBoundNodes = currentNodes.filter((n) => channels.showTextBoundNodeIds.has(n.id))
@@ -3467,6 +3553,15 @@ function rebuildScene(fitCamera: boolean) {
     ...(built.overlays.plotCount > 0 ? [`${built.overlays.plotCount} plot line(s)`] : []),
     ...(built.overlays.quadCount > 0
       ? [`${built.overlays.surfaceCount} surface(s), ${built.overlays.quadCount} quad(s)`]
+      : []),
+    // Reported separately from `drawn` because a cloud's points are deliberately
+    // NOT in that count — they draw no glyph — and a scene that is mostly one
+    // scan would otherwise read as almost empty.
+    ...(built.clouds.cloudCount > 0
+      ? [
+          `${built.clouds.cloudCount} point cloud(s), ` +
+            `${built.clouds.pointCount.toLocaleString()} point(s)`,
+        ]
       : []),
     ...(labelNote ? [labelNote] : []),
     ...(mediaCount > 0 ? [`${mediaCount} media file(s)`] : []),
@@ -3806,7 +3901,10 @@ function finishRubberBand(additive: boolean) {
       y2: rubberEnd.y - rect.top,
     },
     { width: rect.width, height: rect.height },
-    { showHidden },
+    // A cloud point has no frame to project, so the sweep reads its position out
+    // of the batch — without this, dragging a box over a scan would select
+    // nothing, and a rubber band is the documented way to grab part of one.
+    { showHidden, points: currentClouds },
   )
   if (additive) addToSelection(ids)
   else setSelection(ids)
@@ -4323,9 +4421,39 @@ const modeButtons = [...hud.querySelectorAll<HTMLButtonElement>('#hud-modes butt
  * transform is inert — the edge follows its endpoints); edit those through the
  * inspector, like the desktop's panel/table.
  */
+/**
+ * The frame the gizmo attaches to for a selected Point Cloud POINT, which has
+ * none of its own.
+ *
+ * One Object3D, parented to the cloud's own frame and placed by the builder's
+ * rule, so every existing drag path works on it unchanged: the gizmo writes
+ * `frame.position`, `invertFrameTranslate` reads it back into the row, and
+ * `applyFrameTransform` re-places it — none of which knows or cares that this
+ * frame is not in `currentFrames`. The point then FOLLOWS the drag because the
+ * selection is handed to `clouds.setLive`, which re-derives it from its row
+ * every frame.
+ *
+ * Reused rather than recreated, so a run of drags does not litter the graph; it
+ * is detached whenever the primary stops being a point.
+ */
+const cloudPointFrame = new THREE.Object3D()
+cloudPointFrame.name = 'gv-cloud-point-frame'
+
+function cloudGizmoFrame(node: GvNode): THREE.Object3D | undefined {
+  const parent = currentFrames?.get(node.parentId)
+  if (!parent || !currentClouds?.hasPoint(node.id)) return undefined
+  if (cloudPointFrame.parent !== parent) parent.add(cloudPointFrame)
+  cloudPointFrame.userData.nodeId = node.id
+  applyFrameTransform(cloudPointFrame, node, nodesById.get(node.parentId) ?? null)
+  cloudPointFrame.updateWorldMatrix(true, false)
+  return cloudPointFrame
+}
+
 function updateGizmoAttachment() {
   const primary = selection.id !== null ? nodesById.get(selection.id) : undefined
-  const frame = primary ? currentFrames?.get(primary.id) : undefined
+  const frame = primary
+    ? (currentFrames?.get(primary.id) ?? cloudGizmoFrame(primary))
+    : undefined
   if (
     gizmoMode === null ||
     // Camera Mode and Draw Mode own every drag button, so manipulation is
@@ -6089,6 +6217,7 @@ renderer.setAnimationLoop(() => {
   // the desktop's redraw.
   currentLinks?.update()
   currentOverlays?.update()
+  currentClouds?.update()
   // Selection halos are world-space geometry for the same batching reason, so
   // they follow the same rule: rewritten only while something is moving, from
   // the last pass's matrices. Every other way a node moves (an inspector edit,
@@ -6104,7 +6233,26 @@ renderer.setAnimationLoop(() => {
     tagColorMode: tagStyle.mode,
     tagColor: tagStyle.rgb,
     tagFontSize: tagStyle.fontSize,
+    points: currentClouds,
+    cloudParents,
   }
+  // A SELECTED cloud point labels, but selection does not rebuild the scene, so
+  // those cannot be in the cached list above and are gathered per frame — the
+  // desktop's own arrangement. Normally a handful; a rubber band over 50k points
+  // makes it 50k, which is exactly what the user asked to see. Skipped entirely
+  // when labels are off, when the scene has no cloud, or when nothing is
+  // selected, which is every existing scene.
+  const labelNodes =
+    showTags && cloudParents.size > 0 && selection.size > 0
+      ? taggableNodes.concat(
+          selection.ids
+            .map((id) => nodesById.get(id))
+            .filter(
+              (n): n is GvNode =>
+                n !== undefined && n.showText === 0 && cloudParents.has(n.parentId),
+            ),
+        )
+      : taggableNodes
   // Labels are painted after each render pass, so the world matrices they
   // project are the ones just drawn (gizmo drags move frames between rebuilds).
   const eyes = presenting ? null : stereo.eyes(window.innerWidth, distance)
@@ -6131,7 +6279,7 @@ renderer.setAnimationLoop(() => {
       renderer.setScissor(eye.x, 0, eye.width, height)
       renderer.render(scene, eyeCamera)
       if (currentFrames) {
-        labels.paint(currentNodes, currentFrames, eyeCamera, labelState, {
+        labels.paint(labelNodes, currentFrames, eyeCamera, labelState, {
           x: eye.x,
           y: 0,
           width: eye.width,
@@ -6143,7 +6291,7 @@ renderer.setAnimationLoop(() => {
     renderer.setViewport(0, 0, window.innerWidth, height)
   } else {
     renderer.render(scene, camera)
-    if (currentFrames) labels.render(currentNodes, currentFrames, camera, labelState)
+    if (currentFrames) labels.render(labelNodes, currentFrames, camera, labelState)
   }
   // Still inside the frame that drew them, which is the only place the WebGL
   // drawing buffer can be read back — and after the label pass, so the image

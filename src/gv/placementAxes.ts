@@ -67,6 +67,7 @@ export const LINEAR_PLACEMENT_AXES: Readonly<Record<number, LinearAxes>> = {
   [Topo.Video]: [true, true, true],
   [Topo.Plot]: [true, true, true],
   [Topo.Surface]: [true, true, true],
+  [Topo.PointCloud]: [true, true, true],
 }
 
 /**

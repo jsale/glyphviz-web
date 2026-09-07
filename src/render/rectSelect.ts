@@ -19,6 +19,7 @@
 import * as THREE from 'three'
 import { linkChildId } from '../gv/links'
 import { isBulkSelectable } from '../gv/selectionOps'
+import type { PointPositions } from './pointCloudOverlay'
 import type { GvNode } from '../gv/types'
 import { NodeType } from '../gv/types'
 
@@ -38,6 +39,13 @@ export interface ViewportSize {
 export interface RectSelectOptions {
   /** Include nodes whose hide flag is set (the Display group's toggle). */
   showHidden?: boolean
+  /**
+   * Where a Point Cloud point sits, since it has no frame
+   * (render/pointCloudOverlay.ts). Without it a sweep over a cloud selects
+   * nothing, which would make the documented way to grab part of a scan
+   * silently do nothing.
+   */
+  points?: PointPositions | null
 }
 
 /**
@@ -96,6 +104,12 @@ export function nodeIdsInRect(
         if (!frame) continue
         world.setFromMatrixPosition(frame.matrixWorld)
       }
+    } else if (options.points?.hasPoint(node.id)) {
+      // A cloud point IS its own centre, so this is the same centre-projection
+      // rule as every other node — with the position read from the batch rather
+      // than from an Object3D that does not exist. The desktop catches these in
+      // its colour-ID region pass, by pixel.
+      options.points.pointPosition(node.id, world)
     } else {
       const frame = frames.get(node.id)
       if (!frame) continue

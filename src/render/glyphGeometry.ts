@@ -8,6 +8,7 @@
 import * as THREE from 'three'
 import { isInteriorGeometry } from '../gv/interiorGeometry'
 import { Geometry } from '../gv/types'
+import { patchPointSprite } from './pointSprite'
 import {
   applyPerFaceUV,
   fitPlanarUV,
@@ -418,20 +419,29 @@ export function createGlyphObject(geometryId: number, style: GlyphStyle): THREE.
   if (geometryId === Geometry.Point) {
     // Desktop draws a GL_POINTS sprite whose pixel size is ratio × 20
     // (min 1), immune to node scale — sizeAttenuation: false matches that.
+    //
+    // `patchPointSprite` supplies the two things a raw WebGL point gets wrong
+    // against `GL_POINT_SMOOTH`: it is a hard SQUARE, and `gl_PointSize` is in
+    // DEVICE pixels, so on a dpr-2 screen this drew at half the size the number
+    // asks for. Both were true of this glyph from the day it shipped and were
+    // fixed when the point cloud made them impossible to ignore — a cloud is
+    // thousands of these, where one sprite hid the difference.
     const geo = new THREE.BufferGeometry()
     geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0], 3))
     const size = Math.max(1, style.ratio * 20)
     return new THREE.Points(
       geo,
-      cachedMaterial(styleKey(style, 'point', size), () =>
-        new THREE.PointsMaterial({
+      cachedMaterial(styleKey(style, 'point', size), () => {
+        const material = new THREE.PointsMaterial({
           color: style.color,
           transparent: style.opacity < 1,
           opacity: style.opacity,
           size,
           sizeAttenuation: false,
-        }),
-      ),
+        })
+        patchPointSprite(material)
+        return material
+      }),
     )
   }
 

@@ -404,7 +404,7 @@ describe('the expanded bindable set', () => {
     )
     applyChannelFrame(anim, 0)
     const n = rows[0]
-    expect(n.topo).toBe(17) // TOPO_MAX
+    expect(n.topo).toBe(18) // TOPO_MAX — Point Cloud is the highest topology
     expect(n.geometry).toBe(34) // GEOMETRY_MAX
     expect(n.paletteId).toBe(25) // PALETTE_COUNT − 1
     expect(n.renderMode).toBe(6) // RENDER_MODE_COUNT − 1

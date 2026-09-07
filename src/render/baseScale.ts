@@ -111,3 +111,39 @@ export function quantizeBaseScale(value: number): number {
 export function formatBaseScale(value: number = current): string {
   return value.toFixed(1)
 }
+
+/**
+ * Ratio to apply on a glyph so its drawn scale respects the Global Scale and
+ * the floor — the second half of the expression the two values above are the
+ * first half of, which is why it lives here rather than in the scene builder.
+ *
+ * The floor is OPT-IN and off by default (`scaleFloor()`, desktop
+ * `Scene.scale_floor`): with it off this is just the Global Scale, and a glyph
+ * renders at exactly the size its scale fields ask for, however small.
+ *
+ * When it is on, the floor is on the node's OWN scale × base_scale, applied
+ * exactly once — `node_world_matrix`'s `S_child = diag(this node's own scale *
+ * base_scale, floored at scale_floor)`. It is NOT a floor on the accumulated
+ * world scale: an ancestor chain keeps shrinking a descendant without limit,
+ * which is what makes a hyperglyph pasted onto a small child render small.
+ * Flooring the cumulative product instead (what this did until 2026-07-27)
+ * halts the shrink at 0.2 and inflates every deeply nested glyph — visible as
+ * pasted children overwhelming the parent they were pasted onto.
+ *
+ * Because a frame already carries the raw own scale, the glyph's job is only to
+ * turn that into the floored one. Nothing about an ancestor enters here, which
+ * is why the animation path re-derives it for a node whose OWN scale changed and
+ * no longer walks descendants (src/render/dynamicNodes.ts) — and why a cloud
+ * point, which has neither frame nor glyph, can still be sized by it.
+ */
+export function drawScaleCorrection(ownAxisScale: number): number {
+  // A zero-scale axis leaves nothing to multiply back up: with the floor on the
+  // desktop draws such a node at it, this draws it flat. Degenerate either way,
+  // and with the floor off both draw it flat.
+  if (Math.abs(ownAxisScale) < 1e-12) return 1
+  const rendered = ownAxisScale * current
+  // `if (floor)` rather than an unconditional max, matching the desktop: with
+  // the clamp off a NEGATIVE authored scale keeps its sign (a mirrored glyph
+  // stays mirrored) instead of being pulled up to +0.2.
+  return (floor ? Math.max(rendered, floor) : rendered) / ownAxisScale
+}

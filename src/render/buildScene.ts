@@ -7,20 +7,28 @@
 // topology-space translate. For the Cartesian topology family that is exactly
 // a standard TRS hierarchy, so plain Object3D nesting reproduces it.
 //
-// All 18 topologies place via topoOffset/topoBaseRotation (src/render/
+// All 19 topologies place via topoOffset/topoBaseRotation (src/render/
 // topology.ts), and World Grid (type 6) children place by geography —
 // both verified against the desktop engine by the parity test. Link (type
 // 7) edges render via the LinkOverlay between endpoint world positions, and
 // Plot (16) polylines / Surface (17) quad meshes via the TopologyOverlay
 // between their children's.
+//
+// Point Cloud (18) is the one topology whose children get NO Object3D here at
+// all: they draw as a batched point array in the PointCloudOverlay, which is
+// what makes six-figure point counts affordable (render/pointCloudOverlay.ts).
+// So a cloud is the second source, after the `\` draw limit, of a node that is
+// real in every other way and has no frame.
 
 import * as THREE from 'three'
+import { cloudParentIds } from '../gv/pointCloud'
 import type { GvNode } from '../gv/types'
 import { Geometry, NodeType, Topo, WORLD_DEFAULT_BG } from '../gv/types'
-import { GRID_GLOBE_RADIUS, gridCenter, gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
+import { gridDrawScale, gridIsGlobe } from '../gv/worldGrid'
 import { worldNodeOf } from '../gv/worldNode'
-import { baseScale, scaleFloor } from './baseScale'
+import { drawScaleCorrection } from './baseScale'
 import { drawLimitPlan } from './drawLimit'
+import { framePosition } from './framePlacement'
 import {
   createGlyphObject,
   createPickProxy,
@@ -28,8 +36,9 @@ import {
   ROD_RADIUS_FACTOR,
 } from './glyphGeometry'
 import { buildLinkOverlay, LinkOverlay } from './linkOverlay'
+import { buildPointCloudOverlay, PointCloudOverlay } from './pointCloudOverlay'
 import { localRotationMatrix } from './rotation'
-import { parentTopoScale, topoBaseRotation, topoOffset } from './topology'
+import { topoBaseRotation } from './topology'
 import { buildTopologyOverlay, TopologyOverlay } from './topologyOverlay'
 import { createWorldGridObject } from './worldGridGeometry'
 
@@ -71,55 +80,6 @@ export function applyFrameTransform(
 }
 
 /**
- * The node's local-frame position. Children of a World Grid place by
- * geography, regardless of the grid row's own topo field: flat → Cartesian
- * recentered on the extents window's midpoint; globe → KML lon/lat/elevation
- * on the 180/π sphere. The grid's per-axis scale re-spaces these offsets
- * here (its frame carries no scale — see applyFrameTransform).
- */
-function framePosition(node: GvNode, parentGv: GvNode | null): THREE.Vector3 {
-  if (parentGv && parentGv.type === NodeType.WorldGrid) {
-    let offset: THREE.Vector3
-    if (gridIsGlobe(parentGv)) {
-      offset = topoOffset({
-        parentTopo: Topo.Sphere,
-        tx: node.translate.x,
-        ty: node.translate.y,
-        tz: node.translate.z,
-        parentRatio: 0,
-        subspace: node.subspace,
-        baseScale: GRID_GLOBE_RADIUS,
-      })
-    } else {
-      const c = gridCenter(parentGv)
-      offset = new THREE.Vector3(
-        node.translate.x - c.lon,
-        node.translate.y - c.lat,
-        node.translate.z,
-      )
-    }
-    return offset.multiply(
-      new THREE.Vector3(parentGv.scale.x, parentGv.scale.y, parentGv.scale.z),
-    )
-  }
-  return topoOffset({
-    parentTopo: parentGv ? parentGv.topo : -1,
-    tx: node.translate.x,
-    ty: node.translate.y,
-    tz: node.translate.z,
-    parentRatio: parentGv?.ratio ?? 0,
-    subspace: node.subspace,
-    // The live Global Scale: a topology's base radius is the size of the glyph
-    // its children sit on, so raising it moves them outward with it.
-    baseScale: baseScale(),
-    // How far one unit of this child's translate reaches on the axes the
-    // parent's topology reads as distances. A root has no parent to ask, so
-    // parentTopoScale answers 1.0 — its translate IS its world position.
-    parentTopoScale: parentTopoScale(parentGv),
-  })
-}
-
-/**
  * The outward-orientation scaffold premultiplied onto the node's own
  * rotation: the parent topo's base rotation, with the World Grid override —
  * flat-grid children take none (their placement is plain Cartesian), globe
@@ -140,6 +100,8 @@ export function frameBaseRotation(node: GvNode, parentGv: GvNode | null): THREE.
   )
 }
 
+export { framePosition } from './framePlacement'
+
 export interface SceneBuildResult {
   root: THREE.Group
   background: THREE.Color
@@ -149,6 +111,12 @@ export interface SceneBuildResult {
   links: LinkOverlay
   /** Plot polylines + Surface meshes; same per-frame/resize contract. */
   overlays: TopologyOverlay
+  /**
+   * Point Cloud batches; same per-frame/resize contract. It is also where the
+   * position of a cloud POINT comes from — those nodes have no frame, so
+   * `frames.get(id)` returns nothing for them by design.
+   */
+  clouds: PointCloudOverlay
   /** id → frame, first row wins. O(1) lookups — getObjectByName scans the
    *  whole graph and must stay out of per-tick interaction paths. */
   frames: ReadonlyMap<number, THREE.Object3D>
@@ -192,6 +160,14 @@ export interface BuildSceneOptions {
    * CSV-hidden one never flashes visible.
    */
   channelHideBound?: ReadonlySet<number>
+  /**
+   * Nodes a channel or a rate field can move or recolour each frame. Only the
+   * point-cloud overlay reads it: a cloud's points are baked into one array, so
+   * an animated point has to be re-derived per frame rather than riding a frame
+   * that moves (render/pointCloudOverlay.ts). Everything else animates through
+   * DynamicNodes, which works on the Object3Ds a cloud point does not have.
+   */
+  liveNodeIds?: ReadonlySet<number>
 }
 
 /** id → row, FIRST row wins on a duplicate id (the engine's own rule). */
@@ -261,6 +237,10 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     showHidden: options.showHidden,
   })
 
+  // Parents whose children draw as batched points instead of glyphs. Empty for
+  // every scene without a cloud, and the recursion tests it once per node.
+  const cloudParents = cloudParentIds(nodes)
+
   let drawnCount = 0
   // id → frame, first row wins (mirrors byId) — link endpoint resolution
   // must be O(1), never a getObjectByName scene scan.
@@ -304,6 +284,18 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     // subtree contributes no Object3D. `keep` is upward-closed, so one test
     // covers it (drawLimit.ts).
     if (limit && !limit.keep.has(node.id)) return
+
+    // A point inside a Point Cloud parent. It gets NO Object3D — not a frame,
+    // not a glyph, not a pick proxy — because the whole cloud goes out as one
+    // batched point array (pointCloudOverlay.ts), and because three Object3Ds
+    // apiece is what makes a six-figure cloud unaffordable in the first place:
+    // `Scene.updateMatrixWorld` recomposes every one of them per frame, whether
+    // or not it draws (roadmap 6m).
+    //
+    // Returning here also drops the point's own subtree, which is right: a
+    // cloud is a flat set of positions by construction, and a node hung under a
+    // point would have nothing to hang from.
+    if (cloudParents.size > 0 && cloudParents.has(node.parentId)) return
 
     const frame = new THREE.Object3D()
     frame.name = `gv:${node.id}`
@@ -399,7 +391,14 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     showHidden: options.showHidden,
   })
 
-  return { root, background, drawnCount, links, overlays, frames, warnings: [...warnings] }
+  const clouds = buildPointCloudOverlay(nodes, frames, {
+    showHidden: options.showHidden,
+    keep: limit?.keep,
+    liveNodeIds: options.liveNodeIds,
+  })
+  if (clouds.cloudCount > 0) root.add(clouds.group)
+
+  return { root, background, drawnCount, links, overlays, clouds, frames, warnings: [...warnings] }
 }
 
 /**
@@ -444,37 +443,13 @@ export function applyGlyphDrawScale(glyph: THREE.Object3D, node: GvNode): void {
 /**
  * Ratio to apply on the glyph so its drawn scale respects the floor.
  *
- * The floor is OPT-IN and off by default (`scaleFloor()`, src/render/baseScale.ts
- * — desktop `Scene.scale_floor`): with it off this is just the Global Scale, and
- * a glyph renders at exactly the size its scale fields ask for, however small.
- *
- * When it is on, the floor is on the node's OWN scale × base_scale, applied
- * exactly once — `node_world_matrix`'s `S_child = diag(this node's own scale *
- * base_scale, floored at scale_floor)`. It is NOT a floor on the accumulated
- * world scale: an
- * ancestor chain keeps shrinking a descendant without limit, which is what
- * makes a hyperglyph pasted onto a small child render small. Flooring the
- * cumulative product instead (what this did until 2026-07-27) halts the shrink
- * at 0.2 and inflates every deeply nested glyph — visible as pasted children
- * overwhelming the parent they were pasted onto.
- *
- * Because the frame already carries the raw own scale, the glyph's job is only
- * to turn that into the floored one. Nothing about an ancestor enters here,
- * which is why the animation path re-derives it for a node whose OWN scale
- * changed and no longer walks descendants (src/render/dynamicNodes.ts).
+ * It lives in render/baseScale.ts, beside the two values it reads and with the
+ * whole of its reasoning, since the point-cloud overlay became a second caller
+ * (a cloud point has no glyph to put it on, but its selection halo is still
+ * sized by it) and importing it back out of here would have been an ESM cycle.
+ * Re-exported because every existing call site points at this module.
  */
-export function drawScaleCorrection(ownAxisScale: number): number {
-  // A zero-scale axis leaves nothing to multiply back up: with the floor on the
-  // desktop draws such a node at it, this draws it flat. Degenerate either way,
-  // and with the floor off both draw it flat.
-  if (Math.abs(ownAxisScale) < 1e-12) return 1
-  const rendered = ownAxisScale * baseScale()
-  const floor = scaleFloor()
-  // `if (floor)` rather than an unconditional max, matching the desktop: with
-  // the clamp off a NEGATIVE authored scale keeps its sign (a mirrored glyph
-  // stays mirrored) instead of being pulled up to +0.2.
-  return (floor ? Math.max(rendered, floor) : rendered) / ownAxisScale
-}
+export { drawScaleCorrection }
 
 /**
  * Re-apply every frame's transform and every glyph's draw scale from the
