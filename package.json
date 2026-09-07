@@ -16,6 +16,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
+    "@voxelkloud/wasm-codecs": "^0.5.1",
     "three": "^0.185.1"
   }
 }

@@ -1,4 +1,4 @@
-// Imported 3D model files (.obj / .stl) for geometry 23 (Mesh).
+// Imported 3D model files (.obj / .stl / .ply) for geometry 23 (Mesh).
 //
 // Behavior ported (not code) from the desktop app's
 // glyphviz_core/mesh_loader.py, which hands the file to trimesh and then
@@ -21,18 +21,24 @@
 //     STL glyph is smooth-shaded, not faceted, and an STL's own facet normals
 //     never reach the screen.
 //
+// PLY joined .obj and .stl when the point-cloud importer arrived (roadmap: W2):
+// its vertex table is a cloud and its face table is a mesh, so one reader in
+// src/io/plyFile.ts serves both and the format stopped being a refusal.
+//
 // Pure data — no THREE, no DOM — so the whole parse is testable in plain node.
 // src/render/meshLibrary.ts turns the result into a BufferGeometry.
 
+import { parsePlyFile } from '../io/plyFile'
+
 /** Extensions this app can parse. */
-export const MESH_EXTENSIONS = ['.obj', '.stl'] as const
+export const MESH_EXTENSIONS = ['.obj', '.stl', '.ply'] as const
 
 /**
- * Extensions the DESKTOP accepts (trimesh gets PLY/glTF for free) that this app
- * does not parse yet. Named so an import can say which it is, rather than
- * refusing an .stl and a .glb with the same unhelpful message.
+ * Extensions the DESKTOP accepts (trimesh gets glTF for free) that this app does
+ * not parse yet. Named so an import can say which it is, rather than refusing an
+ * .stl and a .glb with the same unhelpful message.
  */
-export const DESKTOP_ONLY_MESH_EXTENSIONS = ['.ply', '.glb', '.gltf'] as const
+export const DESKTOP_ONLY_MESH_EXTENSIONS = ['.glb', '.gltf'] as const
 
 export interface MeshData {
   /** File stem, like the desktop's `MeshData.name` (`Path(path).stem`). */
@@ -104,13 +110,26 @@ export function parseMeshFile(name: string, bytes: ArrayBuffer): MeshData {
     raw = parseObj(decodeText(bytes))
   } else if (ext === '.stl') {
     raw = looksLikeBinaryStl(bytes) ? parseBinaryStl(bytes) : parseAsciiStl(decodeText(bytes))
+  } else if (ext === '.ply') {
+    // PLY came in with the point-cloud importer, which needs the same parser for
+    // the vertex table (src/io/plyFile.ts); reading the FACE table too is what
+    // turned a refusal into a format. A PLY with no faces is a point cloud, and
+    // falls through to the "no usable triangle mesh" message below — which is
+    // the honest answer for something asked to be a mesh glyph.
+    const ply = parsePlyFile(new Uint8Array(bytes))
+    raw = {
+      positions: Array.from(ply.positions),
+      uvs: null,
+      normals: null,
+      indices: ply.indices ? Array.from(ply.indices) : [],
+    }
   } else if (isDesktopOnlyMeshFileName(name)) {
     throw new Error(
       `${ext} is not supported in the web app yet — desktop GlyphViz reads it through trimesh. ` +
-        'Export as .obj or .stl.',
+        'Export as .obj, .stl or .ply.',
     )
   } else {
-    throw new Error(`Unsupported mesh format "${ext || name}". Use .obj or .stl.`)
+    throw new Error(`Unsupported mesh format "${ext || name}". Use .obj, .stl or .ply.`)
   }
 
   if (raw.indices.length === 0) {

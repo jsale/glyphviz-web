@@ -201,6 +201,10 @@ import { SmoothOrbitControls } from './render/smoothOrbitControls'
 import { worldPlacements } from './render/selectionPlacement'
 import { parentTopoScale } from './render/topology'
 import { invertTopoOffset, pickDominantField } from './render/topologyInverse'
+import {
+  isPointCloudFileName,
+  SUPPORTED_EXTENSIONS as POINT_CLOUD_EXTENSIONS,
+} from './gv/pointCloudLoader'
 import { BasemapWindow } from './ui/basemapWindow'
 import type { BasemapApplyPayload } from './ui/basemapWindow'
 import { ChannelsPanel, DEFAULT_CHANNEL_FPS } from './ui/channelsPanel'
@@ -208,6 +212,8 @@ import { EpicycleWindow } from './ui/epicycleWindow'
 import { FpsMeter } from './ui/fpsMeter'
 import { GlyphComposerWindow } from './ui/glyphComposerWindow'
 import { HyperglyphWindow } from './ui/hyperglyphWindow'
+import { PointCloudWindow } from './ui/pointCloudWindow'
+import type { PointCloudApplyPayload } from './ui/pointCloudWindow'
 import { Inspector } from './ui/inspector'
 import { NodeTable } from './ui/nodeTable'
 import { PANEL_MODE_EVENT, Panel } from './ui/panel'
@@ -739,7 +745,8 @@ hud.innerHTML = `
       <button id="hud-paste" title="Paste the copied subtree with fresh ids: as a child of the selected node, or as a new root object with nothing selected." disabled>Paste (Ctrl+V)</button>
     </div>
     <div class="hud-create-buttons">
-      <label id="hud-import-mesh" class="hud-file-button" title="Import a 3D model (.obj / .stl) as a Mesh glyph.&#10;With one node selected the model is assigned to it; with nothing selected it becomes a new object.&#10;Models can also just be dropped on the window.">Import Mesh…<input type="file" accept=".obj,.stl" multiple></label>
+      <label id="hud-import-mesh" class="hud-file-button" title="Import a 3D model (.obj / .stl / .ply) as a Mesh glyph.&#10;With one node selected the model is assigned to it; with nothing selected it becomes a new object.&#10;Models can also just be dropped on the window.">Import Mesh…<input type="file" accept=".obj,.stl,.ply" multiple></label>
+      <label id="hud-import-cloud" class="hud-file-button" title="Import a LIDAR or scan file (.las / .laz / .ply / .xyz / .pts) as a Point Cloud.&#10;Opens a window reporting what is in the file — point count, extent, colour, classification — before anything is imported.&#10;The cloud is appended to the open scene; .las/.laz/.xyz/.pts can also just be dropped on the window.">Import Cloud…<input type="file" accept=".las,.laz,.ply,.xyz,.pts,.txt,.csv"></label>
     </div>
     <div class="hud-create-buttons">
       <button id="hud-hyperglyph" title="Procedurally generate a randomized multi-level hyperglyph from a branch-level count and a node budget, preview it, and drop it into the scene.&#10;The same seed produces the same design in desktop GlyphViz.">Hyperglyph… (Ctrl+H)</button>
@@ -900,6 +907,7 @@ const placementStepInput = hud.querySelector<HTMLInputElement>('#hud-placement-s
 const placementRootZInput = hud.querySelector<HTMLInputElement>('#hud-placement-root-z')!
 const placementChildZInput = hud.querySelector<HTMLInputElement>('#hud-placement-child-z')!
 const importMeshInput = hud.querySelector<HTMLInputElement>('#hud-import-mesh input')!
+const importCloudInput = hud.querySelector<HTMLInputElement>('#hud-import-cloud input')!
 const hyperglyphButton = hud.querySelector<HTMLButtonElement>('#hud-hyperglyph')!
 const composerButton = hud.querySelector<HTMLButtonElement>('#hud-composer')!
 const epicycleButton = hud.querySelector<HTMLButtonElement>('#hud-epicycles')!
@@ -3771,6 +3779,21 @@ async function openFileSet(dropped: PathedFile[]) {
     return
   }
 
+  // A single dropped scan opens the import window, for the same reason. .ply is
+  // deliberately NOT routed here even though the importer reads it: a dropped
+  // PLY has gone to the mesh importer since mesh import shipped and is far more
+  // often a model than a scan (the desktop's drop_router says exactly this), so
+  // the mesh test above claims it and Import Cloud… takes the other case. .txt
+  // and .csv are absent for a sharper reason — a dropped CSV is a SCENE.
+  const droppedClouds = files.filter((f) => isDroppedPointCloud(f.file.name))
+  if (droppedClouds.length > 0 && droppedClouds.length === files.length) {
+    if (files.length > 1) {
+      status(`Drop one scan at a time — ${files.length} were dropped; opening the first.`)
+    }
+    importPointCloudFile(droppedClouds[0].file)
+    return
+  }
+
   openedFiles = new Map(files.map((f) => [normalizePath(f.path), f.file]))
   openedScenes = findScenes(files.map((f) => f.path))
 
@@ -5655,6 +5678,90 @@ importMeshInput.addEventListener('change', () => {
   const files = [...(importMeshInput.files ?? [])].map((file) => ({ file, source: file.name }))
   importMeshInput.value = ''
   importMeshFilesSafely(files)
+})
+
+/**
+ * Extensions a DROP routes to the point-cloud importer.
+ *
+ * The desktop's own `drop_router.POINT_CLOUD_EXTS` exactly, and deliberately
+ * narrower than the importer's SUPPORTED_EXTENSIONS: .ply stays a mesh on drop,
+ * and .txt/.csv stay scene files. Derived from that list rather than restated,
+ * so a format added to the importer cannot silently fail to be droppable.
+ */
+const DROPPED_CLOUD_EXTENSIONS = POINT_CLOUD_EXTENSIONS.filter(
+  (ext) => ext !== '.ply' && ext !== '.txt',
+)
+
+function isDroppedPointCloud(name: string): boolean {
+  return (
+    isPointCloudFileName(name) &&
+    (DROPPED_CLOUD_EXTENSIONS as readonly string[]).some((ext) => name.toLowerCase().endsWith(ext))
+  )
+}
+
+// --- Import Point Cloud ---------------------------------------------------------
+//
+// Desktop Meshes > Import Point Cloud… (_load_point_cloud_path), replumbed for a
+// browser: the window (ui/pointCloudWindow.ts) scans the file, collects the
+// options and builds the nodes; this side puts them into the scene.
+//
+// The cloud is APPENDED, never a replacement — a scan is nearly always context
+// for something else (sensors placed in a building, per-tree glyphs over a
+// canopy), so replacing the scene would be the wrong default and, with no undo
+// anywhere in this app, an unrecoverable one. The desktop routes that through
+// its Ctrl+M merge; here the loader mints its own ids from nextNodeId() and the
+// nodes reference nothing but each other, so there is nothing to renumber.
+
+const pointCloudWindow = new PointCloudWindow({
+  onApply: applyPointCloudImport,
+  nextNodeId: () => nextNodeId(currentNodes),
+})
+
+function applyPointCloudImport(payload: PointCloudApplyPayload) {
+  const { nodes, report } = payload
+  const parent = nodes[0]
+  currentNodes.push(...nodes)
+  rebuildScene(false)
+  setSelection(parent.id)
+
+  // Frame the cloud, the desktop's focus_on_node — an imported scan lands in
+  // world units near the origin, which may be nowhere near where the camera is
+  // pointing at a scene it was already looking at.
+  const pos = worldPosOf(parent.id)
+  if (pos) {
+    controls.target.copy(pos)
+    snapCameraGoal()
+    controls.update()
+  }
+
+  const dropped = report.totalPoints - report.points
+  const sampled =
+    dropped > 0
+      ? ` (${report.decimation} sample of ${report.totalPoints.toLocaleString('en-US')})`
+      : ''
+  status(
+    `Imported ${report.points.toLocaleString('en-US')} points from ${payload.fileName}, ` +
+      `coloured by ${report.colorMode}${sampled} — node ${parent.id}.`,
+  )
+}
+
+/**
+ * Open the import window for one file.
+ *
+ * Named rather than called inline because the drop router reaches it from
+ * ~1,900 lines up, where `pointCloudWindow.open(...)` would say nothing about
+ * what a dropped scan is about to do. Errors need no handling here: the window
+ * scans asynchronously and reports a file it cannot read in its own body, which
+ * is where someone looking at that file is already looking.
+ */
+function importPointCloudFile(file: File): void {
+  pointCloudWindow.open(file)
+}
+
+importCloudInput.addEventListener('change', () => {
+  const file = importCloudInput.files?.[0]
+  importCloudInput.value = ''
+  if (file) importPointCloudFile(file)
 })
 
 // --- ANTz attribute cycling (J = topology, O = geometry) ------------------------

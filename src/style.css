@@ -1549,3 +1549,58 @@ canvas {
 .epicycle-warn {
   color: #e9a0a0;
 }
+
+/* --- Import Point Cloud window ---------------------------------------------
+   Form-shaped like the basemap and save-selection windows: a report of what is
+   in the file, the options that report makes meaningful, and the import. Height
+   follows content, except that the class list gets its own scroller — a real
+   classified tile carries fifteen codes and the window must not grow to fit
+   them. */
+
+#point-cloud-window {
+  width: 380px;
+  height: auto;
+  min-height: 0;
+  resize: horizontal;
+}
+
+#point-cloud-window .hud-create-row span {
+  flex: 0 0 96px;
+}
+
+#point-cloud-window .basemap-preview {
+  margin-top: 2px;
+}
+
+#point-cloud-window .sel-section:first-of-type {
+  margin-top: 8px;
+}
+
+.pc-class-group {
+  margin-top: 10px;
+}
+
+.pc-class-list {
+  max-height: 132px;
+  margin: 2px 0 6px;
+  overflow-y: auto;
+}
+
+.pc-class-list .sel-check {
+  margin: 2px 0;
+}
+
+/* A disabled checkbox alone is not legible at this size, so the wording greys
+   with it — the lesson the Save Selection window already learned. */
+.pc-class-list.is-disabled {
+  color: #6c7488;
+}
+
+.pc-class-list.is-disabled .sel-check {
+  cursor: default;
+}
+
+.pc-class-group .basemap-buttons .float-window-action {
+  margin-top: 0;
+  padding: 2px 0;
+}

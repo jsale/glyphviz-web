@@ -72,6 +72,7 @@
 import { paletteIndexCount, resolvePaletteColor } from './colorPalette'
 import { blankNode } from './createNode'
 import type { PythonRandom } from './pythonRandom'
+import { formatG } from './pythonRound'
 import type { GvNode, Vec3 } from './types'
 import { Geometry, NodeType, Topo } from './types'
 
@@ -1684,27 +1685,14 @@ export function pyRound(value: number, digits: number): number {
 }
 
 /**
- * Python's `f"{v:g}"` (with `:+g` when `sign` is set), for the node labels — the
- * tag text is part of what a parity dump compares, so "10" must not come out as
- * "10.000000".
+ * Python's `f"{v:g}"`, for the node labels — the tag text is part of what a
+ * parity dump compares, so "10" must not come out as "10.000000".
+ *
+ * It moved to ./pythonRound.ts when the point-cloud importer's provenance label
+ * needed it too, and is re-exported here so every existing importer of it is
+ * unaffected — the same move `roundHalfToEven` made out of channels.ts.
  */
-export function formatG(value: number, sign = false, precision = 6): string {
-  if (!Number.isFinite(value)) return String(value)
-  const lead = sign && value >= 0 ? '+' : ''
-  if (value === 0) return `${lead}0`
-  const [mantissa, expText] = value.toExponential(precision - 1).split('e')
-  const exponent = Number(expText)
-  if (exponent < -4 || exponent >= precision) {
-    const abs = Math.abs(exponent)
-    const expSign = exponent < 0 ? '-' : '+'
-    return `${lead}${trimTrailingZeros(mantissa)}e${expSign}${abs < 10 ? `0${abs}` : abs}`
-  }
-  return lead + trimTrailingZeros(value.toFixed(Math.max(0, precision - 1 - exponent)))
-}
-
-function trimTrailingZeros(text: string): string {
-  return text.includes('.') ? text.replace(/\.?0+$/, '') : text
-}
+export { formatG } from './pythonRound'
 
 // ----------------------------------------------------------------------- FFT
 //

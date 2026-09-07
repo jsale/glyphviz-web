@@ -2731,7 +2731,176 @@ something to decide now).
         project will have, taken because the desktop's own LIDAR example ships as
         a `.laz` and because writing a LAZ arithmetic decoder is a project rather
         than a feature. Until then a cloud reaches this app the way every other
-        scene does: as a CSV the desktop wrote.
+        scene does: as a CSV the desktop wrote. **Shipped 2026-09-07 as 6ll,
+        the same day.**
+   ll. Point Cloud topology, phase W2 — importing a file (shipped 2026-09-07,
+      Jeff's request — the import half of desktop `27cdb75`, taken as its own
+      session by the split agreed when W1 landed): **LAS / LAZ / PLY / XYZ / PTS
+      open as a Point Cloud**, through a window that reports what is in the file
+      before anything is imported. An Import Cloud… button in the Create panel,
+      and a dropped `.las`/`.laz`/`.xyz`/`.pts`.
+      - The work is NOT the file parsing, and the desktop's loader says so in as
+        many words. It is three things:
+        - COORDINATES. A georeferenced scan arrives in CRS units with an
+          enormous origin — the desktop's own `aerial_survey.laz` runs
+          704,194..705,152 easting — so dropped in as-is it is a speck 800,000
+          units from the origin. `fitToWorld` recentres it on a 0.1/99.9
+          PERCENTILE box (airborne LIDAR reliably contains birds and cloud
+          returns; one point a kilometre up would otherwise shrink the whole
+          scan toward invisibility) and scales it UNIFORMLY off the larger
+          HORIZONTAL extent to `DEFAULT_WORLD_SPAN` = 360, which is GlyphViz's
+          own 1:1 frame — the width of a default World Grid. Per-axis would
+          stretch terrain, which is the one thing a LIDAR viewer must never do
+          by default; `exaggeration` multiplies Z alone and is an explicit
+          argument with a truthful default of 1.0.
+        - COLOUR. Most public LIDAR has no RGB at all, so classification and
+          elevation are first-class modes rather than fallbacks: 'auto' takes
+          the file's RGB, else classification when `isReallyClassified` (a file
+          that is all 0/1 just HAS the column, which nearly every LAS file
+          does), else a blue→green→warm-white elevation ramp over the 2nd–98th
+          percentile. The ASPRS table is the desktop's verbatim, with a hue hash
+          for the user codes past it (LAS 1.4 reserves 64+), and the
+          8-bit-in-16-bit-fields heuristic is decided from the data — scaling a
+          genuinely 8-bit file by >>8 turns it black.
+        - COUNT. Every point is a real node, which is the feature and the
+          ceiling. Random / stride / voxel, and the CLASS FILTER RUNS BEFORE THE
+          SAMPLE — ask for 100k points and then drop ground, which is most of an
+          aerial tile, and filtering second would quietly hand back 35k.
+      - Split as this repo keeps splitting: `src/io/lasFile.ts` and
+        `src/io/plyFile.ts` are the containers, `src/gv/pointCloudLoader.ts` the
+        rules (no THREE, no DOM, the desktop's own module minus numpy),
+        `src/ui/pointCloudWindow.ts` the form, and main.ts the scene wiring.
+      - THE DEPENDENCY, and it is the project's first runtime one besides
+        `three`: `@voxelkloud/wasm-codecs` 0.5.1 (MIT, a wasm build of laz-rs
+        0.13 under Apache-2.0), 147 KB of wasm and 29 KB of JS with no deps of
+        its own. It decompresses and nothing else — `decodeLazFile` hands back
+        raw LAS point RECORDS, so this app's own reader does the header, the
+        VLRs, the scale/offset reconstruction and every field, and a `.las`
+        needs the decoder not at all (its records are already the bytes we want:
+        a header parse and a subarray). The import is DYNAMIC and Vite splits it
+        into its own chunk, so a session that never opens a LAZ never fetches
+        it. laz-perf was the other candidate and carries the LGPL the desktop
+        deliberately avoided when it took `lazrs`.
+      - Two byte-level details a synthetic fixture would never have caught, both
+        pinned by parity:
+        - CLASSIFICATION IS A 5-BIT SUB-FIELD in point formats 0–5, sharing its
+          byte with synthetic / key-point / withheld, and a full byte at a
+          different OFFSET in the 1.4 formats 6–10. A legacy file that marks
+          points withheld sets bit 7, so an unmasked read of a class-2 ground
+          point comes back as 130 — outside the ASPRS table, coloured as a user
+          class, and invisible to a "keep ground" filter. laspy exposes the same
+          sub-field, so this is the value the desktop filters and colours by.
+        - numpy's `.astype(np.uint8)` after a clip TRUNCATES. Every ramp colour
+          and every 0–1 ASCII colour column goes through it, so `Math.round`
+          would be off by one across most of the range (18 parity tests catch
+          it).
+      - Divergences, each of them the platform or a defect rather than a matter
+        of taste:
+        - The RANDOM sample draws from CPython's Mersenne Twister
+          (`pythonRandom.ts`, already here for the Hyperglyph Generator) where
+          the desktop draws from numpy's PCG64, so the same file at the same
+          settings gives a statistically identical but not identical cloud. That
+          is a far smaller promise than the hyperglyph SEED's, deliberately: a
+          seed NAMES a hyperglyph, is shown in the dialog and gets written down,
+          whereas the desktop's import dialog exposes no seed at all — it passes
+          0 — so "the same seed picks the same points in both apps" is a promise
+          nobody has made or could act on. Stride and voxel are exact. The one
+          place it leaks is the voxel SEARCH's random pre-sample, which fires
+          only past 12× the target (a real 100k import needs a 1.2M-point file).
+        - The window is ASYNC and DECOMPRESSES ONCE. The desktop reads
+          synchronously under a wait cursor and says why — a QThread destroyed
+          with its dialog aborts the process, and every arrangement of parenting
+          and joining traded that crash for a hang. A browser carries none of
+          that hazard, so the window stays live, and it holds the decoded
+          records for its lifetime: changing an option and importing again costs
+          nothing where the desktop re-reads (218 ms per press on its own
+          example, seconds on a real tile).
+        - THE CLASS FILTER ONLY APPEARS WHEN THE FILE IS GENUINELY CLASSIFIED,
+          found by LOOKING at the window rather than measuring it. The desktop
+          shows the group for any non-empty class map, so its own aerial_survey
+          example offers a filter with one entry — "0 Created, never classified
+          (442,767)" — that cannot narrow anything, since unticking the only
+          class is the "no filter" case. What it had to say is said in the
+          report line instead ("Carries: RGB, an empty classification column,
+          intensity"), which is also what decides whether Automatic colours by
+          class or falls back to elevation.
+        - A whitespace-delimited ASCII file with a plain text header LOADS here
+          and does not on the desktop. Its `_read_ascii` promises in as many
+          words that "any leading line that does not parse as numbers is treated
+          as a header and skipped", and for a COMMA-delimited file it is; for a
+          whitespace one the header becomes a row of NaNs, the comma retry then
+          reads the whole file as one very wide row, `rows2.shape[1] >= 3`
+          accepts it, and the load fails with "No x y z columns found".
+          **Reported to Jeff** — a real desktop bug, found by porting.
+        - The CRS is read from the file's own OGC WKT VLR, where the desktop
+          calls `laspy.header.parse_crs` — which needs `pyproj`, an OPTIONAL
+          laspy extra the project does not depend on, so on a stock install it
+          reports nothing at all. Best-effort on both sides: the geometry is
+          already in hand and a CRS must never fail an import.
+        - A new file RESETS the options, which is what the desktop's fresh
+          dialog per file does. Found by driving it: the window carried a target
+          of 4,000 — chosen for a 5,000-point fixture — onto a 442,767-point
+          tile and said "Will keep 4,000 — about 1 in 111", telling the truth
+          about a decision nobody had made. Every other number in that window
+          describes THIS file.
+      - Routing follows the desktop's `drop_router` exactly and is DERIVED from
+        the importer's own list rather than restated: `.ply` stays a MESH on
+        drop (it has routed there since mesh import shipped and is far more
+        often a model than a scan) and reaches the importer only through Import
+        Cloud…; `.txt` and `.csv` are absent for a sharper reason — a dropped CSV
+        is a SCENE, and node CSVs are identified by their COLUMNS rather than
+        their name, so claiming the extension would break scene opening.
+        `isPointCloudFileName` therefore never claims a `.csv`, while
+        `loadPointCloud` still reads one handed to it explicitly, exactly as the
+        desktop's own `load_point_cloud` does while its SUPPORTED_EXTENSIONS
+        omits it.
+      - The cloud is APPENDED, never a replacement — a scan is nearly always
+        context for something else (sensors placed in a building, per-tree
+        glyphs over a canopy), and with no undo anywhere in this app a
+        replacement would be unrecoverable. The desktop routes that through its
+        Ctrl+M merge; here the loader mints its own ids from `nextNodeId` and the
+        nodes reference nothing but each other, so there is nothing to renumber
+        and File ▸ Merge is not a prerequisite.
+      - Bonus that fell out of the PLY reader: `.ply` is no longer refused by the
+        MESH importer. Its vertex table is a cloud and its face table is a mesh,
+        so one reader in `src/io/plyFile.ts` serves both and the format stopped
+        being a "desktop reads this through trimesh" message. `MESH_EXTENSIONS`
+        is `.obj/.stl/.ply`; only `.glb`/`.gltf` remain desktop-only.
+      - Parity: `tools/dump_point_cloud_import.py` runs the REAL desktop loader —
+        `fit_to_world`, `resolve_colors`, `class_color`/`class_name`,
+        `_decimation_index` and `import_to_nodes` — and WRITES its own fixtures,
+        each stating the property it is about: a UTM tile with 16-bit colour and
+        four ASPRS classes, the same points as a `.laz`, 8-bit colour in the
+        16-bit fields, an unclassified file, a wild outlier, a legacy file with
+        the withheld bit set, a LAS 1.4 file carrying user codes past 31, an
+        ASCII scan and a binary PLY. `pointCloudLoader.parity.test.ts` diffs 90
+        cases; the las/laz PAIR is what pins the wasm decoder without vendoring a
+        multi-megabyte tile. Verified to FAIL five ways — dropping the 5-bit
+        classification mask (5 tests), assuming 16-bit colour (3), fitting off
+        raw min/max (35), rounding a ramp instead of truncating (18), and
+        filtering classes after the sample (4).
+      - Driven in Chrome, 43 measured checks: the button's size, styling and
+        placement beside Import Mesh; the window fitting the viewport with every
+        row labelled; the report's count, extent and what the file carries; the
+        live sampling ratio; the class list, its greyed state, All/None and the
+        "no ticks means no filter" rule; the import appending 4,001 rows with the
+        parent selected, carrying `topo` 18, the point size on its ratio and the
+        provenance label; the points landing in world units as ONE batched Points
+        object; and the real `aerial_survey.laz` scanning in 310 ms and importing
+        50,000 of its 442,767 points in 1.8 s at 319 fps. Plus the drop routing
+        both ways, the picker reading the same `.ply` as a cloud, and a refusal
+        that names the format. Console clean.
+        - And measured against the desktop on that REAL file, which is the check
+          that matters most: same `world_scale` to 12 digits, same positions to 5
+          decimals and the same colours EXACTLY, through the wasm decoder.
+      - Not done, and the same V1 gaps the desktop has: E57 (an open ASTM
+        standard needing a native library), and the desktop's own **phase 3** — a
+        `GEO_CLOUD` geometry id plus a `cloud_id` field, so ONE ordinary node
+        renders a whole multi-million-point scan at full resolution and children
+        place against it. Jeff shared those notes at the start of this session;
+        nothing in W2 forecloses it, since `pointCloudOverlay.ts` already owns the
+        batch and phase 3 is a second SOURCE for one rather than a change to how
+        it is drawn. Do not start it unprompted.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -4412,40 +4581,29 @@ something to decide now).
       desktop-exported cloud open here and the import half is a session of its
       own:
       - ~~**W1, the renderer**~~ — **shipped 2026-09-07, see roadmap 6kk.**
-      - **W2, importing a point-cloud FILE** — still open. LAS/LAZ/PLY/XYZ, and
-        the work is not the parsing: it is `fit_to_world` (a UTM scan arrives
-        800,000 units from the origin, recentred on a 0.1/99.9 percentile box
-        and scaled UNIFORMLY off the larger horizontal extent), colouring a scan
-        with no RGB (classification and elevation are first-class modes, not
-        fallbacks, and `_is_really_classified` knows an all-0/1 column is not a
-        classification), and decimating honestly (random / stride / voxel, with
-        the class filter running BEFORE the sample so a point budget is spent on
-        the classes actually asked for). Read `point_cloud_loader.py` and
-        `point_cloud_dialog.py` first; the loader is Qt-free and ports almost
-        line for line into `src/gv/pointCloudLoader.ts`, and the dialog's real
-        job — showing what is in the file BEFORE the user commits — is a
-        `FloatWindow` here, on the Basemap window's pattern.
-        - The FORMAT decisions are already taken (with Jeff, 2026-09-07): LAS,
-          PLY and ASCII xyz/pts are written in-house, on the same principle as
-          the CSV tokenizer, the zip reader and the mesh parser; **LAZ takes a
-          vendored `laz-rs` WASM build — the first non-`three` runtime
-          dependency this project will have.** It is the license-matched answer
-          (the desktop took `lazrs`, MIT, precisely to avoid LASzip's LGPL, and
-          laz-perf carries that same LGPL), and it is what lets the desktop's own
-          `LIDAR_Import_Example/aerial_survey.laz` open here — 2.55 MB against
-          17.7 MB as `.las`, which is why the example ships that way. Gate it so
-          a scene with no LAZ never loads it.
-        - Web-side pieces with no desktop counterpart: file intake through
-          `browserFiles.ts`/`bundle.ts` (with `.ply` deliberately staying a MESH
-          on drop, exactly as `drop_router.py` reasons, and reachable as a cloud
-          only through the explicit import); and the desktop's synchronous read
-          — forced there by a QThread that aborted the process — is a decision a
-          browser does not have to inherit, since `File.slice()` and workers
-          carry none of that hazard. Measure before adding a worker: the desktop
-          scans a 10.6M-point tile in 1.0 s.
-        - `df186e5` needs NO port: this app's `writeNodeCsv` has always written
-          only the optional columns a scene uses, which is the change that took
-          the desktop's 442k-point save from 244 MB to 40.7 MB.
+      - ~~**W2, importing a point-cloud FILE**~~ — **shipped 2026-09-07, see
+        roadmap 6ll**, the same day as W1. LAS/LAZ/PLY/XYZ/PTS, the whole
+        loader ported with a 90-case parity harness against the real desktop
+        module, and the LAZ decoder taken as agreed: `@voxelkloud/wasm-codecs`
+        (MIT, a wasm build of laz-rs), dynamically imported so a session with no
+        LAZ never fetches it. The desktop's own `aerial_survey.laz` opens here
+        and imports byte-identically to the desktop's own importer.
+      - **Phase 3, still open and NOT started**: `GEO_CLOUD` plus a `cloud_id`
+        field, so ONE ordinary node renders a whole multi-million-point scan at
+        full resolution and children place against it — the desktop proposed it
+        and has not implemented it either. Jeff shared those notes at the start
+        of the W2 session. Nothing in W1 or W2 forecloses it:
+        `pointCloudOverlay.ts` already owns the batch, and phase 3 is a second
+        SOURCE for one rather than a change to how it is drawn. Its two
+        recorded improvements over the mesh precedent are worth keeping — clouds
+        discovered from `media/` next to the CSV (so a scene folder round-trips
+        with its scan, which imported MESHES still do not), and the batch owned
+        as arrays rather than as a display list, which this app already does.
+        Do not start it unprompted.
+      - `df186e5` needs NO port: this app's `writeNodeCsv` has always written
+        only the optional columns a scene uses, which is the change that took
+        the desktop's 442k-point save from 244 MB to 40.7 MB.
+
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

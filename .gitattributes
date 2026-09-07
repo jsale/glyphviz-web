@@ -1,0 +1,8 @@
+# Point-cloud fixtures are BINARY: a LAS/LAZ record stream and a binary PLY.
+# Marked explicitly rather than left to Git's NUL-byte heuristic — a binary PLY
+# opens with an ASCII header, so a file whose first NUL fell past the sniff
+# window could be misdetected as text and have its bytes rewritten by autocrlf,
+# which would silently corrupt every offset the reader depends on.
+*.las binary
+*.laz binary
+*.ply binary

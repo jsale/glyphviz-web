@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { isMeshFileName, looksLikeBinaryStl, parseMeshFile, parseObj } from './meshFile'
+import {
+  isDesktopOnlyMeshFileName,
+  isMeshFileName,
+  looksLikeBinaryStl,
+  parseMeshFile,
+  parseObj,
+} from './meshFile'
 
 function encode(text: string): ArrayBuffer {
   return new TextEncoder().encode(text).buffer as ArrayBuffer
@@ -212,5 +218,71 @@ describe('STL', () => {
     expect(() => parseMeshFile('empty.stl', encode('solid empty\nendsolid empty\n'))).toThrow(
       /No usable triangle mesh/,
     )
+  })
+})
+
+describe('PLY', () => {
+  // PLY became a mesh format when the point-cloud importer arrived: its vertex
+  // table is a cloud and its face table is a mesh, and one reader in
+  // src/io/plyFile.ts serves both. Before that it was refused by name.
+  const PYRAMID =
+    'ply\nformat ascii 1.0\nelement vertex 5\n' +
+    'property float x\nproperty float y\nproperty float z\n' +
+    'element face 5\nproperty list uchar int vertex_indices\nend_header\n' +
+    '-1 -1 0\n1 -1 0\n1 1 0\n-1 1 0\n0 0 2\n' +
+    '4 0 1 2 3\n3 0 1 4\n3 1 2 4\n3 2 3 4\n3 3 0 4\n'
+
+  it('parses an ASCII mesh and normalizes it like every other model', () => {
+    const mesh = parseMeshFile('pyramid.ply', encode(PYRAMID))
+    // The quad base fans into two triangles, so 4 + 2 rather than 5 faces.
+    expect(mesh.triangleCount).toBe(6)
+    // The desktop's convention: centred on the AABB centre, scaled so the
+    // farthest vertex sits at radius 1.
+    let far = 0
+    for (let i = 0; i < mesh.positions.length; i += 3) {
+      far = Math.max(far, Math.hypot(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]))
+    }
+    expect(far).toBeCloseTo(1, 6)
+  })
+
+  it('reads a binary little-endian mesh identically', () => {
+    // Same pyramid, written the way real exporters write it.
+    const header =
+      'ply\nformat binary_little_endian 1.0\nelement vertex 5\n' +
+      'property float x\nproperty float y\nproperty float z\n' +
+      'element face 5\nproperty list uchar int vertex_indices\nend_header\n'
+    const verts = [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0], [0, 0, 2]]
+    const faces = [[0, 1, 2, 3], [0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]]
+    const body = new ArrayBuffer(5 * 12 + faces.reduce((n, f) => n + 1 + f.length * 4, 0))
+    const view = new DataView(body)
+    let at = 0
+    for (const v of verts) for (const c of v) { view.setFloat32(at, c, true); at += 4 }
+    for (const f of faces) {
+      view.setUint8(at, f.length); at += 1
+      for (const i of f) { view.setInt32(at, i, true); at += 4 }
+    }
+    const head = encode(header)
+    const bytes = new Uint8Array(head.byteLength + body.byteLength)
+    bytes.set(new Uint8Array(head), 0)
+    bytes.set(new Uint8Array(body), head.byteLength)
+
+    const mesh = parseMeshFile('pyramid.ply', bytes.buffer)
+    expect(mesh.triangleCount).toBe(6)
+    expect(mesh.vertexCount).toBe(parseMeshFile('pyramid.ply', encode(PYRAMID)).vertexCount)
+  })
+
+  it('refuses a point-only PLY as a MESH, which is what it is', () => {
+    // The same file imports perfectly well through Import Cloud…; asked to be a
+    // mesh glyph, "there are no triangles here" is the honest answer.
+    const cloud =
+      'ply\nformat ascii 1.0\nelement vertex 2\n' +
+      'property float x\nproperty float y\nproperty float z\nend_header\n0 0 0\n1 1 1\n'
+    expect(() => parseMeshFile('scan.ply', encode(cloud))).toThrow(/No usable triangle mesh/)
+  })
+
+  it('no longer names .ply as desktop-only', () => {
+    expect(isMeshFileName('model.ply')).toBe(true)
+    expect(isDesktopOnlyMeshFileName('model.ply')).toBe(false)
+    expect(isDesktopOnlyMeshFileName('model.glb')).toBe(true)
   })
 })
