@@ -2893,6 +2893,42 @@ something to decide now).
         - And measured against the desktop on that REAL file, which is the check
           that matters most: same `world_scale` to 12 digits, same positions to 5
           decimals and the same colours EXACTLY, through the wasm decoder.
+      - **Bug fixed the same day, from Jeff's report**: an import past ~101,000
+        points died with "Import failed: Maximum call stack size exceeded" and
+        changed nothing. The cause was one line in main.ts —
+        `currentNodes.push(...nodes)`, which passes one ARGUMENT per element, and
+        V8 overflows its stack somewhere between 101,000 and 150,000 of them.
+        Reproduced before fixing, on the desktop's own aerial survey: 100,000 and
+        101,000 imported fine, 150,000 / 300,000 / 442,767 all failed.
+        - Nothing about the shape of that line says it has a limit, and it had
+          been correct for every generator this app had: the Hyperglyph
+          Generator's budget tops out at 20,000, the Composer's and the
+          Epitrochoid Generator's lower still, a Draw Mode stamp is tens of
+          nodes. The point cloud is simply the first thing that hands over
+          hundreds of thousands of rows at once.
+        - Fixed with one `appendNodes` helper used at ALL SEVEN scene-append
+          sites rather than only the importer's, because PASTE had acquired
+          exactly the same ceiling the moment a cloud could be copied — a
+          copied subtree brings every descendant, so pasting a 150k-point cloud
+          would have failed identically and for a reason nobody would connect to
+          the paste.
+        - `src/largeBatch.test.ts` is a SOURCE-TEXT guard, unusual for this repo
+          and deliberate: there is no unit to call (the fault is at call sites in
+          main.ts, which exports nothing), and a test that appends 150,000 nodes
+          would prove the loader is fine — which it always was — rather than the
+          caller. Verified to FAIL by putting the spread back.
+        - Measured after the fix, one clean import of the WHOLE 442,767-point
+          file into a fresh page: **1.1 s to import, 484 Object3Ds, one batch of
+          442,767 vertices, 95.6 fps at 1.0 ms of CPU a frame**, a single point
+          still clickable out of all of them, and Save gv_node.csv writing
+          56.7 MB in 1.3 s. (The desktop reports 244 MB for the same count;
+          `writeNodeCsv` here has always written only the optional columns a
+          scene actually uses.) Console clean.
+        - Noticed and NOT changed, since neither is reachable from this feature
+          and neither has been reported: `Math.min(...lons)` in `gv/basemap.ts`
+          over a World Grid's direct children, and `all.push(...edges)` in
+          `render/linkOverlay.ts`. Both would need a six-figure count of grid
+          children or of links to matter.
       - Not done, and the same V1 gaps the desktop has: E57 (an open ASTM
         standard needing a native library), and the desktop's own **phase 3** — a
         `GEO_CLOUD` geometry id plus a `cloud_id` field, so ONE ordinary node

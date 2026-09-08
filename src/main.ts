@@ -3101,6 +3101,27 @@ let currentClouds: SceneBuildResult['clouds'] | null = null
 let cloudParents: ReadonlySet<number> = new Set()
 let currentFrames: SceneBuildResult['frames'] | null = null
 let currentNodes: GvNode[] = []
+
+/**
+ * Append a batch of rows to the scene.
+ *
+ * A loop rather than a spread into `push`, and the reason is a real crash Jeff
+ * hit on a point-cloud import: spreading an array into a call passes one
+ * ARGUMENT per element, and V8 overflows its stack somewhere between 101,000
+ * and 150,000 of them. Measured on the aerial survey — 101,000 points imported
+ * fine and 150,000 died with "Maximum call stack size exceeded", which the
+ * import window reported honestly and which left the scene untouched.
+ *
+ * Every caller that adds a generated batch goes through here, not only the
+ * importer: pasting a copied cloud brings its whole descendant subtree, so that
+ * path had exactly the same ceiling the moment clouds could be pasted. The
+ * others (draw stamps, the Hyperglyph Generator, the Composer, the Epitrochoid
+ * Generator) are bounded well below it by their own budgets and use this for
+ * one reason — so no future caller has to know the limit exists.
+ */
+function appendNodes(nodes: readonly GvNode[]): void {
+  for (const node of nodes) currentNodes.push(node)
+}
 let currentDisplayName = ''
 let currentFilename = 'scene_gv_node.csv'
 let parseErrorLines: string[] = []
@@ -5125,7 +5146,7 @@ function drawStamp(clientX: number, clientY: number): void {
     Number(drawHeadingJitterInput.value) || 0,
     Number(drawScaleJitterInput.value) || 0,
   )
-  currentNodes.push(...nodes)
+  appendNodes(nodes)
   drawStrokeStamps++
   drawStrokeTotalStamps++
   drawStrokeNodes += nodes.length
@@ -5280,7 +5301,7 @@ function xrDrawStampAt(hit: { lon: number; lat: number }): void {
     Number(drawHeadingJitterInput.value) || 0,
     Number(drawScaleJitterInput.value) || 0,
   )
-  currentNodes.push(...nodes)
+  appendNodes(nodes)
   drawStrokeStamps++
   drawStrokeTotalStamps++
   drawStrokeNodes += nodes.length
@@ -5385,7 +5406,7 @@ function pasteClipboard() {
     readPlacement(),
   )
   if (pasted.length === 0) return status('Nothing to paste.')
-  currentNodes.push(...pasted)
+  appendNodes(pasted)
   rebuildScene(false)
   // Selecting the result is what makes a paste immediately draggable, and it is
   // what the desktop does (select_by_ids over the pasted rows). Under a draw
@@ -5436,7 +5457,7 @@ const hyperglyphWindow = new HyperglyphWindow({
       baseBranchLevel: parent ? parent.branchLevel + 1 : 0,
     })
     if (nodes.length === 0) return
-    currentNodes.push(...nodes)
+    appendNodes(nodes)
     rebuildScene(false)
     // The desktop selects the TRUNK, not the whole subtree — which is what
     // makes a second insertion nest under the first, and what leaves the gizmo
@@ -5470,7 +5491,7 @@ const composerWindow = new GlyphComposerWindow({
       baseBranchLevel: parent ? parent.branchLevel + 1 : 0,
     })
     if (nodes.length === 0) return
-    currentNodes.push(...nodes)
+    appendNodes(nodes)
     rebuildScene(false)
     // The TRUNK, not the whole subtree — so a second insertion nests under the
     // first and the gizmo lands on the one node that moves the glyph as a unit.
@@ -5515,7 +5536,7 @@ const epicycleWindow = new EpicycleWindow({
       path,
     })
     if (nodes.length === 0) return
-    currentNodes.push(...nodes)
+    appendNodes(nodes)
     rebuildScene(false)
     setSelection(nodes[0].id)
     status(
@@ -5720,7 +5741,7 @@ const pointCloudWindow = new PointCloudWindow({
 function applyPointCloudImport(payload: PointCloudApplyPayload) {
   const { nodes, report } = payload
   const parent = nodes[0]
-  currentNodes.push(...nodes)
+  appendNodes(nodes)
   rebuildScene(false)
   setSelection(parent.id)
 
