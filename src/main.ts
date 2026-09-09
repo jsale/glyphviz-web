@@ -56,7 +56,7 @@ import {
   parseMeshFile,
 } from './gv/meshFile'
 import type { MeshData } from './gv/meshFile'
-import { parseGvNodeCsv } from './gv/nodeCsv'
+import { parseGvNodeCsv, REQUIRED_COLUMNS } from './gv/nodeCsv'
 import { channelIdsForNodes, exportChannelSubset } from './gv/channelExport'
 import { buildSelection, selectionExportNames } from './gv/selectionExport'
 import type { ExportOptions, SelectionExport } from './gv/selectionExport'
@@ -310,6 +310,15 @@ const BUILT_IN_SCENES: Record<string, BuiltInScene> = {
     filename: 'mood_background_gv_node.csv',
   },
 }
+
+// What the app boots into: a world with nothing in it, so the first thing on
+// screen is the user's own scene rather than an example they have to clear.
+// It is an ordinary CSV load — a header row and no data rows, which parses
+// cleanly to zero nodes — so every one of loadScene's resets (draw limit,
+// textures, channels, the tool windows) happens exactly as it does for a file,
+// and N or Import lands the first node in a scene that is already consistent.
+const EMPTY_SCENE_OPTION = 'Empty world'
+const EMPTY_SCENE_CSV = `${REQUIRED_COLUMNS.join(',')}\n`
 
 // GlyphViz worlds are Z-up (ANTz convention).
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1)
@@ -1053,6 +1062,14 @@ exampleSelect.appendChild(
     hidden: true,
   }),
 )
+// The boot scene, and a real entry rather than a hidden placeholder so it is
+// also the way BACK to a blank world once an example has been opened.
+exampleSelect.appendChild(
+  Object.assign(document.createElement('option'), {
+    value: EMPTY_SCENE_OPTION,
+    textContent: EMPTY_SCENE_OPTION,
+  }),
+)
 for (const name of Object.keys(BUILT_IN_SCENES)) {
   const option = document.createElement('option')
   option.value = name
@@ -1060,7 +1077,8 @@ for (const name of Object.keys(BUILT_IN_SCENES)) {
   exampleSelect.appendChild(option)
 }
 exampleSelect.addEventListener('change', () => {
-  loadBuiltIn(exampleSelect.value)
+  if (exampleSelect.value === EMPTY_SCENE_OPTION) loadEmptyScene()
+  else loadBuiltIn(exampleSelect.value)
 })
 
 function download(text: string, filename: string, type = 'text/csv') {
@@ -1076,7 +1094,9 @@ function downloadBlob(blob: Blob, filename: string) {
 }
 
 saveButton.addEventListener('click', () => {
-  if (currentNodes.length === 0) return
+  // Reachable at boot now that the app opens on an empty world, so it says why
+  // nothing was written rather than looking like a dead button.
+  if (currentNodes.length === 0) return status('Nothing to save — the world is empty.')
   // A tag-file scene keeps its authoring style: labels go to the companion
   // file, not into inline columns that would shadow it on reload.
   download(writeGvNodeCsv(currentNodes, { inlineLabels: !labelsFromTagFile }), currentFilename)
@@ -3431,6 +3451,19 @@ function loadBuiltIn(name: string) {
     channelTracksText: builtIn.chTracks,
     displayName: name,
     filename: builtIn.filename,
+  })
+}
+
+/** Start over with nothing in the world — the boot state, and the dropdown's first entry. */
+function loadEmptyScene() {
+  exampleSelect.value = EMPTY_SCENE_OPTION
+  openWarningLines = []
+  loadScene({
+    nodeText: EMPTY_SCENE_CSV,
+    displayName: EMPTY_SCENE_OPTION,
+    // The name a Save would offer, matching the fallback currentFilename has
+    // always carried for a scene that came from nowhere in particular.
+    filename: 'scene_gv_node.csv',
   })
 }
 
@@ -6231,8 +6264,11 @@ followCheckbox.addEventListener('change', () => setFollowSelected(followCheckbox
   const match = wanted
     ? Object.keys(BUILT_IN_SCENES).find((name) => name.toLowerCase().includes(wanted))
     : undefined
-  if (match) exampleSelect.value = match
-  loadBuiltIn(exampleSelect.value)
+  // Nothing asked for means an EMPTY world, not an example: the app opens on
+  // the user's own scene-to-be. A built-in is one click of the dropdown away,
+  // and ?scene= still deep-links one directly.
+  if (match) loadBuiltIn(match)
+  else loadEmptyScene()
   if (csvUrl) {
     const filename = csvUrl.split('/').pop() || 'scene_gv_node.csv'
     // The companion tag file lives next to the node CSV on disk, so try the

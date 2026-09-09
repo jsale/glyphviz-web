@@ -197,4 +197,16 @@ describe('parseGvNodeCsv', () => {
     // Tracked columns, so they must not also land in extras.
     expect(result.nodes[0].extras).toEqual({})
   })
+
+  // The app boots into an empty world, which is this exact file: the required
+  // header and no data rows. It has to parse CLEANLY — an error here would show
+  // the user a problem report before they had opened anything.
+  it('parses a header-only file as an empty scene, with no errors', () => {
+    const result = parseGvNodeCsv(`${HEADER}\n`)
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toEqual([])
+    expect(result.nodes).toEqual([])
+    // No inline label columns, so a companion tag file would still be consulted.
+    expect(result.hasInlineLabelColumns).toBe(false)
+  })
 })
