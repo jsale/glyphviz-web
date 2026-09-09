@@ -4665,6 +4665,28 @@ something to decide now).
       Magnetic Field), and the desktop docs site now publishes ONE ZIP PER
       EXAMPLE (`6041af2`) — those open directly in this app, which is the
       cheapest possible answer to the hosted-examples item in section 7.
+12. Boot state (changed 2026-09-08, Jeff's request): the app opens on an
+    **EMPTY WORLD**, not the Topology example. The first thing on screen should
+    be the user's own scene-to-be rather than somebody else's to clear.
+    - It is an ordinary CSV load — `REQUIRED_COLUMNS.join(',')` and no data
+      rows, which parses cleanly to zero nodes — so every reset `loadScene`
+      performs (draw limit, textures, Channels, the tool windows) happens
+      exactly as it does for a file, and the first N or Import lands in a scene
+      that is already consistent. It is deliberately NOT a special case
+      anywhere else in main.ts. `fitCameraTo` already framed empty bounds.
+    - **"Empty world" is a real first entry in the presets dropdown**, not a
+      hidden placeholder like `OPENED_SCENE_OPTION`, so it is also the way BACK
+      to a blank world once an example has been opened. Every preset is
+      untouched and still listed. `stepBuiltInScene` (the VR wrist panel's
+      ◀ ▶) walks `BUILT_IN_SCENES` only, so the empty entry is not in that walk.
+    - `?scene=<substring>` still deep-links a built-in; an unmatched one now
+      gives an empty world rather than silently falling back to Topology, and
+      `?csv=` no longer flashes Topology before the fetched scene arrives.
+    - Made reachable at boot for the first time: **Save gv_node.csv** had always
+      returned early on zero nodes SILENTLY, and now says why. A scene with no
+      nodes is a state large parts of this app had never been in — expect more
+      controls that do nothing without saying so, and treat that as the likely
+      shape of any "dead button" report from here.
 
 ## Collaboration notes
 
