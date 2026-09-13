@@ -2937,6 +2937,89 @@ something to decide now).
         nothing in W2 forecloses it, since `pointCloudOverlay.ts` already owns the
         batch and phase 3 is a second SOURCE for one rather than a change to how
         it is drawn. Do not start it unprompted.
+   mm. Surface textures (shipped 2026-09-12, Jeff's request — a port of desktop
+      `e22d51f`, landed there the same morning, plus the cache fix in `f73d006`):
+      **a Surface (17) parent carrying a `texture_id` drapes that image across
+      its lattice** instead of interpolating its children's vertex colours. The
+      motivating scene is the desktop's Santa Ana Wind example (`31967a6`), whose
+      11,400-vertex DEM terrain wears a 2,391 px OpenTopoMap render.
+      - BOTH ROUTES STAY, and the choice is meaningful (the desktop's own framing):
+        vertex colour is what DATA painted on a shape wants — burn severity, land
+        cover, slope — and a texture is what IMAGERY wants. A texture also
+        decouples picture resolution from mesh density, which otherwise caps the
+        image at one pixel per lattice point.
+      - The rules, all the desktop's: the mode is chosen by the PARENT's
+        texture_id alone; an id that does not RESOLVE falls back to vertex colour
+        rather than a blank white sheet (so a scene opened without its media/
+        folder still reads — which is why Santa Ana's CSV still carries vertex
+        colours); UVs are World Grid's convention, u with +x and v with +y, across
+        the lattice's own bounding box (the rounded axes' extremes, the corner's
+        RAW translate), so one georeferenced image lands identically on a flat
+        grid and on relief; the mesh stays LIT and the texture MODULATES
+        (`MeshLambertMaterial` with a map here), because relief only reads as
+        relief when shaded — a surface is the one textured thing drawn lit, where
+        grids and globes draw unlit; and the whole textured mesh takes ONE white
+        colour at the PARENT's alpha, so an alpha-0 textured hub hides the whole
+        mesh (the desktop skill's `66aa38a` flags exactly that as an authoring
+        fault).
+      - Where it lives: `SurfaceMesh` in `src/render/topologyOverlay.ts`, with
+        `surfaceUv` beside it. Both attribute sets (per-corner colour AND uv) are
+        always built, so the mode is a MATERIAL flag chosen per frame rather than a
+        rebuild. That is what lets a channel-animated `texture_id` or parent
+        `color_a` take effect in place, and a texture that finishes decoding
+        later — read live out of the same `byId` map main.ts merges into — appear
+        without anything being rebuilt. Transparency goes through
+        `setNaturalTransparency`, so a render mode's forced state stays in charge.
+        `buildScene` and `rebuildAnimatedOverlays` both hand the overlay the
+        texture map now.
+      - THE PERFORMANCE HALF, in this platform's dialect. The desktop's 22× came
+        from retaining an immediate-mode mesh in a display list, with an exemption
+        for channel-bound surfaces because a list cannot see a moved node (and
+        `f73d006` then had to fix that exemption's cache key). This app never
+        re-emitted anything in Python, but it DID rewrite and re-upload both
+        position and normal buffers every frame. `SurfaceMesh.update` now compares
+        each DISTINCT vertex's world translation against what it last wrote and
+        returns on a frame where nothing moved — exact, three compares a vertex,
+        and blind to WHY a node moved (gizmo, channel, rate, an ancestor), so it
+        needs no exemption and has no cache key to get wrong. Colours get the same
+        treatment, which closes a gap that predates this: a Channels colour track
+        on a surface CHILD used to leave the mesh at its build-time colours.
+        - Measured honestly, it is not this port's headline: on Santa Ana the
+          frame is ~29 ms of CPU either way (34.4 fps skipping vs 34.2 rewriting;
+          buffer version held at 1 over a second against ~36 rewrites), because
+          **11,883 draw calls dominate it — 11,400 of them the terrain's own
+          vertex glyphs**, cubes at scale 0.002 that cover almost no pixels. That
+          is the next lever for terrain scenes on the web, and it is the web
+          analogue of `f73d006`'s zero-scale skip — which Santa Ana (0.002, not
+          0) would not trigger on the desktop either, while the Watershed Atlas
+          scene (scale 0) would. Not ported; ask before starting.
+      - Parity: `tools/dump_topology_overlays.py` had been BROKEN by the desktop's
+        display-list refactor (it passed a SimpleNamespace, and the function now
+        reads `_scene_scan`, the channel sets and the list caches). It now builds
+        the same `Viewport.__new__` stand-in the desktop's own
+        `test_surface_texture.py` uses, records `glTexCoord2f`/`glBindTexture`/
+        `glTexEnvf`, treats `glNewList`/`glEndList` as transparent so the one
+        compile pass lands in the stream once, and takes `--textures=1,2` to say
+        which ids resolve. All four existing overlay dumps regenerated
+        BYTE-IDENTICAL, which is a check on the desktop refactor as well as on the
+        tool. The new `surface_texture_gv_node.csv` fixture holds a textured
+        surface under a rotated, non-uniformly scaled, translucent parent with a
+        hole and a 7th-decimal corner; an untextured surface straight after it (no
+        leaked image); an unresolvable id 7 (the fallback); and a textured one
+        under a tilted grandparent with a hidden child dropping out, whose drawn
+        UVs therefore stop at ⅔. `topologyOverlay.parity.test.ts` diffs every
+        vertex's position, normal, colour AND uv, and that a vertex is textured
+        exactly where the desktop bound a texture. Verified to FAIL four ways — a
+        flipped v, no unresolvable fallback, the parent's alpha ignored, a wrong
+        span — and the run-time half three more in `topologyOverlay.test.ts`: no
+        skip, no recolour, no live appearance sync.
+      - Driven in Chrome on the REAL Santa Ana Wind folder: the terrain wears the
+        full 2391×1589 map over 11,186 quads, lit and faceted exactly as the
+        desktop's per-quad normals make it; an OVERHEAD shot matches the source
+        image's orientation (coast west, Salton Sea north-east, Tijuana south — not
+        mirrored, not flipped); Channels playing leaves the unbound terrain's
+        buffers untouched; the Properties panel's texture row on the Surface parent
+        switches it to the vertex-colour fallback and back; console clean.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -4640,6 +4723,13 @@ something to decide now).
         only the optional columns a scene uses, which is the change that took
         the desktop's 442k-point save from 244 MB to 40.7 MB.
 
+    - ~~**Surface textures**~~ (desktop `e22d51f` + the surface-cache half of
+      `f73d006`, 2026-09-12) — **shipped 2026-09-12, see roadmap 6mm.** The rest
+      of `f73d006` is NOT ported: its zero-scale glyph skip (worth doing — see
+      6mm's measurement), Plot display-list retention (this app's plots were
+      never re-emitted per frame, so there is nothing to retain), and its
+      tag-candidate cache (`pinnedTagNodes`/`taggableNodes` already play that
+      role here).
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

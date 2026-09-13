@@ -389,6 +389,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
 
   const overlays = buildTopologyOverlay(nodes, frames, root, {
     showHidden: options.showHidden,
+    textures: options.textures,
   })
 
   const clouds = buildPointCloudOverlay(nodes, frames, {

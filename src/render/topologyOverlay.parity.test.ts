@@ -15,6 +15,7 @@
 //     because three's LineSegmentsGeometry carries RGB only. Every fixture
 //     plot uses one alpha throughout, so the comparison is still exact here.
 
+import * as THREE from 'three'
 import { describe, expect, it } from 'vitest'
 import { buildScene } from './buildScene'
 import type { OverlayPrimitive } from './topologyOverlay'
@@ -26,11 +27,15 @@ import plotSurfaceOverlaysRaw from '../gv/fixtures/plot_surface_example_overlays
 import plotSurfaceHiddenRaw from '../gv/fixtures/plot_surface_example_overlays_hidden.json?raw'
 import showcaseCsv from '../examples/plot_surface_example_gv_node.csv?raw'
 import showcaseOverlaysRaw from '../gv/fixtures/plot_surface_showcase_overlays.json?raw'
+import surfaceTextureCsv from '../gv/fixtures/surface_texture_gv_node.csv?raw'
+import surfaceTextureOverlaysRaw from '../gv/fixtures/surface_texture_overlays.json?raw'
 
 interface DumpVertex {
   pos: [number, number, number]
   color: [number, number, number, number]
   normal: [number, number, number]
+  /** Present only while GL_TEXTURE_2D was on — a textured Surface's corners. */
+  uv?: [number, number]
 }
 
 interface DumpPrimitive {
@@ -101,6 +106,13 @@ function comparePrimitive(got: OverlayPrimitive | undefined, want: Expected, lab
       for (let axis = 0; axis < 3; axis++) {
         expectClose(gv.normal![axis], wv.normal[axis], REL_TOLERANCE, `${label}/${v} n[${axis}]`)
       }
+      // Textured exactly where the desktop bound a texture, and nowhere else.
+      expect(gv.uv !== undefined, `${label}/${v} textured`).toBe(wv.uv !== undefined)
+      if (wv.uv) {
+        for (let t = 0; t < 2; t++) {
+          expectClose(gv.uv![t], wv.uv[t], REL_TOLERANCE, `${label}/${v} uv[${t}]`)
+        }
+      }
     }
   })
 }
@@ -145,6 +157,42 @@ for (const fixture of FIXTURES) {
     })
   })
 }
+
+// Surface textures (desktop e22d51f): dumped with texture ids 1 and 2
+// resolving, so the fixture holds a textured surface under a rotated,
+// non-uniformly scaled parent with a translucent alpha, a lattice hole and a
+// raw translate_x that differs from its rounded lattice key; an untextured
+// surface straight after it (no leaked image); one whose texture_id 7 does
+// not resolve (vertex-colour fallback, not a white sheet); and a textured one
+// under a tilted grandparent with a hidden child dropping out.
+describe('topology-overlay parity: textured surfaces', () => {
+  const dump = JSON.parse(surfaceTextureOverlaysRaw) as Dump & {
+    resolvingTextures: number[]
+    texEnvMode: string
+  }
+  const parsed = parseGvNodeCsv(surfaceTextureCsv)
+  const textures = new Map<number, THREE.Texture>(
+    dump.resolvingTextures.map((id) => [id, new THREE.Texture()]),
+  )
+  const { root, overlays } = buildScene(parsed.nodes, { textures })
+  root.updateMatrixWorld(true)
+  overlays.update()
+  const actual = overlays.primitives()
+  const expected = expectedPrimitives(dump)
+
+  it('draws the same primitives, modulating rather than replacing', () => {
+    expect(parsed.errors).toEqual([])
+    expect(dump.texEnvMode).toBe('GL_MODULATE')
+    expect(overlays.surfaceCount).toBe(4)
+    expect(actual.map((p) => p.kind)).toEqual(expected.map((p) => p.kind))
+  })
+
+  it('matches the desktop vertex stream, texcoords included', () => {
+    expected.forEach((want, index) => {
+      comparePrimitive(actual[index], want, `${want.kind} ${index}`)
+    })
+  })
+})
 
 // The showcase scene is the built-in example, 794 nodes deep: 529 quads and
 // two long polylines. Too many to name one test each, so it diffs in one go —

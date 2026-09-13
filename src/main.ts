@@ -2999,7 +2999,10 @@ function syncAnimatedWorld() {
 function rebuildAnimatedOverlays() {
   if (!currentRoot || !currentFrames) return
   currentOverlays?.dispose()
-  currentOverlays = buildTopologyOverlay(currentNodes, currentFrames, currentRoot, { showHidden })
+  currentOverlays = buildTopologyOverlay(currentNodes, currentFrames, currentRoot, {
+    showHidden,
+    textures: currentTextures.byId,
+  })
   applyLineResolution()
 }
 

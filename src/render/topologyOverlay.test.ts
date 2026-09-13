@@ -267,6 +267,121 @@ describe('surface quad meshes', () => {
   })
 })
 
+describe('surface textures', () => {
+  // The texcoords and the fallback rule are diffed against the desktop in the
+  // parity test; these pin the material and the run-time switching, which a
+  // vertex dump cannot see.
+  const texturedScene = (textureId: number, alpha = 255): GvNode[] => {
+    const nodes = surfaceScene(3, 3, () => 0)
+    nodes[0].textureId = textureId
+    nodes[0].color = { r: 17, g: 34, b: 51, a: alpha }
+    return nodes
+  }
+  const materialOf = (root: THREE.Object3D) =>
+    surfaceMeshes(root)[0].material as THREE.MeshLambertMaterial
+
+  it('drapes a resolving texture, lit, in one white at the parent’s alpha', () => {
+    const map = new THREE.Texture()
+    const { root, overlays } = buildScene(texturedScene(4, 200), {
+      textures: new Map([[4, map]]),
+    })
+    const material = materialOf(root)
+    // Still Lambert: MODULATE against the lighting is what keeps relief shaded.
+    expect(material.type).toBe('MeshLambertMaterial')
+    expect(material.map).toBe(map)
+    expect(material.vertexColors).toBe(false)
+    expect(material.color.getHex()).toBe(0xffffff)
+    expect(material.opacity).toBeCloseTo(200 / 255, 9)
+    expect(material.transparent).toBe(true)
+    const corner = overlays.primitives()[0].vertices[2]
+    expect(corner.color).toEqual([1, 1, 1, expect.closeTo(200 / 255, 6)])
+    expect(corner.uv).toEqual([0.5, 0.5]) // (1, 1) on a 0..2 lattice
+  })
+
+  it('stays vertex-coloured with no texture_id, or one that does not resolve', () => {
+    for (const id of [0, 9]) {
+      const { root, overlays } = buildScene(texturedScene(id), {
+        textures: new Map([[4, new THREE.Texture()]]),
+      })
+      expect(materialOf(root).map).toBeNull()
+      expect(materialOf(root).vertexColors).toBe(true)
+      expect(overlays.primitives()[0].vertices[0].uv).toBeUndefined()
+    }
+  })
+
+  it('picks up a texture that finishes decoding later, without a rebuild', () => {
+    // main.ts merges late decodes into the SAME byId map the build was handed.
+    const textures = new Map<number, THREE.Texture>()
+    const { root, overlays } = buildScene(texturedScene(4), { textures })
+    const mesh = surfaceMeshes(root)[0]
+    expect(materialOf(root).map).toBeNull()
+    const version = materialOf(root).version
+    textures.set(4, new THREE.Texture())
+    overlays.update()
+    expect(surfaceMeshes(root)[0]).toBe(mesh)
+    expect(materialOf(root).map).toBe(textures.get(4))
+    expect(materialOf(root).vertexColors).toBe(false)
+    expect(materialOf(root).version).toBeGreaterThan(version) // defines recompiled
+  })
+
+  it('follows a texture_id or alpha animated on the parent', () => {
+    const nodes = texturedScene(4)
+    const { root, overlays } = buildScene(nodes, {
+      textures: new Map([[4, new THREE.Texture()]]),
+    })
+    expect(materialOf(root).transparent).toBe(false)
+    nodes[0].color.a = 64 // a Channels colour track on the parent
+    overlays.update()
+    expect(materialOf(root).opacity).toBeCloseTo(64 / 255, 9)
+    expect(materialOf(root).transparent).toBe(true)
+
+    nodes[0].textureId = 0 // a Channels texture_id track stepping off it
+    overlays.update()
+    expect(materialOf(root).map).toBeNull()
+    expect(materialOf(root).vertexColors).toBe(true)
+    // Back to the children's own (opaque) colours: the parent's alpha no
+    // longer applies.
+    expect(materialOf(root).opacity).toBe(1)
+    expect(materialOf(root).transparent).toBe(false)
+  })
+})
+
+describe('surface buffer updates', () => {
+  it('rewrites nothing on a frame where nothing moved or recoloured', () => {
+    const { root, overlays } = buildScene(surfaceScene(4, 4, (x, y) => x * y))
+    const geometry = surfaceMeshes(root)[0].geometry
+    const pos = geometry.attributes.position as THREE.BufferAttribute
+    const col = geometry.attributes.color as THREE.BufferAttribute
+    const [p, c] = [pos.version, col.version]
+    for (let i = 0; i < 5; i++) overlays.update()
+    expect(pos.version).toBe(p)
+    expect(col.version).toBe(c)
+  })
+
+  it('rewrites positions when a vertex moves, however it moved', () => {
+    const scene = surfaceScene(3, 3, () => 0)
+    const { root, overlays, frames } = buildScene(scene)
+    const pos = surfaceMeshes(root)[0].geometry.attributes.position as THREE.BufferAttribute
+    const before = pos.version
+    // The PARENT's frame moving: no child row or child frame changed at all.
+    frames.get(1)!.position.z = 7
+    root.updateMatrixWorld(true)
+    overlays.update()
+    expect(pos.version).toBeGreaterThan(before)
+    expect(overlays.primitives()[0].vertices[0].pos[2]).toBeCloseTo(7, 6)
+  })
+
+  it('recolours a vertex whose child colour changed, with no rebuild', () => {
+    // Channels colour tracks write the row in place; before surface textures
+    // the colours were baked at build and a recoloured child never showed.
+    const scene = surfaceScene(2, 2, () => 0)
+    const { overlays } = buildScene(scene)
+    scene[1].color = { r: 255, g: 0, b: 0, a: 255 }
+    overlays.update()
+    expect(overlays.primitives()[0].vertices[0].color).toEqual([1, 0, 0, 1])
+  })
+})
+
 /** A plot and a surface in one scene, using disjoint id ranges. */
 function mixedScene(): GvNode[] {
   const surface = surfaceScene(2, 2, () => 0).map((n) =>

@@ -16,8 +16,20 @@
 //   (translate_x, translate_y) rounded to 6 decimals; the unique x's and y's
 //   sort ascending and a quad draws for every cell whose four corners all
 //   exist (holes are legal). translate_z is the height. Needs ≥ 4 children
-//   and ≥ 2 distinct values per axis. Per-vertex child colors shade it, and
-//   it is LIT with a per-face normal, unlike everything else in this file.
+//   and ≥ 2 distinct values per axis. It is LIT with a per-face normal,
+//   unlike everything else in this file, and coloured one of two ways by the
+//   PARENT's texture_id (desktop `e22d51f`, 2026-09-12): none — or one that
+//   does not resolve — and per-vertex child colours shade it; set, and that
+//   image drapes across the lattice's bounding box at the parent's alpha, in
+//   World Grid's UV convention (u with +x, v with +y). Colour is for DATA on
+//   the shape, a texture for IMAGERY, and only a texture can carry a picture
+//   finer than the mesh.
+//
+// Performance, the other half of that commit: a Surface's buffers are
+// rewritten only on a frame where one of its vertices actually moved or
+// recoloured (SurfaceMesh.update). The desktop gets there by retaining the
+// mesh in a display list with a channel-bound exemption; a per-vertex compare
+// needs no exemption, because it sees every way a node can move.
 //
 // Structure follows linkOverlay.ts, and for the same reasons: endpoints
 // resolve through the builder's id→frame map (getObjectByName is a full
@@ -57,6 +69,7 @@ import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js
 import type { GvNode } from '../gv/types'
 import { NodeType, Topo } from '../gv/types'
 import { roundHalfToEven } from '../gv/channels'
+import { setNaturalTransparency } from './renderMode'
 
 /** Lattice bucketing precision — the desktop's `round(value, 6)`. */
 const LATTICE_DECIMALS = 6
@@ -175,24 +188,96 @@ class PlotGroup {
   }
 }
 
+/**
+ * The UV a Surface corner takes when its parent drapes a texture: the
+ * desktop's `_emit_surface_mesh`, and GEO_GRID's convention — u grows with
+ * +x, v grows with +y — across the lattice's own bounding box. That shared
+ * convention is what lets one georeferenced image land identically on a flat
+ * World Grid and on relief.
+ *
+ * `x0`/`y0`/spans come from the ROUNDED lattice axes while the corner's own
+ * coordinate is read raw, exactly as there; a zero span is guarded to 1.
+ */
+export function surfaceUv(
+  translateX: number,
+  translateY: number,
+  xAxis: readonly number[],
+  yAxis: readonly number[],
+): [number, number] {
+  const xSpan = xAxis[xAxis.length - 1] - xAxis[0] || 1
+  const ySpan = yAxis[yAxis.length - 1] - yAxis[0] || 1
+  return [(translateX - xAxis[0]) / xSpan, (translateY - yAxis[0]) / ySpan]
+}
+
 /** One Surface parent's quad mesh: 4 unshared vertices per quad, so each
- *  quad keeps its own flat face normal exactly as glNormal3f did. */
+ *  quad keeps its own flat face normal exactly as glNormal3f did.
+ *
+ *  Two colourings, chosen per frame by the PARENT's texture_id (desktop
+ *  `e22d51f`): with no texture — or one that does not resolve — each corner
+ *  carries its child's colour, as it always has; with one, the image drapes
+ *  across the lattice by `surfaceUv` under a single white colour at the
+ *  parent's alpha, and stays LIT (GL_MODULATE there, MeshLambertMaterial's
+ *  map × lighting here), because relief only reads as relief when it is
+ *  shaded. Both attribute sets are always present, so switching is a material
+ *  flag rather than a rebuild — which is what lets a channel-animated
+ *  texture_id, or a texture that finishes decoding, take effect in place. */
 class SurfaceMesh {
   readonly object: THREE.Mesh
   /** 4 frames per quad, in the desktop's n00, n10, n11, n01 corner order. */
   readonly frames: THREE.Object3D[]
   readonly quadCount: number
   readonly nodeId: number
+  private readonly parent: GvNode
+  private readonly textures: ReadonlyMap<number, THREE.Texture> | undefined
   private geometry: THREE.BufferGeometry
   private material: THREE.MeshLambertMaterial
   private positions: THREE.BufferAttribute
   private normals: THREE.BufferAttribute
+  private colors: THREE.BufferAttribute
+  /** The lattice's distinct vertices — a corner shared by four quads is read
+   *  once — and, per quad corner, which of them it is. */
+  private uniqueFrames: THREE.Object3D[]
+  private uniqueNodes: GvNode[]
+  private cornerToUnique: Uint32Array
+  /** World position each unique vertex was last written at (NaN = never). */
+  private lastPos: Float64Array
+  /** Packed RGBA each unique vertex's colour was last written at. */
+  private lastColor: Float64Array
+  private textured = false
+  /** Any child colour below full alpha — the untextured mode's transparency. */
+  private translucentCorners = false
 
-  constructor(nodeId: number, corners: GvNode[], frames: THREE.Object3D[]) {
-    this.nodeId = nodeId
+  constructor(
+    parent: GvNode,
+    corners: GvNode[],
+    frames: THREE.Object3D[],
+    uvs: Float32Array,
+    textures: ReadonlyMap<number, THREE.Texture> | undefined,
+  ) {
+    this.nodeId = parent.id
+    this.parent = parent
+    this.textures = textures
     this.frames = frames
     this.quadCount = frames.length / 4
     const vertexCount = frames.length
+
+    const uniqueIndex = new Map<THREE.Object3D, number>()
+    this.uniqueFrames = []
+    this.uniqueNodes = []
+    this.cornerToUnique = new Uint32Array(vertexCount)
+    for (let v = 0; v < vertexCount; v++) {
+      let u = uniqueIndex.get(frames[v])
+      if (u === undefined) {
+        u = this.uniqueFrames.length
+        uniqueIndex.set(frames[v], u)
+        this.uniqueFrames.push(frames[v])
+        this.uniqueNodes.push(corners[v])
+      }
+      this.cornerToUnique[v] = u
+    }
+    this.lastPos = new Float64Array(this.uniqueFrames.length * 3).fill(NaN)
+    this.lastColor = new Float64Array(this.uniqueFrames.length).fill(NaN)
+
     this.geometry = new THREE.BufferGeometry()
     this.positions = new THREE.BufferAttribute(new Float32Array(vertexCount * 3), 3)
     this.positions.setUsage(THREE.DynamicDrawUsage)
@@ -200,16 +285,7 @@ class SurfaceMesh {
     this.normals.setUsage(THREE.DynamicDrawUsage)
     // itemSize 4 — three's USE_COLOR_ALPHA path, so the desktop's per-vertex
     // glColor4f alpha survives (unlike the fat lines above).
-    const colors = new Float32Array(vertexCount * 4)
-    let translucent = false
-    for (let v = 0; v < vertexCount; v++) {
-      const c = corners[v].color
-      colors[v * 4] = c.r / 255
-      colors[v * 4 + 1] = c.g / 255
-      colors[v * 4 + 2] = c.b / 255
-      colors[v * 4 + 3] = c.a / 255
-      if (c.a < 255) translucent = true
-    }
+    this.colors = new THREE.BufferAttribute(new Float32Array(vertexCount * 4), 4)
     const index = new Uint32Array(this.quadCount * 6)
     for (let q = 0; q < this.quadCount; q++) {
       const b = q * 4
@@ -218,21 +294,103 @@ class SurfaceMesh {
     }
     this.geometry.setAttribute('position', this.positions)
     this.geometry.setAttribute('normal', this.normals)
-    this.geometry.setAttribute('color', new THREE.BufferAttribute(colors, 4))
+    this.geometry.setAttribute('color', this.colors)
+    this.geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
     this.geometry.setIndex(new THREE.BufferAttribute(index, 1))
     // FrontSide, not DoubleSide: paintGL runs with GL_CULL_FACE on, so the
     // desktop's surface is one-sided too — seen from below it vanishes.
     this.material = new THREE.MeshLambertMaterial({
       vertexColors: true,
       side: THREE.FrontSide,
-      transparent: translucent,
     })
     this.object = new THREE.Mesh(this.geometry, this.material)
     this.object.name = 'surface-mesh'
     this.object.raycast = () => {} // never pickable
     this.object.frustumCulled = false
+    this.refreshColors()
+    this.syncAppearance()
   }
 
+  /** Whether the mesh is currently draping its parent's texture. */
+  get isTextured(): boolean {
+    return this.textured
+  }
+
+  /**
+   * Pick the colouring from the parent as it stands now. Cheap enough to run
+   * every frame — a map lookup and a few compares — and only a real change of
+   * mode touches the material's defines.
+   */
+  private syncAppearance(): void {
+    const id = this.parent.textureId
+    const map = id > 0 ? (this.textures?.get(id) ?? null) : null
+    const textured = map !== null
+    const m = this.material
+    if (textured !== this.textured || m.map !== map) {
+      // USE_MAP / USE_COLOR are compiled into the program; a swap between two
+      // non-null maps is a uniform and needs no recompile.
+      if (textured !== this.textured || (m.map === null) !== (map === null)) m.needsUpdate = true
+      m.map = map
+      m.vertexColors = !textured
+      this.textured = textured
+    }
+    if (textured) {
+      // One white colour for the whole mesh at the PARENT's alpha — tinting
+      // the image by each corner's colour is exactly what a texture replaces.
+      const opacity = this.parent.color.a / 255
+      m.opacity = opacity
+      setNaturalTransparency(m, opacity < 1)
+    } else {
+      m.opacity = 1
+      setNaturalTransparency(m, this.translucentCorners)
+    }
+  }
+
+  /** Rewrite the per-corner colours if any child's colour changed since the
+   *  last write (a Channels colour track, or the first call). */
+  private refreshColors(): void {
+    const nodes = this.uniqueNodes
+    const last = this.lastColor
+    let dirty = false
+    for (let u = 0; u < nodes.length; u++) {
+      const c = nodes[u].color
+      const packed = ((c.r * 256 + c.g) * 256 + c.b) * 256 + c.a
+      if (packed !== last[u]) {
+        last[u] = packed
+        dirty = true
+      }
+    }
+    if (!dirty) return
+    const col = this.colors.array as Float32Array
+    const map = this.cornerToUnique
+    let translucent = false
+    for (let v = 0; v < map.length; v++) {
+      const c = nodes[map[v]].color
+      col[v * 4] = c.r / 255
+      col[v * 4 + 1] = c.g / 255
+      col[v * 4 + 2] = c.b / 255
+      col[v * 4 + 3] = c.a / 255
+      if (c.a < 255) translucent = true
+    }
+    this.translucentCorners = translucent
+    this.colors.needsUpdate = true
+  }
+
+  /**
+   * Bring the GPU buffers up to date — and do NOTHING when nothing moved.
+   *
+   * The web counterpart of the desktop retaining a Surface in a display list
+   * (`e22d51f`): that was a 22× win on an 11,400-vertex terrain there because
+   * immediate mode re-emitted the whole quad stream every frame. Here the
+   * cost was the same shape — a full rewrite and re-upload of the position
+   * and normal buffers per frame — for a mesh that is almost always static.
+   * Comparing each distinct vertex's world translation against what was last
+   * written is exact (a vertex's position IS that translation), costs three
+   * compares a vertex, and needs no knowledge of what can move a node:
+   * a gizmo drag, a Channels track, a rate field or an ancestor all show up
+   * the same way. The desktop needs a channel-bound exemption from its cache
+   * precisely because a display list cannot see a moved node; this can.
+   */
   update(
     p00: THREE.Vector3,
     p10: THREE.Vector3,
@@ -242,14 +400,36 @@ class SurfaceMesh {
     eb: THREE.Vector3,
     normal: THREE.Vector3,
   ): void {
+    this.refreshColors()
+    this.syncAppearance()
+
+    const last = this.lastPos
+    let moved = false
+    for (let u = 0; u < this.uniqueFrames.length; u++) {
+      const e = this.uniqueFrames[u].matrixWorld.elements
+      const o = u * 3
+      if (e[12] !== last[o] || e[13] !== last[o + 1] || e[14] !== last[o + 2]) {
+        last[o] = e[12]
+        last[o + 1] = e[13]
+        last[o + 2] = e[14]
+        moved = true
+      }
+    }
+    if (!moved) return
+
+    const map = this.cornerToUnique
     const pos = this.positions.array as Float32Array
     const nrm = this.normals.array as Float32Array
     for (let q = 0; q < this.quadCount; q++) {
       const b = q * 4
-      p00.setFromMatrixPosition(this.frames[b].matrixWorld)
-      p10.setFromMatrixPosition(this.frames[b + 1].matrixWorld)
-      p11.setFromMatrixPosition(this.frames[b + 2].matrixWorld)
-      p01.setFromMatrixPosition(this.frames[b + 3].matrixWorld)
+      let s = map[b] * 3
+      p00.set(last[s], last[s + 1], last[s + 2])
+      s = map[b + 1] * 3
+      p10.set(last[s], last[s + 1], last[s + 2])
+      s = map[b + 2] * 3
+      p11.set(last[s], last[s + 1], last[s + 2])
+      s = map[b + 3] * 3
+      p01.set(last[s], last[s + 1], last[s + 2])
       let o = b * 3
       pos[o] = p00.x
       pos[o + 1] = p00.y
@@ -280,13 +460,29 @@ class SurfaceMesh {
     this.normals.needsUpdate = true
   }
 
-  /** Live buffer read-back for the parity harness. */
-  readVertex(vertexIndex: number): { pos: Float32Array; normal: Float32Array; color: Float32Array } {
-    const color = this.geometry.attributes.color as THREE.BufferAttribute
+  /**
+   * Live buffer read-back for the parity harness. `color` is what GL would
+   * have latched at the vertex: the child's own colour untextured, the
+   * mesh-wide white at the parent's alpha when textured. `uv` only when
+   * textured, since the desktop emits texcoords only then.
+   */
+  readVertex(vertexIndex: number): {
+    pos: Float32Array
+    normal: Float32Array
+    color: Float32Array
+    uv?: Float32Array
+  } {
+    const color = this.textured
+      ? new Float32Array([1, 1, 1, this.material.opacity])
+      : (this.colors.array as Float32Array).slice(vertexIndex * 4, vertexIndex * 4 + 4)
+    const uv = this.geometry.attributes.uv as THREE.BufferAttribute
     return {
       pos: (this.positions.array as Float32Array).slice(vertexIndex * 3, vertexIndex * 3 + 3),
       normal: (this.normals.array as Float32Array).slice(vertexIndex * 3, vertexIndex * 3 + 3),
-      color: (color.array as Float32Array).slice(vertexIndex * 4, vertexIndex * 4 + 4),
+      color,
+      uv: this.textured
+        ? (uv.array as Float32Array).slice(vertexIndex * 2, vertexIndex * 2 + 2)
+        : undefined,
     }
   }
 
@@ -303,6 +499,8 @@ export interface OverlayVertex {
   color: [number, number, number, number]
   /** Quads only — the face normal the desktop's glNormal3f emitted. */
   normal?: [number, number, number]
+  /** Textured surface quads only — the glTexCoord2f the desktop emitted. */
+  uv?: [number, number]
 }
 
 /** One drawn overlay shape, in the desktop's own emission order. */
@@ -411,11 +609,12 @@ export class TopologyOverlay {
       for (let q = 0; q < surface.quadCount; q++) {
         const vertices: OverlayVertex[] = []
         for (let v = 0; v < 4; v++) {
-          const { pos, normal, color } = surface.readVertex(q * 4 + v)
+          const { pos, normal, color, uv } = surface.readVertex(q * 4 + v)
           vertices.push({
             pos: [pos[0], pos[1], pos[2]],
             color: [color[0], color[1], color[2], color[3]],
             normal: [normal[0], normal[1], normal[2]],
+            ...(uv ? { uv: [uv[0], uv[1]] as [number, number] } : {}),
           })
         }
         out.push({ kind: 'quad', nodeId: surface.nodeId, vertices })
@@ -442,6 +641,10 @@ export class TopologyOverlay {
 export interface TopologyOverlayOptions {
   /** Desktop "Show Hidden Nodes": draw overlays for hidden parents/children. */
   showHidden?: boolean
+  /** Decoded media, texture_id → texture: what a Surface parent's own
+   *  texture_id drapes across its mesh. Read live, so a texture merged into
+   *  this map later is picked up without rebuilding the overlay. */
+  textures?: ReadonlyMap<number, THREE.Texture>
 }
 
 /**
@@ -562,7 +765,15 @@ export function buildTopologyOverlay(
     if (corners.length === 0) continue
     const cornerFrames = framesOf(corners)
     if (!cornerFrames) continue
-    surfaces.push(new SurfaceMesh(node.id, corners, cornerFrames))
+    // Baked with the lattice, like its membership: texcoords are a function of
+    // the corners' translate_x/y, which re-form the lattice at a rebuild anyway.
+    const uvs = new Float32Array(corners.length * 2)
+    corners.forEach((corner, v) => {
+      const [u, w] = surfaceUv(corner.translate.x, corner.translate.y, xAxis, yAxis)
+      uvs[v * 2] = u
+      uvs[v * 2 + 1] = w
+    })
+    surfaces.push(new SurfaceMesh(node, corners, cornerFrames, uvs, options.textures))
   }
 
   const overlay = new TopologyOverlay(plotGroups, plots, surfaces)

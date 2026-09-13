@@ -21,22 +21,36 @@ how to locate it; never `conda run`):
 `--show-hidden` dumps the viewport's "Show Hidden Nodes" state instead, in
 which hidden Plot/Surface parents and hidden children join the overlays.
 
+`--textures=1,2` makes those texture_ids RESOLVE (to a stand-in GL texture
+name), so a Surface parent carrying one drapes it and its quads carry
+glTexCoord2f; every other id is unresolvable and falls back to vertex colour,
+which is the desktop's own rule (e22d51f). Without the flag nothing resolves.
+
+Since that commit the desktop retains Plot and Surface overlays in display
+lists. The recorder treats glNewList/glEndList as transparent and glCallList as
+a no-op, so the one compile pass still lands in the stream exactly once.
+
 Regenerate the vendored JSON whenever the fixture CSV or the desktop overlay
 code changes. CI never runs this — the JSON is committed.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 # Import the desktop app from the sibling repo without installing it.
 DESKTOP_REPO = Path(__file__).resolve().parents[2] / "glyphviz"
 sys.path.insert(0, str(DESKTOP_REPO))
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication           # noqa: E402
 
 from glyphviz_core.csv_reader import load_node_csv   # noqa: E402
 from glyphviz_core.scene import Scene                # noqa: E402
 import glyphviz_gl.viewport as viewport              # noqa: E402
+
+TEX_NAME = 77  # any non-zero GL texture name means "resolved"
 
 BASE_SCALE = 1.0  # desktop Global Scale default, matching the web app
 
@@ -56,6 +70,10 @@ class GLRecorder:
         self._normal = (0.0, 0.0, 1.0)
         self._line_width = 1.0
         self._point_size = 1.0
+        self._texcoord = (0.0, 0.0)
+        self._textured = False
+        self._bound = 0
+        self.bound_textures = []
         self.prisms = []
 
     # --- recorded GL entry points ---
@@ -74,14 +92,40 @@ class GLRecorder:
         self._vertices = None
 
     def glVertex3f(self, x, y, z):
-        self._vertices.append({
+        vertex = {
             "pos": [float(x), float(y), float(z)],
             "color": [float(c) for c in self._color],
             "normal": [float(n) for n in self._normal],
-        })
+        }
+        if self._textured:
+            vertex["uv"] = [float(t) for t in self._texcoord]
+            vertex["texture"] = self._bound
+        self._vertices.append(vertex)
 
     def glColor4f(self, r, g, b, a):
         self._color = (r, g, b, a)
+
+    def glTexCoord2f(self, s, t):
+        self._texcoord = (s, t)
+
+    def glBindTexture(self, _target, name):
+        self._bound = int(name)
+        self.bound_textures.append(int(name))
+
+    def glTexEnvf(self, _target, _pname, mode):
+        self.tex_env_mode = int(mode)
+
+    def glEnable(self, cap):
+        if cap == viewport.GL_TEXTURE_2D:
+            self._textured = True
+
+    def glDisable(self, cap):
+        if cap == viewport.GL_TEXTURE_2D:
+            self._textured = False
+            self._bound = 0
+
+    def glGenLists(self, _n):
+        return 1
 
     def glNormal3f(self, x, y, z):
         self._normal = (x, y, z)
@@ -113,14 +157,46 @@ def _init_mode_names():
         MODE_NAMES[int(getattr(viewport, name))] = name
 
 
+def _stand_in_viewport(scene, show_hidden, rec, resolving):
+    """A Viewport with no widget and no GL context, carrying exactly the state
+    _draw_topology_overlays reads — the arrangement the desktop's own
+    tests/test_surface_texture.py and test_plot_retention.py use. The REAL
+    methods run; only the managers and the prism path are stood in for."""
+    view = viewport.Viewport.__new__(viewport.Viewport)
+    view._scene = scene
+    view._scan_cache = None
+    view._scan_cache_rev = -1
+    view.show_hidden = show_hidden
+    view._ch_dynamic_ids = set()
+    view._ch_transform_ids = set()
+    view._ch_dynamic_rev = 0
+    view._ch_cache_rev = None
+    view._ch_dynamic_nodes = []
+    view._ch_transform_rows = []
+    view._assets_rev = 0
+    view._surface_dls = {}
+    view._plot_dls = {}
+    view._tex_mgr = type("T", (), {
+        "get_gl_name": lambda self, i: TEX_NAME if i in resolving else 0})()
+    view._video_mgr = type("V", (), {"get_gl_name": lambda self, i: 0})()
+    view._draw_link_prism = rec.draw_link_prism
+    return view
+
+
 def main() -> int:
+    flags = [a for a in sys.argv[1:] if a.startswith("--")]
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    show_hidden = "--show-hidden" in sys.argv[1:]
+    show_hidden = "--show-hidden" in flags
+    resolving = set()
+    for flag in flags:
+        if flag.startswith("--textures="):
+            resolving = {int(v) for v in flag.split("=", 1)[1].split(",") if v}
     if len(args) != 2:
         print(__doc__)
         return 2
     csv_path, out_path = Path(args[0]), Path(args[1])
 
+    _app = QApplication.instance() or QApplication([])  # noqa: F841
     _init_mode_names()
     nodes = load_node_csv(str(csv_path))
     scene = Scene(nodes, base_scale=BASE_SCALE)
@@ -134,21 +210,23 @@ def main() -> int:
         "glNormal3f": rec.glNormal3f,
         "glLineWidth": rec.glLineWidth,
         "glPointSize": rec.glPointSize,
-        "glEnable": rec.noop,
-        "glDisable": rec.noop,
+        "glTexCoord2f": rec.glTexCoord2f,
+        "glBindTexture": rec.glBindTexture,
+        "glTexEnvf": rec.glTexEnvf,
+        "glEnable": rec.glEnable,
+        "glDisable": rec.glDisable,
+        "glGenLists": rec.glGenLists,
+        "glNewList": rec.noop,
+        "glEndList": rec.noop,
+        "glCallList": rec.noop,
+        "glDeleteLists": rec.noop,
     }
     saved = {name: getattr(viewport, name) for name in patched}
     for name, fn in patched.items():
         setattr(viewport, name, fn)
     try:
-        # Duck-typed stand-in for the Viewport instance: _draw_topology_overlays
-        # touches only these three attributes.
-        fake = SimpleNamespace(
-            _scene=scene,
-            show_hidden=show_hidden,
-            _draw_link_prism=rec.draw_link_prism,
-        )
-        viewport.Viewport._draw_topology_overlays(fake)
+        view = _stand_in_viewport(scene, show_hidden, rec, resolving)
+        view._draw_topology_overlays()
     finally:
         for name, fn in saved.items():
             setattr(viewport, name, fn)
@@ -157,6 +235,10 @@ def main() -> int:
         "source": csv_path.name,
         "baseScale": BASE_SCALE,
         "showHidden": show_hidden,
+        "resolvingTextures": sorted(resolving),
+        "texEnvMode": ("GL_MODULATE"
+                       if getattr(rec, "tex_env_mode", None) == int(viewport.GL_MODULATE)
+                       else getattr(rec, "tex_env_mode", None)),
         "primitives": rec.primitives,
         "prisms": rec.prisms,
     }
