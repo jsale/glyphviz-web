@@ -34,7 +34,17 @@ export function descendantIds(nodes: readonly GvNode[], rootIds: Iterable<number
 
 /** New node list with `id` and its whole subtree removed. */
 export function deleteSubtree(nodes: readonly GvNode[], id: number): GvNode[] {
-  const doomed = descendantIds(nodes, [id])
+  return deleteSubtrees(nodes, [id])
+}
+
+/**
+ * New node list with every id in `ids` and all their subtrees removed, in ONE
+ * pass per tree level. Deleting a selection one subtree at a time costs a full
+ * scan per selected node — quadratic, and a hang for the 400k-row selection a
+ * merged point cloud or a Ctrl+A over one produces.
+ */
+export function deleteSubtrees(nodes: readonly GvNode[], ids: Iterable<number>): GvNode[] {
+  const doomed = descendantIds(nodes, ids)
   return nodes.filter((n) => !doomed.has(n.id))
 }
 

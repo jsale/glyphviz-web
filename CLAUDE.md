@@ -1726,8 +1726,8 @@ something to decide now).
         head of the file. Ids are PRESERVED, unlike a merge's rebasing, so
         `record_id` and channel bindings stay coherent for free; branch levels
         are restated (`recomputeBranchLevels`, the desktop's
-        `scene_merge.recompute_branch_levels`, which lands here first and should
-        be shared when Merge is ported).
+        `scene_merge.recompute_branch_levels`, which landed here first and moved
+        to `src/gv/sceneMerge.ts` when Merge was ported — 6nn).
       - Two limits reported rather than hidden, in the desktop's own wording: a
         rotated, non-uniformly scaled ancestor SHEARS the basis, which no
         rotate+scale pair can express (counted as approximated), and motion
@@ -3020,6 +3020,132 @@ something to decide now).
         mirrored, not flipped); Channels playing leaves the unbound terrain's
         buffers untouched; the Properties panel's texture row on the Surface parent
         switches it to the vertex-colour fallback and back; console clean.
+   nn. File ▸ Merge (shipped 2026-09-13, Jeff's request — a port of desktop
+      `1bf847d` plus its Shift+drop from `a49ff48`, the last of the two
+      scene-file features §11 listed). **Merge Files… / Merge Folder…** under
+      the Open row, **Ctrl+M**, and **Shift+drop** load a second scene INTO the
+      open one instead of replacing it. Long assumed to be much harder here
+      than on the desktop; a review that session (published as an artifact for
+      Jeff) found every hard piece already built by other features — file
+      sets (`bundle.ts`), in-place append (Paste, point-cloud import), id
+      rebasing (`pasteSubtree`), live media insertion (`applyBasemap`) — and
+      the five open questions below were decided with him before building.
+      - THE RULES are `src/gv/sceneMerge.ts`, pure and THREE-free, the desktop's
+        `merge_nodes` rule for rule: incoming rows take one contiguous id block
+        above the host's max, with parent_id, a link's child_id and record_id
+        rewritten; World/Camera rows dropped except the first World row when the
+        host has none; a link whose B-end is outside dropped; orphans re-rooted;
+        channel bindings (both input and output spellings) cleared; branch
+        levels recomputed. Coordinates are untouched, so the two scenes overlay.
+        A dropped link still consumes its id, as there. `recomputeBranchLevels`
+        moved here from selectionExport.ts (re-exported) and lost its
+        flatMap-with-spread, which a merged point cloud's single level reaches.
+      - **D5, the one rule divergence**: a link whose A-END (parent_id) named a
+        row that did not survive is DROPPED. The desktop checks the B-end only
+        and re-roots such a link to parent 0, keeping an edge with nothing at one
+        end. A link whose source file already said parent 0 is kept. Reported to
+        Jeff as a desktop bug, along with the texture one under D1.
+      - Parity: `tools/dump_scene_merges.py` loads each case with the REAL
+        `load_node_csv` (tag companion included) and runs the REAL
+        `merge_nodes` over 9 cases — a synthetic guest with one row per rule
+        (`src/gv/fixtures/merge/merge_guest_gv_node.csv`), merges into an empty
+        host and into a scene with a World row, a chain of two merges, a scene
+        merged into itself, Topology ↔ World Grid, the selection-export fixture
+        (links in and out, grids), and a point cloud into the plot/surface
+        example. `sceneMerge.parity.test.ts` diffs counters, the id map and
+        every merged row's ids, parent, level, translate, texture_id, text,
+        link, child_id, record_id and channel ids. D5 is applied to the DESKTOP
+        side by the exact list the dump records (`a_end_lost`), and a chained
+        host is built under the web rule on both sides, so the divergence cannot
+        quietly widen. Verified to FAIL five ways (4–5 of 10 tests each): no
+        record_id rewrite, no World-row rule, no re-rooting, no A-end drop, no
+        channel clearing. `sceneMerge.test.ts` ports all of
+        `test_scene_merge.py` and adds the D5 cases and a 300,000-row merge.
+      - **A merge never touches the open-scene globals.** `openFileSet` rewrites
+        `openedFiles`/`openedScenes` and the scene picker; had a merge reused
+        it, the picker would list the incoming set and choosing from it would
+        REPLACE the scene just merged into. `readSceneSource(files, scene)` and
+        `parseSceneMeshes(files, scene)` were pulled out of
+        `loadSceneCandidate`/`loadSceneMeshes` as pure readers that Open and
+        Merge share; `adoptOpenedSet` is the one place a set becomes the open
+        one.
+      - **D1, textures — carried, where the desktop does not.** The desktop never
+        loads the incoming `media/` and KEEPS the incoming texture_ids, so merged
+        nodes silently wear whichever host image shares the number. A browser
+        already holds the incoming files, so `unionMedia` (media.ts) builds one
+        index over both folders as if the incoming files had been copied in —
+        names matched case-insensitively, the host's file winning a match, so two
+        scenes from one example set renumber nothing — and remaps both sides.
+        A new name sorting ahead of a host file SHIFTS host ids, which the status
+        line says. Same-named files of different SIZE are listed as conflicts
+        (host copy kept). An incoming texture_id its own folder cannot supply —
+        including every id from a set with no media/ — is cleared to 0: never the
+        wrong picture. The status line names the files to copy into the host's
+        media/, since that folder is what the saved CSV's ids now mean.
+        `applyBasemap` was refactored onto `unionMedia` as its first caller, so
+        the insertion-shift rule has one statement. Small consequence: a host id
+        its folder never supplied is no longer bumped by a basemap insertion
+        (it named no file before or after).
+      - **D2, meshes.** A scene folder's models take ids 1..N (this app's own
+        convention), so they collide with the host's. Merge adds each to the
+        library under a fresh id and rewrites the merged nodes' mesh_id; like a
+        hand-imported model, the ids hold for the session.
+      - **D3, merging into an empty scene OPENS instead**, with media, Channels
+        and audio, and the status line says so. The app boots into exactly that
+        state, so it is the first merge most people make.
+      - **D4, a set holding several scenes** opens `ui/mergeSceneWindow.ts`, a
+        FloatWindow sized to its list, and merges ONE; a single-scene set skips
+        it.
+      - Channels: the host's animation survives (a merge never goes through
+        `loadScene`/`loadChannels`); the incoming file's is reported as not
+        merged, as there. If the host's rate animation is PAUSED (6ff), merged
+        rate nodes join the snapshot and are zeroed, so a Save made while paused
+        still writes a static file. Labels resolve at parse time, before the
+        merge, as the desktop's `load_node_csv` does; the host's authoring style
+        decides how they save. The incoming file's parse warnings join the
+        host's, prefixed with its filename.
+      - **Divergence found by DRIVING it: the merged scene's TOP-LEVEL rows are
+        selected, not every merged row** (desktop `select_by_ids` over all of
+        them). Measured on a 400,000-row cloud merged into Topology: 14.8 fps
+        with every row selected — the halo pass, the same cost Ctrl+A has on the
+        file opened alone (9.9 fps) — against 100.2 fps with the roots. It is
+        also what the desktop's own "reposition afterwards with a multi-select
+        drag" needs: multiEdit adds a drag's change to every selected node in its
+        own coordinates, so selected children would move twice. Every merged
+        row's parent is merged or 0, so the roots' subtrees are exactly the
+        merge, and **Delete removes it** — the status line says so, which makes
+        Delete this app's undo for a merge.
+      - That exposed a pre-existing QUADRATIC Delete: `deleteSelection` removed
+        one subtree at a time, a full scan each, so Delete on a 400k-row
+        selection (or a merged flat scatter of 100k roots) would hang.
+        `deleteSubtrees(nodes, ids)` (treeOps.ts) sweeps every subtree at once;
+        the merged cloud now deletes in 85 ms.
+      - Web-only, per platform: Ctrl+M opens the Merge Files picker (a keydown
+        is a user gesture). Firefox binds Ctrl+M to mute-tab; untested there.
+        `window.__gv.mediaState` exposes the media index, decoded ids, mesh ids
+        and the scene picker's options for drives.
+      - Driven in Chrome, 66 measured checks over nine example folders and two
+        generated scenes: the row's size, column and styling against Open's; a
+        SineWave folder merged into Topology with host ids, world positions and
+        camera untouched, the merged rows landing exactly where SineWave draws
+        when opened alone (max 0), 18 → 25 labels from its tag file, the picker
+        unchanged; Save → reopen round trip (node CSV + tag CSV) with identical
+        ids, parents and labels; Delete undoing it; SD_Seismicity ⇄
+        District_Heatmap both ways (union order, no shift one way, host
+        map00001 renumbered 1 → 3 the other, every id decoding, host Channels
+        intact at 847 frames); merge-into-empty opening District_Heatmap with its
+        271-frame Channels and its map; the Collaboration_Network chooser
+        (fits, lists both, nothing merged while it waits, merges the pick);
+        Shift+drop merging the parity guest with every status note and a plain
+        drop still replacing; Ctrl+M's picker; two scenes each shipping a
+        model (tetra as mesh 1, cube as mesh 2, each glyph drawing its own
+        triangles); a paused SineWave holding RSS_News's 21 merged rate nodes at
+        zero and restoring them on resume; and a 400,000-row cloud merging in
+        1.4 s as one 399,999-point batch (484 Object3Ds, 101 fps, no duplicate
+        ids). Console clean.
+      - Noticed, not changed: the Scene panel's Save row (`#hud-save-row`) draws
+        as unstyled white browser buttons with wrapped labels. It has since
+        `242c243`; it predates this work and sits directly under the new row.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -4648,18 +4774,9 @@ something to decide now).
       after building the Hyperglyph Tree Designer; the link-as-any-geometry
       renderer came with them as the prerequisite that makes a Designer tree
       draw as limbs rather than hairlines.
-    - **The two scene-file features (Jeff 2026-08-15).** The second shipped
-      2026-08-17 (roadmap 6dd); the first is still open:
-      - **File ▸ Merge** (desktop `1bf847d`, Ctrl+M): merge a second node CSV
-        into the loaded scene. Qt-free in `glyphviz_core/scene_merge.py`
-        (`merge_nodes` + `recompute_branch_levels`, with a `MergeResult`
-        report), tested by `tests/test_scene_merge.py`. Web-side it has to
-        meet this app's own file layer — a merge is a second `bundle.ts`
-        scene, so companion tag files, `media/` and the Channels companions
-        are all questions the desktop's single-CSV merge does not face.
-        `recomputeBranchLevels` already exists here, in
-        `src/gv/selectionExport.ts`, and should move somewhere both can share
-        when this lands — it is scene_merge's function on the desktop.
+    - **The two scene-file features (Jeff 2026-08-15)** — both shipped:
+      - ~~**File ▸ Merge**~~ (desktop `1bf847d`, Ctrl+M) — **shipped
+        2026-09-13, see roadmap 6nn.**
       - ~~**File ▸ Save Selection As…**~~ (desktop `7ed0b55`) — **shipped
         2026-08-17, see roadmap 6dd.**
     - ~~**Adjustable tag text size**~~ (desktop `aadae11`, 2026-08-18) —

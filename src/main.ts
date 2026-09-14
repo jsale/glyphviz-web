@@ -47,7 +47,9 @@ import type { ChannelAnimation, ChMapParseResult, ChTracksParseResult } from './
 import { channelBindingMessage } from './ui/channelIn'
 import { applyRateAnimation, rateCandidates, restoreRates, snapshotAndZeroRates } from './gv/rates'
 import type { RateSnapshot } from './gv/rates'
-import { buildMediaIndex } from './gv/media'
+import { buildMediaIndex, remapTextureIds, unionMedia } from './gv/media'
+import { mergeNodes } from './gv/sceneMerge'
+import { MergeSceneWindow } from './ui/mergeSceneWindow'
 import type { MediaIndex } from './gv/media'
 import {
   isDesktopOnlyMeshFileName,
@@ -78,7 +80,7 @@ import {
   showAll,
 } from './gv/selectionOps'
 import type { SelectCriterion } from './gv/selectionOps'
-import { deleteSubtree, navFirstChild, navParent, navSibling } from './gv/treeOps'
+import { deleteSubtrees, navFirstChild, navParent, navSibling } from './gv/treeOps'
 import type { GvNode, GvParseIssue, Rgb, Vec3 } from './gv/types'
 import {
   DEFAULT_TOPO_SCALE,
@@ -730,6 +732,10 @@ hud.innerHTML = `
     <label title="Pick a gv_node.csv, a scene .zip, or a node CSV together with its companion gv_tag.csv and media files.">Open Files<input type="file" accept=".csv,text/csv,.zip,application/zip" multiple></label>
     <label title="Pick a whole scene folder: the node CSV, its companion tag file and media/ folder are found inside.">Open Folder<input type="file" id="hud-open-folder" webkitdirectory></label>
   </div>
+  <div id="hud-merge">
+    <label title="Merge a second scene INTO this one instead of replacing it  [Ctrl+M, or Shift+drop]&#10;Pick a gv_node.csv (with its gv_tag.csv and media files) or a scene .zip.&#10;The merged nodes get fresh ids above everything loaded; coordinates are kept, so the two scenes overlay in one world space.&#10;Camera, Channels playback and the draw limit are left as they are.">Merge Files…<input type="file" id="hud-merge-files" accept=".csv,text/csv,.zip,application/zip" multiple></label>
+    <label title="Merge a whole scene folder INTO this one instead of replacing it.&#10;Its tag file, media/ images and models come with it; its Channels animation does not.">Merge Folder…<input type="file" id="hud-merge-folder" webkitdirectory></label>
+  </div>
   <select id="hud-scenes" title="Scenes found in the opened folder" hidden></select>
   <div id="hud-save-row">
     <button id="hud-save">Save gv_node.csv</button>
@@ -892,6 +898,8 @@ const hudScene = hud.querySelector<HTMLDivElement>('#hud-scene')!
 const hudWarnings = hud.querySelector<HTMLDivElement>('#hud-warnings')!
 const fileInput = hud.querySelector<HTMLInputElement>('#hud-open input[type=file]')!
 const folderInput = hud.querySelector<HTMLInputElement>('#hud-open-folder')!
+const mergeFilesInput = hud.querySelector<HTMLInputElement>('#hud-merge-files')!
+const mergeFolderInput = hud.querySelector<HTMLInputElement>('#hud-merge-folder')!
 const sceneSelect = hud.querySelector<HTMLSelectElement>('#hud-scenes')!
 const exampleSelect = hud.querySelector<HTMLSelectElement>('#hud-examples')!
 const saveButton = hud.querySelector<HTMLButtonElement>('#hud-save')!
@@ -1293,20 +1301,16 @@ function applyBasemap(payload: BasemapApplyPayload) {
   // texture_id is a 1-based index into media/ sorted alphanumerically (images
   // first, then videos) — inserting a NEW image shifts every id at or after
   // its sort position, so shift referencing nodes to match. An overwrite
-  // keeps its old position: nothing moves.
+  // keeps its old position: nothing moves. unionMedia is the one statement of
+  // that rule, shared with File ▸ Merge.
   const oldEntries = currentMedia?.index.entries ?? []
   const oldFileByName = new Map(
     oldEntries.map((e) => [e.name, currentMedia!.fileById.get(e.textureId)] as const),
   )
-  const existed = oldEntries.some((e) => e.name === name)
-  const names = existed ? oldEntries.map((e) => e.name) : [...oldEntries.map((e) => e.name), name]
-  const index = buildMediaIndex(names)
-  const newId = index.entries.find((e) => e.name === name)!.textureId
-  if (!existed) {
-    for (const n of currentNodes) {
-      if (n.textureId >= newId) n.textureId += 1
-    }
-  }
+  const union = unionMedia(currentMedia?.index ?? null, buildMediaIndex([name]))
+  const index = union.index
+  const newId = union.incomingMap.get(1)!
+  if (union.hostShifted) remapTextureIds(currentNodes, union.hostMap)
 
   // The grid's extents become the map's EXACT coverage (the dialog's planned
   // bbox, never the typed values), so texture and child placement can't drift
@@ -1915,6 +1919,18 @@ renderer.domElement.addEventListener(
   },
   // The wrist panel's own readouts, which exist nowhere else while a session
   // is running: what is drawn, and where the transport stands.
+  // File ▸ Merge renumbers texture_ids and adds files behind them, and hands
+  // shipped models fresh mesh_ids. Which file an id now names, which ids have
+  // actually decoded, and what each mesh id is are in neither the DOM nor the
+  // scene graph.
+  get mediaState() {
+    return {
+      names: (currentMedia?.index.entries ?? []).map((e) => [e.textureId, e.name]),
+      decoded: [...currentTextures.byId.keys()],
+      meshes: meshLibrary.entries().map((a) => [a.id, a.source]),
+      sceneOptions: [...sceneSelect.options].map((o) => o.textContent),
+    }
+  },
   get drawState() {
     return { limit: drawLimit, drawn: drawnCount, total: currentNodes.length }
   },
@@ -3711,15 +3727,16 @@ let openWarningLines: string[] = []
  * opened simply finds nothing — the animation then plays on the FPS clock.
  */
 async function readAudioCompanion(
+  files: ReadonlyMap<string, File>,
   scene: SceneCandidate,
 ): Promise<{ blob: Blob; name: string } | undefined> {
   if (!scene.audioManifestPath) return undefined
-  const manifest = openedFiles.get(scene.audioManifestPath)
+  const manifest = files.get(scene.audioManifestPath)
   if (!manifest) return undefined
   const relative = parseAudioManifest(await manifest.text())
   if (!relative) return undefined
   const path = resolveRelative(scene.dir, relative)
-  const file = openedFiles.get(path)
+  const file = files.get(path)
   if (!file) {
     // Reported on the status line rather than the warning list: loadScene
     // clears that list after this runs.
@@ -3745,6 +3762,36 @@ async function readAudioCompanion(
  * imported meshes live on the viewport and outlive every scene load: import a
  * model, then open a CSV that references mesh_id 1, and it draws.
  */
+/** A scene's shipped models, parsed but not yet installed: mesh_id, path, data. */
+interface SceneMeshes {
+  parsed: Array<[number, string, MeshData]>
+  warnings: string[]
+}
+
+/**
+ * Read and parse the models a scene folder ships, touching no app state — Open
+ * installs them as the whole library, Merge appends them under fresh ids.
+ */
+async function parseSceneMeshes(
+  files: ReadonlyMap<string, File>,
+  scene: SceneCandidate,
+): Promise<SceneMeshes> {
+  const out: SceneMeshes = { parsed: [], warnings: [] }
+  for (const [meshId, path] of scene.meshPathById) {
+    const file = files.get(path)
+    if (!file) continue
+    try {
+      out.parsed.push([meshId, path, parseMeshFile(file.name, await file.arrayBuffer())])
+    } catch (err: unknown) {
+      // The id stays reserved either way, exactly as an undecodable image keeps
+      // its texture_id — otherwise one broken file renumbers every model after
+      // it and the scene's own mesh_ids stop meaning anything.
+      out.warnings.push(`Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  return out
+}
+
 async function loadSceneMeshes(scene: SceneCandidate) {
   meshWarningLines = []
   if (scene.meshPathById.size === 0) return
@@ -3753,59 +3800,57 @@ async function loadSceneMeshes(scene: SceneCandidate) {
   // the scene on screen is still drawing, and each parse is an await, so doing
   // it as we go would leave the live scene holding disposed buffers for as many
   // frames as the reads take.
-  const parsed: Array<[number, string, MeshData]> = []
-  for (const [meshId, path] of scene.meshPathById) {
-    const file = openedFiles.get(path)
-    if (!file) continue
-    try {
-      parsed.push([meshId, path, parseMeshFile(file.name, await file.arrayBuffer())])
-    } catch (err: unknown) {
-      // The id stays reserved either way, exactly as an undecodable image keeps
-      // its texture_id — otherwise one broken file renumbers every model after
-      // it and the scene's own mesh_ids stop meaning anything.
-      meshWarningLines.push(
-        `Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    }
-  }
+  const { parsed, warnings } = await parseSceneMeshes(openedFiles, scene)
+  meshWarningLines = warnings
 
   meshLibrary.clear()
   for (const [meshId, path, data] of parsed) meshLibrary.add(path, data, meshId)
   refreshMeshMenus()
 }
 
-async function loadSceneCandidate(scene: SceneCandidate) {
-  const nodeFile = openedFiles.get(scene.nodePath)
-  if (!nodeFile) return
-  try {
-    await loadSceneMeshes(scene)
-    const nodeText = await nodeFile.text()
-    const readText = async (path: string | null) => {
-      const file = path ? openedFiles.get(path) : undefined
-      return file ? await file.text() : undefined
-    }
-    const tagText = await readText(scene.tagPath)
+/**
+ * Read one scene out of a file set into a SceneSource — everything a load
+ * needs except the models. Pure reading: no global is touched, which is what
+ * lets Merge read a second file set without disturbing the one Open left
+ * behind (the scene picker still lists the host's scenes afterwards).
+ */
+async function readSceneSource(
+  files: ReadonlyMap<string, File>,
+  scene: SceneCandidate,
+): Promise<SceneSource | null> {
+  const nodeFile = files.get(scene.nodePath)
+  if (!nodeFile) return null
+  const readText = async (path: string | null) => {
+    const file = path ? files.get(path) : undefined
+    return file ? await file.text() : undefined
+  }
+  const fileById = new Map<number, File>()
+  for (const [textureId, path] of scene.mediaPathById) {
+    const file = files.get(path)
+    if (file) fileById.set(textureId, file)
+  }
+  return {
+    nodeText: await nodeFile.text(),
+    tagText: await readText(scene.tagPath),
     // Both or neither: bundle.ts only reports a companion when the folder holds
     // exactly one candidate, which is the desktop's own rule.
-    const channelMapText = await readText(scene.channelMapPath)
-    const channelTracksText = await readText(scene.channelTracksPath)
-    const audio = await readAudioCompanion(scene)
-    const fileById = new Map<number, File>()
-    for (const [textureId, path] of scene.mediaPathById) {
-      const file = openedFiles.get(path)
-      if (file) fileById.set(textureId, file)
-    }
+    channelMapText: await readText(scene.channelMapPath),
+    channelTracksText: await readText(scene.channelTracksPath),
+    audio: await readAudioCompanion(files, scene),
+    displayName: scene.label,
+    filename: scene.nodePath.split('/').pop()!,
+    media: { index: scene.media, fileById },
+  }
+}
+
+async function loadSceneCandidate(scene: SceneCandidate) {
+  if (!openedFiles.has(scene.nodePath)) return
+  try {
+    await loadSceneMeshes(scene)
+    const source = await readSceneSource(openedFiles, scene)
+    if (!source) return
     exampleSelect.value = OPENED_SCENE_OPTION
-    loadScene({
-      nodeText,
-      tagText,
-      channelMapText,
-      channelTracksText,
-      audio,
-      displayName: scene.label,
-      filename: scene.nodePath.split('/').pop()!,
-      media: { index: scene.media, fileById },
-    })
+    loadScene(source)
   } catch (err: unknown) {
     showMessages([`Could not read ${scene.nodePath}: ${String(err)}`], [])
   }
@@ -3851,17 +3896,10 @@ async function openFileSet(dropped: PathedFile[]) {
     return
   }
 
-  openedFiles = new Map(files.map((f) => [normalizePath(f.path), f.file]))
-  openedScenes = findScenes(files.map((f) => f.path))
-
-  sceneSelect.textContent = ''
-  sceneSelect.hidden = openedScenes.length < 2
-  for (const [i, scene] of openedScenes.entries()) {
-    const option = document.createElement('option')
-    option.value = String(i)
-    option.textContent = scene.dir === '' ? scene.nodePath : scene.dir
-    sceneSelect.appendChild(option)
-  }
+  adoptOpenedSet(
+    new Map(files.map((f) => [normalizePath(f.path), f.file])),
+    findScenes(files.map((f) => f.path)),
+  )
 
   if (openedScenes.length === 0) {
     // A model in a format only the desktop reads is the one "nothing here"
@@ -3883,11 +3921,321 @@ async function openFileSet(dropped: PathedFile[]) {
   await loadSceneCandidate(openedScenes[0])
 }
 
+/**
+ * Make a file set the OPEN one: the set the scene picker lists and a later
+ * choice from it loads out of. Shared by Open and by a merge into an empty
+ * world, which opens instead (see mergeSceneCandidate).
+ */
+function adoptOpenedSet(files: Map<string, File>, scenes: SceneCandidate[]) {
+  openedFiles = files
+  openedScenes = scenes
+  sceneSelect.textContent = ''
+  sceneSelect.hidden = openedScenes.length < 2
+  for (const [i, scene] of openedScenes.entries()) {
+    const option = document.createElement('option')
+    option.value = String(i)
+    option.textContent = scene.dir === '' ? scene.nodePath : scene.dir
+    sceneSelect.appendChild(option)
+  }
+}
+
 /** Report anything that goes wrong opening a set, rather than swallowing it. */
 function openFileSetSafely(files: PathedFile[]): void {
   void openFileSet(files).catch((err: unknown) =>
     showMessages([`Could not open the selection: ${String(err)}`], []),
   )
+}
+
+// --- File ▸ Merge (Ctrl+M, Merge Files… / Merge Folder…, Shift+drop) -----------
+// Desktop MainWindow._merge_csv_path, replumbed for a browser. The rules that
+// renumber the incoming rows are src/gv/sceneMerge.ts (diffed against the real
+// desktop module); what is here is everything a browser adds to them — a FILE
+// SET rather than a path, the media folder, the models a scene ships, and the
+// empty world this app boots into.
+
+/** A merged file set waiting on the scene chooser, when it holds several. */
+let pendingMerge: {
+  files: Map<string, File>
+  scenes: SceneCandidate[]
+  warnings: string[]
+} | null = null
+
+const mergeSceneWindow = new MergeSceneWindow((index) => {
+  if (pendingMerge) void mergeSceneCandidate(pendingMerge, index).catch(reportMergeFailure)
+})
+app.appendChild(mergeSceneWindow.element)
+
+function reportMergeFailure(err: unknown) {
+  status(`Merge failed: ${err instanceof Error ? err.message : String(err)}`)
+}
+
+/**
+ * Take a picked or dropped file set and merge a scene out of it.
+ *
+ * Deliberately does NOT go through openFileSet's globals: those belong to the
+ * scene being merged INTO, and the scene picker listing the incoming set's
+ * scenes would turn a later pick into a replacement of the merge just made.
+ */
+async function mergeFileSet(dropped: PathedFile[]) {
+  let files = dropped
+  let warnings: string[] = []
+  if (dropped.some((f) => f.file.name.toLowerCase().endsWith('.zip'))) {
+    status('Reading archive…')
+    const expanded = await expandZips(dropped)
+    files = expanded.files
+    warnings = expanded.warnings
+  }
+  const scenes = findScenes(files.map((f) => f.path))
+  if (scenes.length === 0) {
+    // A Shift-drop of models or a scan has nothing to merge but is still a
+    // perfectly good drop — route it the ordinary way rather than refusing it.
+    if (files.length > 0 && files.every((f) => isMeshFileName(f.file.name) || isDroppedPointCloud(f.file.name))) {
+      return openFileSet(files)
+    }
+    status(
+      files.length === 0
+        ? 'Merge: nothing was picked.'
+        : `Merge: no gv_node.csv found in ${files.length} file(s). Pick a scene folder, a scene .zip, or the node CSV itself.`,
+    )
+    return
+  }
+  pendingMerge = { files: new Map(files.map((f) => [normalizePath(f.path), f.file])), scenes, warnings }
+  if (scenes.length === 1) return mergeSceneCandidate(pendingMerge, 0)
+  const setName = files[0].path.split('/')[0] || files[0].file.name
+  mergeSceneWindow.open(
+    setName,
+    scenes.map((s) => ({ label: s.label, path: s.nodePath })),
+  )
+}
+
+function mergeFileSetSafely(files: PathedFile[]): void {
+  void mergeFileSet(files).catch(reportMergeFailure)
+}
+
+async function mergeSceneCandidate(set: NonNullable<typeof pendingMerge>, index: number) {
+  const scene = set.scenes[index]
+  if (!scene) return
+
+  // Decision D3 (agreed 2026-09-13): merging into a scene with nothing in it
+  // gains nothing over opening the file and would lose its media, Channels and
+  // audio — which a merge deliberately does not carry — so it OPENS instead.
+  // The app boots into exactly this state, so it is the first merge most
+  // people will make.
+  if (currentNodes.length === 0) {
+    openWarningLines = set.warnings
+    adoptOpenedSet(set.files, set.scenes)
+    sceneSelect.value = String(index)
+    await loadSceneCandidate(scene)
+    status(
+      `The open scene was empty, so ${scene.label} was opened rather than merged — ` +
+        'its media, Channels and audio came with it.',
+    )
+    return
+  }
+
+  const meshes = await parseSceneMeshes(set.files, scene)
+  const source = await readSceneSource(set.files, scene)
+  if (!source) return
+  mergeScene(source, meshes, set.warnings)
+}
+
+/** Merge one read scene into the open one (desktop `_merge_csv_path`). */
+function mergeScene(source: SceneSource, meshes: SceneMeshes, openWarnings: string[]) {
+  const name = source.filename
+  const parsed = parseGvNodeCsv(source.nodeText)
+  if (parsed.errors.length > 0 && parsed.nodes.length === 0) {
+    status(`Merge failed: ${name}: ${parsed.errors.map(issueText).join('; ')}`)
+    return
+  }
+  if (parsed.nodes.length === 0) {
+    status(`Merge: ${name} has no node rows.`)
+    return
+  }
+  // Labels resolve BEFORE the merge, exactly as the desktop's load_node_csv
+  // does, so a tag-file scene's labels ride along with no special case — and
+  // mergeNodes then re-points record_id so they stay unique on save.
+  if (!parsed.hasInlineLabelColumns && source.tagText !== undefined) {
+    applyTags(parsed.nodes, parseGvTagCsv(source.tagText).byRecordId)
+  }
+
+  const result = mergeNodes(currentNodes, parsed.nodes)
+  if (result.nodes.length === 0) {
+    status(`Merge: nothing to add from ${name} (only per-file World/Camera rows, already present here).`)
+    return
+  }
+  const notes: string[] = []
+  if (result.skippedGlobal) notes.push(`skipped ${result.skippedGlobal} World/Camera row(s)`)
+  if (result.droppedLinks) notes.push(`dropped ${result.droppedLinks} link(s) with an end outside the file`)
+  if (result.rerooted) notes.push(`re-rooted ${result.rerooted} orphan(s)`)
+  if (result.clearedChannels) notes.push(`cleared channel bindings on ${result.clearedChannels} node(s)`)
+  if (source.channelMapText !== undefined && source.channelTracksText !== undefined) {
+    notes.push('Channels animation not merged')
+  }
+
+  const textures = mergeMedia(source, result.nodes)
+  notes.push(...textures.notes)
+  const meshNote = mergeMeshes(meshes, result.nodes)
+  if (meshNote) notes.push(meshNote)
+
+  // The incoming file's own parse problems are reported alongside the host's
+  // until the next load, prefixed so nobody hunts for them in the wrong file.
+  const incomingWarnings = [...parsed.errors, ...parsed.warnings].map((i) => `${name}: ${issueText(i)}`)
+  parseWarningLines.push(...incomingWarnings, ...openWarnings, ...meshes.warnings)
+
+  // A paused scene stays paused: the pause is a snapshot of zeroed rates, and a
+  // merged node carrying its own would otherwise be written into a Save made
+  // while paused — the one thing the pause exists to prevent.
+  if (ratesPaused) {
+    for (const [id, rates] of snapshotAndZeroRates(result.nodes)) pausedRates.set(id, rates)
+  }
+
+  appendNodes(result.nodes)
+  saveTagsButton.hidden = !hasAnyLabel(currentNodes) || deriveTagFilename(currentFilename) === null
+  saveSelectionWindow.close() // its preview reads the pre-merge node list
+  rebuildScene(false)
+  if (textures.reset) void decodeSceneTextures(sceneEpoch)
+  else void decodeTexturesFor(referencedTextureIds(result.nodes), sceneEpoch)
+  // Select the merged scene's TOP-LEVEL rows. Every merged row's parent is
+  // either another merged row or 0, so these are exactly the subtrees the merge
+  // added, and that selection is this app's undo: Delete removes the lot.
+  //
+  // Divergence from the desktop, which selects EVERY merged row. Measured on a
+  // 400,000-row point cloud: 14.8 fps with every row selected (the halo pass)
+  // against 100.2 fps with the roots selected. It is also what "reposition it
+  // afterwards with a multi-select drag" needs: a drag adds its change to every
+  // selected node in its own coordinates, so with children selected too they
+  // would move once through their parent and again on their own.
+  const roots = new Set<number>()
+  for (const n of result.nodes) if (n.parentId === 0) roots.add(n.id)
+  setSelection(roots)
+
+  status(
+    `Merged ${result.nodes.length.toLocaleString('en-US')} node(s) from ${name} — ` +
+      `${currentNodes.length.toLocaleString('en-US')} nodes total; its ${roots.size.toLocaleString('en-US')} ` +
+      'top-level node(s) are selected, so Delete removes the merge' +
+      (notes.length > 0 ? ` | ${notes.join('; ')}` : ''),
+  )
+}
+
+/**
+ * Bring the incoming scene's media along (decision D1, agreed 2026-09-13).
+ *
+ * The desktop does not: it keeps the incoming texture_ids unchanged, so merged
+ * nodes silently wear whichever HOST image shares the number. A browser already
+ * holds the incoming files, so the two folders are combined into one index
+ * (unionMedia) and both sides renumbered — which is the folder the saved CSV
+ * will need, so the status line names the files to copy into it. An incoming
+ * texture_id its own folder could not supply is cleared to 0 rather than left
+ * pointing at a host image: never the wrong picture.
+ */
+function mergeMedia(source: SceneSource, merged: GvNode[]): { notes: string[]; reset: boolean } {
+  const notes: string[] = []
+  const incoming = source.media?.index
+  const references = merged.some((n) => n.textureId > 0)
+
+  if (!incoming || incoming.entries.length === 0) {
+    let cleared = 0
+    for (const n of merged) {
+      if (n.textureId > 0) {
+        n.textureId = 0
+        cleared++
+      }
+    }
+    if (cleared > 0) notes.push(`cleared ${cleared} texture reference(s) — ${source.filename} came with no media/ folder`)
+    return { notes, reset: false }
+  }
+
+  const hostFiles = currentMedia
+  const hostFileByLower = new Map<string, File>()
+  for (const e of hostFiles?.index.entries ?? []) {
+    const file = hostFiles!.fileById.get(e.textureId)
+    if (file) hostFileByLower.set(e.name.toLowerCase(), file)
+  }
+  const incomingFileByName = new Map<string, File>()
+  for (const e of incoming.entries) {
+    const file = source.media!.fileById.get(e.textureId)
+    if (file) incomingFileByName.set(e.name, file)
+  }
+  const union = unionMedia(hostFiles?.index ?? null, incoming, (name) => {
+    const a = hostFileByLower.get(name.toLowerCase())
+    const b = incomingFileByName.get(name)
+    return a !== undefined && b !== undefined && a.size !== b.size
+  })
+
+  let cleared = 0
+  for (const n of merged) {
+    if (n.textureId <= 0) continue
+    const to = union.incomingMap.get(n.textureId)
+    if (to === undefined) {
+      n.textureId = 0
+      cleared++
+    } else {
+      n.textureId = to
+    }
+  }
+  if (cleared > 0) notes.push(`cleared ${cleared} texture reference(s) its media/ folder could not supply`)
+
+  // Nothing new in the folder: the ids already mean the host's own files, so
+  // the index, the decoded textures and every host id are all still right.
+  if (union.added.length === 0) {
+    if (union.conflicts.length > 0) notes.push(conflictNote(union.conflicts))
+    return { notes, reset: false }
+  }
+
+  if (union.hostShifted) {
+    const moved = remapTextureIds(currentNodes, union.hostMap)
+    if (moved > 0) notes.push(`renumbered ${moved} existing node texture(s) to make room`)
+  }
+  const fileById = new Map<number, File>()
+  for (const e of union.index.entries) {
+    const file = hostFileByLower.get(e.name.toLowerCase()) ?? incomingFileByName.get(e.name)
+    if (file) fileById.set(e.textureId, file)
+  }
+  currentMedia = { index: union.index, fileById }
+  inspector.setMedia(union.index)
+  if (union.conflicts.length > 0) notes.push(conflictNote(union.conflicts))
+  if (references) {
+    notes.push(
+      `to save, copy ${union.added.length} file(s) from ${source.displayName}'s media/ into this scene's: ` +
+        listNames(union.added),
+    )
+  }
+
+  // Ids moved behind textures that were already decoded, so the cache restarts
+  // from nothing — applyBasemap's reset, for the same reason.
+  disposeTextures(currentTextures)
+  clearMaterialCache()
+  currentTextures = emptyTextureLibrary()
+  attemptedTextureIds = new Set()
+  return { notes, reset: true }
+}
+
+function conflictNote(names: string[]): string {
+  return `kept this scene's copy of ${names.length} same-named but different file(s): ${listNames(names)}`
+}
+
+function listNames(names: string[]): string {
+  const MAX = 4
+  return names.length <= MAX ? names.join(', ') : `${names.slice(0, MAX).join(', ')} and ${names.length - MAX} more`
+}
+
+/**
+ * Bring the models the incoming scene ships along (decision D2). A scene folder
+ * with models numbers them 1..N — this app's own convention — so those ids
+ * collide with the host's; each model is added to the library under a fresh id
+ * and the merged nodes' mesh_ids follow. Like a hand-imported model, the new
+ * ids hold for the session.
+ */
+function mergeMeshes(meshes: SceneMeshes, merged: GvNode[]): string {
+  if (meshes.parsed.length === 0) return ''
+  const idMap = new Map<number, number>()
+  for (const [meshId, path, data] of meshes.parsed) idMap.set(meshId, meshLibrary.add(path, data).id)
+  for (const n of merged) {
+    const to = idMap.get(n.meshId)
+    if (to !== undefined) n.meshId = to
+  }
+  refreshMeshMenus()
+  return `added ${meshes.parsed.length} model(s) as mesh ${[...idMap.values()].join(', ')}`
 }
 
 sceneSelect.addEventListener('change', () => {
@@ -3905,6 +4253,16 @@ folderInput.addEventListener('change', () => {
   folderInput.value = ''
 })
 
+mergeFilesInput.addEventListener('change', () => {
+  mergeFileSetSafely(filesFromInput(mergeFilesInput))
+  mergeFilesInput.value = ''
+})
+
+mergeFolderInput.addEventListener('change', () => {
+  mergeFileSetSafely(filesFromInput(mergeFolderInput))
+  mergeFolderInput.value = ''
+})
+
 window.addEventListener('dragover', (e) => {
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
@@ -3913,9 +4271,11 @@ window.addEventListener('drop', (e) => {
   e.preventDefault()
   if (!e.dataTransfer) return
   // A dropped .zip arrives as an ordinary file entry — no folder walk needed;
-  // openFileSet's expandZips turns it into the folder it stands for.
+  // openFileSet's expandZips turns it into the folder it stands for. Shift held
+  // at the drop MERGES instead of replacing, the desktop's own gesture.
+  const merge = e.shiftKey
   filesFromDataTransfer(e.dataTransfer)
-    .then(openFileSet)
+    .then((files) => (merge ? mergeFileSet(files) : openFileSet(files)))
     .catch((err: unknown) => showMessages([`Could not read the drop: ${String(err)}`], []))
 })
 
@@ -4189,6 +4549,9 @@ window.addEventListener('keydown', (e) => {
     // the browser's Save Page and is not worth fighting for; Ctrl+Alt+S is free
     // and is what the other app teaches.
     else if (key === 's' && e.altKey) openSaveSelection()
+    // The desktop's own File ▸ Merge Node CSV… chord. A keydown is a user
+    // gesture, so the picker is allowed to open from here.
+    else if (key === 'm') mergeFilesInput.click()
     else if (key === 'a') selectAllToggle()
     else if (key === 'i') selectionCommands.invertSelection()
     // Copy/Paste are the desktop's own chords. They only preventDefault away
@@ -5394,9 +5757,9 @@ function deleteSelection() {
   // refills it — the count in the status message would read the new one.
   const ids = [...selection.ids]
   if (ids.length === 0) return
-  // Each subtree in turn; an id already swept away as somebody else's
-  // descendant just doesn't match anything the second time.
-  for (const id of ids) currentNodes = deleteSubtree(currentNodes, id)
+  // Every subtree in one sweep — one at a time is a full scan per selected
+  // node, which a 400k-row selection turns into a hang.
+  currentNodes = deleteSubtrees(currentNodes, ids)
   // rebuildScene re-selects the previous ids, finds them gone, and cleanly
   // detaches the gizmo + empties the inspector.
   rebuildScene(false)

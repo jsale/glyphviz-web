@@ -1,0 +1,7311 @@
+{
+ "files": {
+  "topology": "topology_example_gv_node.csv",
+  "world_grid": "world_grid_example_gv_node.csv",
+  "selection": "selection_export_gv_node.csv",
+  "topo_scale": "topo_scale_gv_node.csv",
+  "point_cloud": "point_cloud_gv_node.csv",
+  "plot_surface": "plot_surface_example_gv_node.csv",
+  "guest": "merge/merge_guest_gv_node.csv"
+ },
+ "cases": [
+  {
+   "name": "guest_into_topology",
+   "host": [
+    "topology"
+   ],
+   "incoming": "guest",
+   "host_count": 109,
+   "skipped_global": 1,
+   "dropped_links": 1,
+   "rerooted": 3,
+   "cleared_channels": 2,
+   "id_map": [
+    [
+     1,
+     110
+    ],
+    [
+     3,
+     111
+    ],
+    [
+     4,
+     112
+    ],
+    [
+     5,
+     113
+    ],
+    [
+     6,
+     114
+    ],
+    [
+     7,
+     115
+    ],
+    [
+     8,
+     116
+    ],
+    [
+     9,
+     117
+    ],
+    [
+     10,
+     118
+    ],
+    [
+     11,
+     119
+    ],
+    [
+     12,
+     120
+    ]
+   ],
+   "a_end_lost": [
+    {
+     "old_id": 10,
+     "b_end_inside": true
+    }
+   ],
+   "nodes": [
+    {
+     "id": 110,
+     "type": 0,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 110,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 111,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      100.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "guest three",
+     "link": "",
+     "child_id": 0,
+     "record_id": 111,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 112,
+     "type": 5,
+     "parent_id": 111,
+     "branch_level": 1,
+     "translate": [
+      45.0,
+      30.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "guest four",
+     "link": "",
+     "child_id": 0,
+     "record_id": 112,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 113,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      7.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "child of the camera",
+     "link": "",
+     "child_id": 0,
+     "record_id": 113,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 114,
+     "type": 7,
+     "parent_id": 111,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 112,
+     "record_id": 114,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 116,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -20.0,
+      5.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "dangling parent",
+     "link": "",
+     "child_id": 0,
+     "record_id": 116,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 117,
+     "type": 5,
+     "parent_id": 116,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 117,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 118,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 112,
+     "record_id": 118,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 119,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -60.0,
+      10.0,
+      0.0
+     ],
+     "texture_id": 2,
+     "text": "textured",
+     "link": "",
+     "child_id": 0,
+     "record_id": 119,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 120,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 111,
+     "record_id": 120,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    }
+   ]
+  },
+  {
+   "name": "guest_into_empty",
+   "host": [],
+   "incoming": "guest",
+   "host_count": 0,
+   "skipped_global": 1,
+   "dropped_links": 1,
+   "rerooted": 3,
+   "cleared_channels": 2,
+   "id_map": [
+    [
+     1,
+     1
+    ],
+    [
+     3,
+     2
+    ],
+    [
+     4,
+     3
+    ],
+    [
+     5,
+     4
+    ],
+    [
+     6,
+     5
+    ],
+    [
+     7,
+     6
+    ],
+    [
+     8,
+     7
+    ],
+    [
+     9,
+     8
+    ],
+    [
+     10,
+     9
+    ],
+    [
+     11,
+     10
+    ],
+    [
+     12,
+     11
+    ]
+   ],
+   "a_end_lost": [
+    {
+     "old_id": 10,
+     "b_end_inside": true
+    }
+   ],
+   "nodes": [
+    {
+     "id": 1,
+     "type": 0,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 1,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 2,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      100.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "guest three",
+     "link": "",
+     "child_id": 0,
+     "record_id": 2,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 3,
+     "type": 5,
+     "parent_id": 2,
+     "branch_level": 1,
+     "translate": [
+      45.0,
+      30.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "guest four",
+     "link": "",
+     "child_id": 0,
+     "record_id": 3,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 4,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      7.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "child of the camera",
+     "link": "",
+     "child_id": 0,
+     "record_id": 4,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 5,
+     "type": 7,
+     "parent_id": 2,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 3,
+     "record_id": 5,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 7,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -20.0,
+      5.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "dangling parent",
+     "link": "",
+     "child_id": 0,
+     "record_id": 7,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 8,
+     "type": 5,
+     "parent_id": 7,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 8,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 9,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 3,
+     "record_id": 9,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 10,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -60.0,
+      10.0,
+      0.0
+     ],
+     "texture_id": 2,
+     "text": "textured",
+     "link": "",
+     "child_id": 0,
+     "record_id": 10,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 11,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 2,
+     "record_id": 11,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    }
+   ]
+  },
+  {
+   "name": "guest_twice",
+   "host": [
+    "topology",
+    "guest"
+   ],
+   "incoming": "guest",
+   "host_count": 118,
+   "skipped_global": 2,
+   "dropped_links": 1,
+   "rerooted": 3,
+   "cleared_channels": 2,
+   "id_map": [
+    [
+     3,
+     121
+    ],
+    [
+     4,
+     122
+    ],
+    [
+     5,
+     123
+    ],
+    [
+     6,
+     124
+    ],
+    [
+     7,
+     125
+    ],
+    [
+     8,
+     126
+    ],
+    [
+     9,
+     127
+    ],
+    [
+     10,
+     128
+    ],
+    [
+     11,
+     129
+    ],
+    [
+     12,
+     130
+    ]
+   ],
+   "a_end_lost": [
+    {
+     "old_id": 10,
+     "b_end_inside": true
+    }
+   ],
+   "nodes": [
+    {
+     "id": 121,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      100.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "guest three",
+     "link": "",
+     "child_id": 0,
+     "record_id": 121,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 122,
+     "type": 5,
+     "parent_id": 121,
+     "branch_level": 1,
+     "translate": [
+      45.0,
+      30.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "guest four",
+     "link": "",
+     "child_id": 0,
+     "record_id": 122,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 123,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      7.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "child of the camera",
+     "link": "",
+     "child_id": 0,
+     "record_id": 123,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 124,
+     "type": 7,
+     "parent_id": 121,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 122,
+     "record_id": 124,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 126,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -20.0,
+      5.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "dangling parent",
+     "link": "",
+     "child_id": 0,
+     "record_id": 126,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 127,
+     "type": 5,
+     "parent_id": 126,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 127,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 128,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 122,
+     "record_id": 128,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 129,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -60.0,
+      10.0,
+      0.0
+     ],
+     "texture_id": 2,
+     "text": "textured",
+     "link": "",
+     "child_id": 0,
+     "record_id": 129,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 130,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 121,
+     "record_id": 130,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    }
+   ]
+  },
+  {
+   "name": "topology_into_world_grid",
+   "host": [
+    "world_grid"
+   ],
+   "incoming": "topology",
+   "host_count": 17,
+   "skipped_global": 0,
+   "dropped_links": 0,
+   "rerooted": 0,
+   "cleared_channels": 0,
+   "id_map": [
+    [
+     1,
+     18
+    ],
+    [
+     2,
+     19
+    ],
+    [
+     3,
+     20
+    ],
+    [
+     4,
+     21
+    ],
+    [
+     5,
+     22
+    ],
+    [
+     6,
+     23
+    ],
+    [
+     7,
+     24
+    ],
+    [
+     8,
+     25
+    ],
+    [
+     9,
+     26
+    ],
+    [
+     10,
+     27
+    ],
+    [
+     11,
+     28
+    ],
+    [
+     12,
+     29
+    ],
+    [
+     13,
+     30
+    ],
+    [
+     14,
+     31
+    ],
+    [
+     15,
+     32
+    ],
+    [
+     16,
+     33
+    ],
+    [
+     17,
+     34
+    ],
+    [
+     18,
+     35
+    ],
+    [
+     19,
+     36
+    ],
+    [
+     20,
+     37
+    ],
+    [
+     21,
+     38
+    ],
+    [
+     22,
+     39
+    ],
+    [
+     23,
+     40
+    ],
+    [
+     24,
+     41
+    ],
+    [
+     25,
+     42
+    ],
+    [
+     26,
+     43
+    ],
+    [
+     27,
+     44
+    ],
+    [
+     28,
+     45
+    ],
+    [
+     29,
+     46
+    ],
+    [
+     30,
+     47
+    ],
+    [
+     31,
+     48
+    ],
+    [
+     32,
+     49
+    ],
+    [
+     33,
+     50
+    ],
+    [
+     34,
+     51
+    ],
+    [
+     35,
+     52
+    ],
+    [
+     36,
+     53
+    ],
+    [
+     37,
+     54
+    ],
+    [
+     38,
+     55
+    ],
+    [
+     39,
+     56
+    ],
+    [
+     40,
+     57
+    ],
+    [
+     41,
+     58
+    ],
+    [
+     42,
+     59
+    ],
+    [
+     43,
+     60
+    ],
+    [
+     44,
+     61
+    ],
+    [
+     45,
+     62
+    ],
+    [
+     46,
+     63
+    ],
+    [
+     47,
+     64
+    ],
+    [
+     48,
+     65
+    ],
+    [
+     49,
+     66
+    ],
+    [
+     50,
+     67
+    ],
+    [
+     51,
+     68
+    ],
+    [
+     52,
+     69
+    ],
+    [
+     53,
+     70
+    ],
+    [
+     54,
+     71
+    ],
+    [
+     55,
+     72
+    ],
+    [
+     56,
+     73
+    ],
+    [
+     57,
+     74
+    ],
+    [
+     58,
+     75
+    ],
+    [
+     59,
+     76
+    ],
+    [
+     60,
+     77
+    ],
+    [
+     61,
+     78
+    ],
+    [
+     62,
+     79
+    ],
+    [
+     63,
+     80
+    ],
+    [
+     64,
+     81
+    ],
+    [
+     65,
+     82
+    ],
+    [
+     66,
+     83
+    ],
+    [
+     67,
+     84
+    ],
+    [
+     68,
+     85
+    ],
+    [
+     69,
+     86
+    ],
+    [
+     70,
+     87
+    ],
+    [
+     71,
+     88
+    ],
+    [
+     72,
+     89
+    ],
+    [
+     73,
+     90
+    ],
+    [
+     74,
+     91
+    ],
+    [
+     75,
+     92
+    ],
+    [
+     76,
+     93
+    ],
+    [
+     77,
+     94
+    ],
+    [
+     78,
+     95
+    ],
+    [
+     79,
+     96
+    ],
+    [
+     80,
+     97
+    ],
+    [
+     81,
+     98
+    ],
+    [
+     82,
+     99
+    ],
+    [
+     83,
+     100
+    ],
+    [
+     84,
+     101
+    ],
+    [
+     85,
+     102
+    ],
+    [
+     86,
+     103
+    ],
+    [
+     87,
+     104
+    ],
+    [
+     88,
+     105
+    ],
+    [
+     89,
+     106
+    ],
+    [
+     90,
+     107
+    ],
+    [
+     91,
+     108
+    ],
+    [
+     92,
+     109
+    ],
+    [
+     93,
+     110
+    ],
+    [
+     94,
+     111
+    ],
+    [
+     95,
+     112
+    ],
+    [
+     96,
+     113
+    ],
+    [
+     97,
+     114
+    ],
+    [
+     98,
+     115
+    ],
+    [
+     99,
+     116
+    ],
+    [
+     100,
+     117
+    ],
+    [
+     101,
+     118
+    ],
+    [
+     102,
+     119
+    ],
+    [
+     103,
+     120
+    ],
+    [
+     104,
+     121
+    ],
+    [
+     105,
+     122
+    ],
+    [
+     106,
+     123
+    ],
+    [
+     107,
+     124
+    ],
+    [
+     108,
+     125
+    ],
+    [
+     109,
+     126
+    ]
+   ],
+   "a_end_lost": [],
+   "nodes": [
+    {
+     "id": 18,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -102.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "No Topology",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 19,
+     "type": 5,
+     "parent_id": 18,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 20,
+     "type": 5,
+     "parent_id": 18,
+     "branch_level": 1,
+     "translate": [
+      -3.0,
+      2.0,
+      -1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 21,
+     "type": 5,
+     "parent_id": 18,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      -3.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 22,
+     "type": 5,
+     "parent_id": 18,
+     "branch_level": 1,
+     "translate": [
+      -2.0,
+      -3.0,
+      -1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 23,
+     "type": 5,
+     "parent_id": 18,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      4.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 24,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -90.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Cube",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 25,
+     "type": 5,
+     "parent_id": 24,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 26,
+     "type": 5,
+     "parent_id": 24,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 27,
+     "type": 5,
+     "parent_id": 24,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 28,
+     "type": 5,
+     "parent_id": 24,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 29,
+     "type": 5,
+     "parent_id": 24,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 30,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -78.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Sphere",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 31,
+     "type": 5,
+     "parent_id": 30,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 32,
+     "type": 5,
+     "parent_id": 30,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 33,
+     "type": 5,
+     "parent_id": 30,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 34,
+     "type": 5,
+     "parent_id": 30,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 35,
+     "type": 5,
+     "parent_id": 30,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 36,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -66.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Torus",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 37,
+     "type": 5,
+     "parent_id": 36,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 38,
+     "type": 5,
+     "parent_id": 36,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 39,
+     "type": 5,
+     "parent_id": 36,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 40,
+     "type": 5,
+     "parent_id": 36,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 41,
+     "type": 5,
+     "parent_id": 36,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 42,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -54.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Cylinder",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 43,
+     "type": 5,
+     "parent_id": 42,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 44,
+     "type": 5,
+     "parent_id": 42,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 45,
+     "type": 5,
+     "parent_id": 42,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 46,
+     "type": 5,
+     "parent_id": 42,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 47,
+     "type": 5,
+     "parent_id": 42,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 48,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -42.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Pin",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 49,
+     "type": 5,
+     "parent_id": 48,
+     "branch_level": 1,
+     "translate": [
+      -1.5,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 50,
+     "type": 5,
+     "parent_id": 48,
+     "branch_level": 1,
+     "translate": [
+      -0.75,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 51,
+     "type": 5,
+     "parent_id": 48,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 52,
+     "type": 5,
+     "parent_id": 48,
+     "branch_level": 1,
+     "translate": [
+      0.75,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 53,
+     "type": 5,
+     "parent_id": 48,
+     "branch_level": 1,
+     "translate": [
+      1.5,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 54,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -30.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Rod",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 55,
+     "type": 5,
+     "parent_id": 54,
+     "branch_level": 1,
+     "translate": [
+      -120.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 56,
+     "type": 5,
+     "parent_id": 54,
+     "branch_level": 1,
+     "translate": [
+      -60.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 57,
+     "type": 5,
+     "parent_id": 54,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 58,
+     "type": 5,
+     "parent_id": 54,
+     "branch_level": 1,
+     "translate": [
+      60.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 59,
+     "type": 5,
+     "parent_id": 54,
+     "branch_level": 1,
+     "translate": [
+      120.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 60,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -18.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Point",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 61,
+     "type": 5,
+     "parent_id": 60,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 62,
+     "type": 5,
+     "parent_id": 60,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 63,
+     "type": 5,
+     "parent_id": 60,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 64,
+     "type": 5,
+     "parent_id": 60,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 65,
+     "type": 5,
+     "parent_id": 60,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 66,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -6.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Plane",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 67,
+     "type": 5,
+     "parent_id": 66,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 68,
+     "type": 5,
+     "parent_id": 66,
+     "branch_level": 1,
+     "translate": [
+      0.618,
+      1.9021,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 69,
+     "type": 5,
+     "parent_id": 66,
+     "branch_level": 1,
+     "translate": [
+      -1.618,
+      1.1756,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 70,
+     "type": 5,
+     "parent_id": 66,
+     "branch_level": 1,
+     "translate": [
+      -1.618,
+      -1.1756,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 71,
+     "type": 5,
+     "parent_id": 66,
+     "branch_level": 1,
+     "translate": [
+      0.618,
+      -1.9021,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 72,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      6.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zcube",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 73,
+     "type": 5,
+     "parent_id": 72,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 74,
+     "type": 5,
+     "parent_id": 72,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 75,
+     "type": 5,
+     "parent_id": 72,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 76,
+     "type": 5,
+     "parent_id": 72,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 77,
+     "type": 5,
+     "parent_id": 72,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 78,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      18.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zsphere",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 79,
+     "type": 5,
+     "parent_id": 78,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 80,
+     "type": 5,
+     "parent_id": 78,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 81,
+     "type": 5,
+     "parent_id": 78,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 82,
+     "type": 5,
+     "parent_id": 78,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 83,
+     "type": 5,
+     "parent_id": 78,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 84,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      30.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Ztorus",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 85,
+     "type": 5,
+     "parent_id": 84,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 86,
+     "type": 5,
+     "parent_id": 84,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 87,
+     "type": 5,
+     "parent_id": 84,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 88,
+     "type": 5,
+     "parent_id": 84,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 89,
+     "type": 5,
+     "parent_id": 84,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 90,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      42.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zcylinder",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 91,
+     "type": 5,
+     "parent_id": 90,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 92,
+     "type": 5,
+     "parent_id": 90,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 93,
+     "type": 5,
+     "parent_id": 90,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 94,
+     "type": 5,
+     "parent_id": 90,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 95,
+     "type": 5,
+     "parent_id": 90,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 96,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      54.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zrod",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 97,
+     "type": 5,
+     "parent_id": 96,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      -1.5,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 98,
+     "type": 5,
+     "parent_id": 96,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      -0.75,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 99,
+     "type": 5,
+     "parent_id": 96,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 100,
+     "type": 5,
+     "parent_id": 96,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.75,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 101,
+     "type": 5,
+     "parent_id": 96,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      1.5,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 102,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      66.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Spiral",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 103,
+     "type": 5,
+     "parent_id": 102,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 104,
+     "type": 5,
+     "parent_id": 102,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 105,
+     "type": 5,
+     "parent_id": 102,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 106,
+     "type": 5,
+     "parent_id": 102,
+     "branch_level": 1,
+     "translate": [
+      432.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 107,
+     "type": 5,
+     "parent_id": 102,
+     "branch_level": 1,
+     "translate": [
+      576.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 108,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      78.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Video",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 109,
+     "type": 5,
+     "parent_id": 108,
+     "branch_level": 1,
+     "translate": [
+      -3.0,
+      -2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 110,
+     "type": 5,
+     "parent_id": 108,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      -2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 111,
+     "type": 5,
+     "parent_id": 108,
+     "branch_level": 1,
+     "translate": [
+      -3.0,
+      2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 112,
+     "type": 5,
+     "parent_id": 108,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 113,
+     "type": 5,
+     "parent_id": 108,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 114,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      90.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Plot",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 115,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 116,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      1.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 117,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 118,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 119,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      4.0,
+      0.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 120,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      102.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Surface",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 121,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 122,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      0.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 123,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      4.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 124,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      2.0,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 125,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      2.0,
+      1.2
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 126,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      4.0,
+      2.0,
+      0.6
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    }
+   ]
+  },
+  {
+   "name": "world_grid_into_topology",
+   "host": [
+    "topology"
+   ],
+   "incoming": "world_grid",
+   "host_count": 109,
+   "skipped_global": 0,
+   "dropped_links": 0,
+   "rerooted": 0,
+   "cleared_channels": 0,
+   "id_map": [
+    [
+     1,
+     110
+    ],
+    [
+     2,
+     111
+    ],
+    [
+     3,
+     112
+    ],
+    [
+     4,
+     113
+    ],
+    [
+     5,
+     114
+    ],
+    [
+     6,
+     115
+    ],
+    [
+     7,
+     116
+    ],
+    [
+     8,
+     117
+    ],
+    [
+     9,
+     118
+    ],
+    [
+     10,
+     119
+    ],
+    [
+     11,
+     120
+    ],
+    [
+     12,
+     121
+    ],
+    [
+     13,
+     122
+    ],
+    [
+     14,
+     123
+    ],
+    [
+     15,
+     124
+    ],
+    [
+     16,
+     125
+    ],
+    [
+     17,
+     126
+    ]
+   ],
+   "a_end_lost": [],
+   "nodes": [
+    {
+     "id": 110,
+     "type": 6,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 111,
+     "type": 5,
+     "parent_id": 110,
+     "branch_level": 1,
+     "translate": [
+      180.0,
+      90.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 112,
+     "type": 5,
+     "parent_id": 110,
+     "branch_level": 1,
+     "translate": [
+      10.0,
+      20.0,
+      5.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 113,
+     "type": 5,
+     "parent_id": 112,
+     "branch_level": 2,
+     "translate": [
+      0.0,
+      0.0,
+      7.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 114,
+     "type": 6,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      500.0,
+      0.0,
+      100.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 115,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      -95.5,
+      36.5,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 116,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      -66.0,
+      49.0,
+      3.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 117,
+     "type": 5,
+     "parent_id": 116,
+     "branch_level": 2,
+     "translate": [
+      0.0,
+      0.0,
+      7.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 118,
+     "type": 6,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      300.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 119,
+     "type": 5,
+     "parent_id": 118,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 120,
+     "type": 5,
+     "parent_id": 118,
+     "branch_level": 1,
+     "translate": [
+      90.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 121,
+     "type": 5,
+     "parent_id": 118,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      90.0,
+      10.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 122,
+     "type": 5,
+     "parent_id": 118,
+     "branch_level": 1,
+     "translate": [
+      45.0,
+      45.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 123,
+     "type": 5,
+     "parent_id": 122,
+     "branch_level": 2,
+     "translate": [
+      0.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 124,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -300.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 125,
+     "type": 6,
+     "parent_id": 124,
+     "branch_level": 1,
+     "translate": [
+      10.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 126,
+     "type": 5,
+     "parent_id": 125,
+     "branch_level": 2,
+     "translate": [
+      5.0,
+      2.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    }
+   ]
+  },
+  {
+   "name": "topology_into_itself",
+   "host": [
+    "topology"
+   ],
+   "incoming": "topology",
+   "host_count": 109,
+   "skipped_global": 0,
+   "dropped_links": 0,
+   "rerooted": 0,
+   "cleared_channels": 0,
+   "id_map": [
+    [
+     1,
+     110
+    ],
+    [
+     2,
+     111
+    ],
+    [
+     3,
+     112
+    ],
+    [
+     4,
+     113
+    ],
+    [
+     5,
+     114
+    ],
+    [
+     6,
+     115
+    ],
+    [
+     7,
+     116
+    ],
+    [
+     8,
+     117
+    ],
+    [
+     9,
+     118
+    ],
+    [
+     10,
+     119
+    ],
+    [
+     11,
+     120
+    ],
+    [
+     12,
+     121
+    ],
+    [
+     13,
+     122
+    ],
+    [
+     14,
+     123
+    ],
+    [
+     15,
+     124
+    ],
+    [
+     16,
+     125
+    ],
+    [
+     17,
+     126
+    ],
+    [
+     18,
+     127
+    ],
+    [
+     19,
+     128
+    ],
+    [
+     20,
+     129
+    ],
+    [
+     21,
+     130
+    ],
+    [
+     22,
+     131
+    ],
+    [
+     23,
+     132
+    ],
+    [
+     24,
+     133
+    ],
+    [
+     25,
+     134
+    ],
+    [
+     26,
+     135
+    ],
+    [
+     27,
+     136
+    ],
+    [
+     28,
+     137
+    ],
+    [
+     29,
+     138
+    ],
+    [
+     30,
+     139
+    ],
+    [
+     31,
+     140
+    ],
+    [
+     32,
+     141
+    ],
+    [
+     33,
+     142
+    ],
+    [
+     34,
+     143
+    ],
+    [
+     35,
+     144
+    ],
+    [
+     36,
+     145
+    ],
+    [
+     37,
+     146
+    ],
+    [
+     38,
+     147
+    ],
+    [
+     39,
+     148
+    ],
+    [
+     40,
+     149
+    ],
+    [
+     41,
+     150
+    ],
+    [
+     42,
+     151
+    ],
+    [
+     43,
+     152
+    ],
+    [
+     44,
+     153
+    ],
+    [
+     45,
+     154
+    ],
+    [
+     46,
+     155
+    ],
+    [
+     47,
+     156
+    ],
+    [
+     48,
+     157
+    ],
+    [
+     49,
+     158
+    ],
+    [
+     50,
+     159
+    ],
+    [
+     51,
+     160
+    ],
+    [
+     52,
+     161
+    ],
+    [
+     53,
+     162
+    ],
+    [
+     54,
+     163
+    ],
+    [
+     55,
+     164
+    ],
+    [
+     56,
+     165
+    ],
+    [
+     57,
+     166
+    ],
+    [
+     58,
+     167
+    ],
+    [
+     59,
+     168
+    ],
+    [
+     60,
+     169
+    ],
+    [
+     61,
+     170
+    ],
+    [
+     62,
+     171
+    ],
+    [
+     63,
+     172
+    ],
+    [
+     64,
+     173
+    ],
+    [
+     65,
+     174
+    ],
+    [
+     66,
+     175
+    ],
+    [
+     67,
+     176
+    ],
+    [
+     68,
+     177
+    ],
+    [
+     69,
+     178
+    ],
+    [
+     70,
+     179
+    ],
+    [
+     71,
+     180
+    ],
+    [
+     72,
+     181
+    ],
+    [
+     73,
+     182
+    ],
+    [
+     74,
+     183
+    ],
+    [
+     75,
+     184
+    ],
+    [
+     76,
+     185
+    ],
+    [
+     77,
+     186
+    ],
+    [
+     78,
+     187
+    ],
+    [
+     79,
+     188
+    ],
+    [
+     80,
+     189
+    ],
+    [
+     81,
+     190
+    ],
+    [
+     82,
+     191
+    ],
+    [
+     83,
+     192
+    ],
+    [
+     84,
+     193
+    ],
+    [
+     85,
+     194
+    ],
+    [
+     86,
+     195
+    ],
+    [
+     87,
+     196
+    ],
+    [
+     88,
+     197
+    ],
+    [
+     89,
+     198
+    ],
+    [
+     90,
+     199
+    ],
+    [
+     91,
+     200
+    ],
+    [
+     92,
+     201
+    ],
+    [
+     93,
+     202
+    ],
+    [
+     94,
+     203
+    ],
+    [
+     95,
+     204
+    ],
+    [
+     96,
+     205
+    ],
+    [
+     97,
+     206
+    ],
+    [
+     98,
+     207
+    ],
+    [
+     99,
+     208
+    ],
+    [
+     100,
+     209
+    ],
+    [
+     101,
+     210
+    ],
+    [
+     102,
+     211
+    ],
+    [
+     103,
+     212
+    ],
+    [
+     104,
+     213
+    ],
+    [
+     105,
+     214
+    ],
+    [
+     106,
+     215
+    ],
+    [
+     107,
+     216
+    ],
+    [
+     108,
+     217
+    ],
+    [
+     109,
+     218
+    ]
+   ],
+   "a_end_lost": [],
+   "nodes": [
+    {
+     "id": 110,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -102.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "No Topology",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 111,
+     "type": 5,
+     "parent_id": 110,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 112,
+     "type": 5,
+     "parent_id": 110,
+     "branch_level": 1,
+     "translate": [
+      -3.0,
+      2.0,
+      -1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 113,
+     "type": 5,
+     "parent_id": 110,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      -3.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 114,
+     "type": 5,
+     "parent_id": 110,
+     "branch_level": 1,
+     "translate": [
+      -2.0,
+      -3.0,
+      -1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 115,
+     "type": 5,
+     "parent_id": 110,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      4.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 116,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -90.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Cube",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 117,
+     "type": 5,
+     "parent_id": 116,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 118,
+     "type": 5,
+     "parent_id": 116,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 119,
+     "type": 5,
+     "parent_id": 116,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 120,
+     "type": 5,
+     "parent_id": 116,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 121,
+     "type": 5,
+     "parent_id": 116,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 122,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -78.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Sphere",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 123,
+     "type": 5,
+     "parent_id": 122,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 124,
+     "type": 5,
+     "parent_id": 122,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 125,
+     "type": 5,
+     "parent_id": 122,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 126,
+     "type": 5,
+     "parent_id": 122,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 127,
+     "type": 5,
+     "parent_id": 122,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 128,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -66.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Torus",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 129,
+     "type": 5,
+     "parent_id": 128,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 130,
+     "type": 5,
+     "parent_id": 128,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 131,
+     "type": 5,
+     "parent_id": 128,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 132,
+     "type": 5,
+     "parent_id": 128,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 133,
+     "type": 5,
+     "parent_id": 128,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 134,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -54.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Cylinder",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 135,
+     "type": 5,
+     "parent_id": 134,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 136,
+     "type": 5,
+     "parent_id": 134,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 137,
+     "type": 5,
+     "parent_id": 134,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 138,
+     "type": 5,
+     "parent_id": 134,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 139,
+     "type": 5,
+     "parent_id": 134,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 140,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -42.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Pin",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 141,
+     "type": 5,
+     "parent_id": 140,
+     "branch_level": 1,
+     "translate": [
+      -1.5,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 142,
+     "type": 5,
+     "parent_id": 140,
+     "branch_level": 1,
+     "translate": [
+      -0.75,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 143,
+     "type": 5,
+     "parent_id": 140,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 144,
+     "type": 5,
+     "parent_id": 140,
+     "branch_level": 1,
+     "translate": [
+      0.75,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 145,
+     "type": 5,
+     "parent_id": 140,
+     "branch_level": 1,
+     "translate": [
+      1.5,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 146,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -30.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Rod",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 147,
+     "type": 5,
+     "parent_id": 146,
+     "branch_level": 1,
+     "translate": [
+      -120.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 148,
+     "type": 5,
+     "parent_id": 146,
+     "branch_level": 1,
+     "translate": [
+      -60.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 149,
+     "type": 5,
+     "parent_id": 146,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 150,
+     "type": 5,
+     "parent_id": 146,
+     "branch_level": 1,
+     "translate": [
+      60.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 151,
+     "type": 5,
+     "parent_id": 146,
+     "branch_level": 1,
+     "translate": [
+      120.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 152,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -18.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Point",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 153,
+     "type": 5,
+     "parent_id": 152,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 154,
+     "type": 5,
+     "parent_id": 152,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 155,
+     "type": 5,
+     "parent_id": 152,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 156,
+     "type": 5,
+     "parent_id": 152,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 157,
+     "type": 5,
+     "parent_id": 152,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 158,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -6.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Plane",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 159,
+     "type": 5,
+     "parent_id": 158,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 160,
+     "type": 5,
+     "parent_id": 158,
+     "branch_level": 1,
+     "translate": [
+      0.618,
+      1.9021,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 161,
+     "type": 5,
+     "parent_id": 158,
+     "branch_level": 1,
+     "translate": [
+      -1.618,
+      1.1756,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 162,
+     "type": 5,
+     "parent_id": 158,
+     "branch_level": 1,
+     "translate": [
+      -1.618,
+      -1.1756,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 163,
+     "type": 5,
+     "parent_id": 158,
+     "branch_level": 1,
+     "translate": [
+      0.618,
+      -1.9021,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 164,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      6.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zcube",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 165,
+     "type": 5,
+     "parent_id": 164,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 166,
+     "type": 5,
+     "parent_id": 164,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 167,
+     "type": 5,
+     "parent_id": 164,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 168,
+     "type": 5,
+     "parent_id": 164,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 169,
+     "type": 5,
+     "parent_id": 164,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 170,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      18.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zsphere",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 171,
+     "type": 5,
+     "parent_id": 170,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 172,
+     "type": 5,
+     "parent_id": 170,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 173,
+     "type": 5,
+     "parent_id": 170,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 174,
+     "type": 5,
+     "parent_id": 170,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 175,
+     "type": 5,
+     "parent_id": 170,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 176,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      30.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Ztorus",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 177,
+     "type": 5,
+     "parent_id": 176,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 178,
+     "type": 5,
+     "parent_id": 176,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 179,
+     "type": 5,
+     "parent_id": 176,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 180,
+     "type": 5,
+     "parent_id": 176,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 181,
+     "type": 5,
+     "parent_id": 176,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 182,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      42.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zcylinder",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 183,
+     "type": 5,
+     "parent_id": 182,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 184,
+     "type": 5,
+     "parent_id": 182,
+     "branch_level": 1,
+     "translate": [
+      72.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 185,
+     "type": 5,
+     "parent_id": 182,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 186,
+     "type": 5,
+     "parent_id": 182,
+     "branch_level": 1,
+     "translate": [
+      216.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 187,
+     "type": 5,
+     "parent_id": 182,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 188,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      54.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Zrod",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 189,
+     "type": 5,
+     "parent_id": 188,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      -1.5,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 190,
+     "type": 5,
+     "parent_id": 188,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      -0.75,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 191,
+     "type": 5,
+     "parent_id": 188,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 192,
+     "type": 5,
+     "parent_id": 188,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.75,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 193,
+     "type": 5,
+     "parent_id": 188,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      1.5,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 194,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      66.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Spiral",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 195,
+     "type": 5,
+     "parent_id": 194,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 196,
+     "type": 5,
+     "parent_id": 194,
+     "branch_level": 1,
+     "translate": [
+      144.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 197,
+     "type": 5,
+     "parent_id": 194,
+     "branch_level": 1,
+     "translate": [
+      288.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 198,
+     "type": 5,
+     "parent_id": 194,
+     "branch_level": 1,
+     "translate": [
+      432.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 199,
+     "type": 5,
+     "parent_id": 194,
+     "branch_level": 1,
+     "translate": [
+      576.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 200,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      78.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Video",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 201,
+     "type": 5,
+     "parent_id": 200,
+     "branch_level": 1,
+     "translate": [
+      -3.0,
+      -2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 202,
+     "type": 5,
+     "parent_id": 200,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      -2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 203,
+     "type": 5,
+     "parent_id": 200,
+     "branch_level": 1,
+     "translate": [
+      -3.0,
+      2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 204,
+     "type": 5,
+     "parent_id": 200,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 205,
+     "type": 5,
+     "parent_id": 200,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 206,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      90.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Plot",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 207,
+     "type": 5,
+     "parent_id": 206,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 208,
+     "type": 5,
+     "parent_id": 206,
+     "branch_level": 1,
+     "translate": [
+      1.0,
+      0.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 209,
+     "type": 5,
+     "parent_id": 206,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 210,
+     "type": 5,
+     "parent_id": 206,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 211,
+     "type": 5,
+     "parent_id": 206,
+     "branch_level": 1,
+     "translate": [
+      4.0,
+      0.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 212,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      102.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "Surface",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 213,
+     "type": 5,
+     "parent_id": 212,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 214,
+     "type": 5,
+     "parent_id": 212,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      0.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 215,
+     "type": 5,
+     "parent_id": 212,
+     "branch_level": 1,
+     "translate": [
+      4.0,
+      0.0,
+      0.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 216,
+     "type": 5,
+     "parent_id": 212,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      2.0,
+      0.3
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 217,
+     "type": 5,
+     "parent_id": 212,
+     "branch_level": 1,
+     "translate": [
+      2.0,
+      2.0,
+      1.2
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 218,
+     "type": 5,
+     "parent_id": 212,
+     "branch_level": 1,
+     "translate": [
+      4.0,
+      2.0,
+      0.6
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    }
+   ]
+  },
+  {
+   "name": "selection_into_topo_scale",
+   "host": [
+    "topo_scale"
+   ],
+   "incoming": "selection",
+   "host_count": 103,
+   "skipped_global": 0,
+   "dropped_links": 0,
+   "rerooted": 0,
+   "cleared_channels": 2,
+   "id_map": [
+    [
+     1,
+     104
+    ],
+    [
+     2,
+     105
+    ],
+    [
+     3,
+     106
+    ],
+    [
+     4,
+     107
+    ],
+    [
+     5,
+     108
+    ],
+    [
+     6,
+     109
+    ],
+    [
+     7,
+     110
+    ],
+    [
+     8,
+     111
+    ],
+    [
+     9,
+     112
+    ],
+    [
+     20,
+     113
+    ],
+    [
+     21,
+     114
+    ],
+    [
+     22,
+     115
+    ],
+    [
+     23,
+     116
+    ],
+    [
+     30,
+     117
+    ],
+    [
+     31,
+     118
+    ],
+    [
+     32,
+     119
+    ],
+    [
+     40,
+     120
+    ],
+    [
+     41,
+     121
+    ],
+    [
+     42,
+     122
+    ],
+    [
+     50,
+     123
+    ],
+    [
+     51,
+     124
+    ]
+   ],
+   "a_end_lost": [],
+   "nodes": [
+    {
+     "id": 104,
+     "type": 0,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 104,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 105,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      100.0,
+      -40.0,
+      8.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 105,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 106,
+     "type": 5,
+     "parent_id": 105,
+     "branch_level": 1,
+     "translate": [
+      30.0,
+      45.0,
+      5.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 106,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 107,
+     "type": 5,
+     "parent_id": 106,
+     "branch_level": 2,
+     "translate": [
+      90.0,
+      -30.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 107,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 108,
+     "type": 5,
+     "parent_id": 107,
+     "branch_level": 3,
+     "translate": [
+      200.0,
+      60.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 108,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 109,
+     "type": 5,
+     "parent_id": 106,
+     "branch_level": 2,
+     "translate": [
+      -120.0,
+      15.0,
+      3.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 109,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 110,
+     "type": 7,
+     "parent_id": 107,
+     "branch_level": 3,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 109,
+     "record_id": 110,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 111,
+     "type": 5,
+     "parent_id": 107,
+     "branch_level": 3,
+     "translate": [
+      45.0,
+      10.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 111,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 112,
+     "type": 7,
+     "parent_id": 109,
+     "branch_level": 3,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 105,
+     "record_id": 112,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 113,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      40.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 113,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 114,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -30.0,
+      12.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 114,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 115,
+     "type": 5,
+     "parent_id": 114,
+     "branch_level": 1,
+     "translate": [
+      4.0,
+      -2.0,
+      6.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 115,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 116,
+     "type": 5,
+     "parent_id": 115,
+     "branch_level": 2,
+     "translate": [
+      15.0,
+      -70.0,
+      3.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 116,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 117,
+     "type": 6,
+     "parent_id": 113,
+     "branch_level": 1,
+     "translate": [
+      5.0,
+      -3.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 117,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 118,
+     "type": 5,
+     "parent_id": 117,
+     "branch_level": 2,
+     "translate": [
+      -117.2,
+      32.7,
+      4.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 118,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 119,
+     "type": 5,
+     "parent_id": 118,
+     "branch_level": 3,
+     "translate": [
+      45.0,
+      20.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 119,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 120,
+     "type": 6,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -20.0,
+      30.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 120,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 121,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      10.0,
+      -25.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 121,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 122,
+     "type": 5,
+     "parent_id": 121,
+     "branch_level": 2,
+     "translate": [
+      120.0,
+      3.0,
+      1.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 122,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 123,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      80.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 123,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    },
+    {
+     "id": 124,
+     "type": 5,
+     "parent_id": 123,
+     "branch_level": 1,
+     "translate": [
+      60.0,
+      20.0,
+      -10.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 124,
+     "ch_input_id": 0,
+     "ch_output_id": null
+    }
+   ]
+  },
+  {
+   "name": "point_cloud_into_plot_surface",
+   "host": [
+    "plot_surface"
+   ],
+   "incoming": "point_cloud",
+   "host_count": 40,
+   "skipped_global": 0,
+   "dropped_links": 1,
+   "rerooted": 0,
+   "cleared_channels": 0,
+   "id_map": [
+    [
+     1,
+     95
+    ],
+    [
+     2,
+     96
+    ],
+    [
+     3,
+     97
+    ],
+    [
+     4,
+     98
+    ],
+    [
+     5,
+     99
+    ],
+    [
+     6,
+     100
+    ],
+    [
+     7,
+     101
+    ],
+    [
+     8,
+     102
+    ],
+    [
+     9,
+     103
+    ],
+    [
+     10,
+     104
+    ],
+    [
+     11,
+     105
+    ],
+    [
+     12,
+     106
+    ],
+    [
+     13,
+     107
+    ],
+    [
+     14,
+     108
+    ],
+    [
+     15,
+     109
+    ],
+    [
+     16,
+     110
+    ],
+    [
+     17,
+     111
+    ],
+    [
+     18,
+     112
+    ],
+    [
+     19,
+     113
+    ],
+    [
+     20,
+     114
+    ],
+    [
+     21,
+     115
+    ],
+    [
+     22,
+     116
+    ],
+    [
+     23,
+     117
+    ],
+    [
+     24,
+     118
+    ],
+    [
+     25,
+     119
+    ],
+    [
+     26,
+     120
+    ],
+    [
+     27,
+     121
+    ],
+    [
+     28,
+     122
+    ],
+    [
+     29,
+     123
+    ],
+    [
+     30,
+     124
+    ]
+   ],
+   "a_end_lost": [],
+   "nodes": [
+    {
+     "id": 95,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 96,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      -4.5,
+      -2.5,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 97,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      -1.5,
+      -2.5,
+      1.25
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 98,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      1.5,
+      -2.5,
+      2.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 99,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      4.5,
+      -2.5,
+      3.75
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 100,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      -4.5,
+      2.5,
+      5.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 101,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      -1.5,
+      2.5,
+      6.25
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 102,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      1.5,
+      2.5,
+      7.5
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 103,
+     "type": 5,
+     "parent_id": 95,
+     "branch_level": 1,
+     "translate": [
+      4.5,
+      2.5,
+      8.75
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 105,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      40.0,
+      10.0,
+      5.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 106,
+     "type": 5,
+     "parent_id": 105,
+     "branch_level": 1,
+     "translate": [
+      6.0,
+      0.0,
+      2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 107,
+     "type": 5,
+     "parent_id": 106,
+     "branch_level": 2,
+     "translate": [
+      -4.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 108,
+     "type": 5,
+     "parent_id": 106,
+     "branch_level": 2,
+     "translate": [
+      -2.0,
+      3.0,
+      -1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 109,
+     "type": 5,
+     "parent_id": 106,
+     "branch_level": 2,
+     "translate": [
+      0.0,
+      0.0,
+      -2.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 110,
+     "type": 5,
+     "parent_id": 106,
+     "branch_level": 2,
+     "translate": [
+      2.0,
+      3.0,
+      -3.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 111,
+     "type": 5,
+     "parent_id": 106,
+     "branch_level": 2,
+     "translate": [
+      4.0,
+      0.0,
+      -4.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 112,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -40.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 113,
+     "type": 5,
+     "parent_id": 112,
+     "branch_level": 1,
+     "translate": [
+      -270.0,
+      0.0,
+      45.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 114,
+     "type": 5,
+     "parent_id": 112,
+     "branch_level": 1,
+     "translate": [
+      -90.0,
+      90.0,
+      45.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 115,
+     "type": 5,
+     "parent_id": 112,
+     "branch_level": 1,
+     "translate": [
+      90.0,
+      180.0,
+      45.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 116,
+     "type": 5,
+     "parent_id": 112,
+     "branch_level": 1,
+     "translate": [
+      270.0,
+      270.0,
+      45.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 117,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      -40.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 118,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      20.0,
+      -40.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 119,
+     "type": 5,
+     "parent_id": 118,
+     "branch_level": 1,
+     "translate": [
+      1.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 120,
+     "type": 6,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      60.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 121,
+     "type": 5,
+     "parent_id": 120,
+     "branch_level": 1,
+     "translate": [
+      -117.0,
+      32.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 122,
+     "type": 5,
+     "parent_id": 121,
+     "branch_level": 2,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 123,
+     "type": 5,
+     "parent_id": 121,
+     "branch_level": 2,
+     "translate": [
+      4.0,
+      2.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    },
+    {
+     "id": 124,
+     "type": 5,
+     "parent_id": 121,
+     "branch_level": 2,
+     "translate": [
+      8.0,
+      4.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": null,
+     "record_id": null,
+     "ch_input_id": null,
+     "ch_output_id": null
+    }
+   ]
+  },
+  {
+   "name": "guest_into_selection",
+   "host": [
+    "selection"
+   ],
+   "incoming": "guest",
+   "host_count": 21,
+   "skipped_global": 2,
+   "dropped_links": 1,
+   "rerooted": 3,
+   "cleared_channels": 2,
+   "id_map": [
+    [
+     3,
+     52
+    ],
+    [
+     4,
+     53
+    ],
+    [
+     5,
+     54
+    ],
+    [
+     6,
+     55
+    ],
+    [
+     7,
+     56
+    ],
+    [
+     8,
+     57
+    ],
+    [
+     9,
+     58
+    ],
+    [
+     10,
+     59
+    ],
+    [
+     11,
+     60
+    ],
+    [
+     12,
+     61
+    ]
+   ],
+   "a_end_lost": [
+    {
+     "old_id": 10,
+     "b_end_inside": true
+    }
+   ],
+   "nodes": [
+    {
+     "id": 52,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      100.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "guest three",
+     "link": "",
+     "child_id": 0,
+     "record_id": 52,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 53,
+     "type": 5,
+     "parent_id": 52,
+     "branch_level": 1,
+     "translate": [
+      45.0,
+      30.0,
+      1.0
+     ],
+     "texture_id": 0,
+     "text": "guest four",
+     "link": "",
+     "child_id": 0,
+     "record_id": 53,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 54,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      7.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "child of the camera",
+     "link": "",
+     "child_id": 0,
+     "record_id": 54,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 55,
+     "type": 7,
+     "parent_id": 52,
+     "branch_level": 1,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 53,
+     "record_id": 55,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 57,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -20.0,
+      5.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "dangling parent",
+     "link": "",
+     "child_id": 0,
+     "record_id": 57,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 58,
+     "type": 5,
+     "parent_id": 57,
+     "branch_level": 1,
+     "translate": [
+      3.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 0,
+     "record_id": 58,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 59,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 53,
+     "record_id": 59,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 60,
+     "type": 5,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      -60.0,
+      10.0,
+      0.0
+     ],
+     "texture_id": 2,
+     "text": "textured",
+     "link": "",
+     "child_id": 0,
+     "record_id": 60,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    },
+    {
+     "id": 61,
+     "type": 7,
+     "parent_id": 0,
+     "branch_level": 0,
+     "translate": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "texture_id": 0,
+     "text": "",
+     "link": "",
+     "child_id": 52,
+     "record_id": 61,
+     "ch_input_id": 0,
+     "ch_output_id": 0
+    }
+   ]
+  }
+ ]
+}

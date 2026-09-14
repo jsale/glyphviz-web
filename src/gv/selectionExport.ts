@@ -82,6 +82,7 @@
 
 import { cloneNode } from './clipboard'
 import { linkChildId } from './links'
+import { recomputeBranchLevels } from './sceneMerge'
 import { NON_VISUAL_TYPES } from './selectionOps'
 import type { GvNode } from './types'
 import { NodeType, RotationMode } from './types'
@@ -478,34 +479,11 @@ function hasMotion(node: GvNode): boolean {
   return t.x !== 0 || t.y !== 0 || t.z !== 0 || r.x !== 0 || r.y !== 0 || r.z !== 0
 }
 
-/**
- * Set branchLevel to true depth for `nodes` — the desktop's
- * scene_merge.recompute_branch_levels, which Save Selection needs verbatim:
- * branch_level is a STORED column, not a derived one, so any operation that
- * lifts nodes out of one hierarchy into another has to restate it.
- *
- * Only ids inside `ownIds` count as parents; a node parented onto something
- * outside the set is a root here.
- */
-export function recomputeBranchLevels(nodes: GvNode[], ownIds: ReadonlySet<number>): void {
-  const children = new Map<number, GvNode[]>()
-  let frontier: GvNode[] = []
-  for (const n of nodes) {
-    if (ownIds.has(n.parentId)) {
-      const list = children.get(n.parentId)
-      if (list) list.push(n)
-      else children.set(n.parentId, [n])
-    } else {
-      frontier.push(n)
-    }
-  }
-  let level = 0
-  while (frontier.length > 0) {
-    for (const n of frontier) n.branchLevel = level
-    level++
-    frontier = frontier.flatMap((n) => children.get(n.id) ?? [])
-  }
-}
+// recomputeBranchLevels is the desktop's scene_merge.recompute_branch_levels,
+// which Save Selection needs verbatim. It lives with the merge it belongs to
+// (sceneMerge.ts), as it does on the desktop, and is re-exported here so this
+// module's callers keep their import.
+export { recomputeBranchLevels }
 
 /**
  * Work out which rows a Save Selection write would contain.

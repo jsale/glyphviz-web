@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildMediaIndex, compareMediaNames, stepTextureId, textureChoices } from './media'
+import { buildMediaIndex, compareMediaNames, stepTextureId, textureChoices, unionMedia } from './media'
 
 describe('compareMediaNames', () => {
   it('sorts zero-padded names lexicographically, as Python does', () => {
@@ -132,5 +132,52 @@ describe('stepTextureId', () => {
 
   it('lands on the first entry from an id that is not in the menu', () => {
     expect(stepTextureId(choices, 7, 1)).toBe(0)
+  })
+})
+
+describe('unionMedia', () => {
+  const host = buildMediaIndex(['b.png', 'd.png', 'clip.mp4'])
+
+  it('renumbers nothing when the incoming folder is the host folder', () => {
+    const u = unionMedia(host, buildMediaIndex(['d.png', 'b.png', 'clip.mp4']))
+    expect(u.hostShifted).toBe(false)
+    expect([...u.hostMap]).toEqual([[1, 1], [2, 2], [3, 3]])
+    expect([...u.incomingMap]).toEqual([[1, 1], [2, 2], [3, 3]])
+    expect(u.added).toEqual([])
+    expect(u.shared).toEqual(['b.png', 'd.png', 'clip.mp4'])
+  })
+
+  it('shifts host ids sorted after a new image, videos included', () => {
+    const u = unionMedia(host, buildMediaIndex(['c.png']))
+    expect(u.index.entries.map((e) => e.name)).toEqual(['b.png', 'c.png', 'd.png', 'clip.mp4'])
+    expect([...u.hostMap]).toEqual([[1, 1], [2, 3], [3, 4]])
+    expect(u.hostShifted).toBe(true)
+    expect([...u.incomingMap]).toEqual([[1, 2]])
+    expect(u.added).toEqual(['c.png'])
+  })
+
+  it('leaves host ids alone when every new file sorts after them', () => {
+    const u = unionMedia(buildMediaIndex(['a.png']), buildMediaIndex(['z.png']))
+    expect(u.hostShifted).toBe(false)
+    expect([...u.incomingMap]).toEqual([[1, 2]])
+  })
+
+  it('matches names case-insensitively and keeps the host file', () => {
+    const u = unionMedia(host, buildMediaIndex(['B.PNG', 'e.png']))
+    expect(u.index.entries.map((e) => e.name)).toEqual(['b.png', 'd.png', 'e.png', 'clip.mp4'])
+    expect([...u.incomingMap]).toEqual([[1, 1], [2, 3]])
+    expect(u.shared).toEqual(['B.PNG'])
+  })
+
+  it('lists a same-named file that is not the same file as a conflict', () => {
+    const u = unionMedia(host, buildMediaIndex(['b.png', 'd.png']), (name) => name === 'd.png')
+    expect(u.conflicts).toEqual(['d.png'])
+    expect(u.shared).toEqual(['b.png', 'd.png'])
+  })
+
+  it('treats a host with no media folder as an empty one', () => {
+    const u = unionMedia(null, buildMediaIndex(['x.png', 'y.mp4']))
+    expect(u.hostMap.size).toBe(0)
+    expect([...u.incomingMap]).toEqual([[1, 1], [2, 2]])
   })
 })

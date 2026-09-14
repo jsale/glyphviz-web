@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createRootNode } from './createNode'
-import { descendantIds, deleteSubtree, navFirstChild, navParent, navSibling, siblingsOf } from './treeOps'
+import { descendantIds, deleteSubtree, deleteSubtrees, navFirstChild, navParent, navSibling, siblingsOf } from './treeOps'
 import type { GvNode } from './types'
 import { NodeType } from './types'
 
@@ -40,6 +40,20 @@ describe('descendantIds / deleteSubtree', () => {
       stub({ id: 2, parentId: 1, branchLevel: 1 }),
     ]
     expect([...descendantIds(nodes, [1])].sort()).toEqual([1, 2])
+  })
+
+  it('deletes several subtrees at once, overlapping ones included', () => {
+    expect(deleteSubtrees(scene(), [3, 1, 5]).map((n) => n.id)).toEqual([10, 2, 4])
+  })
+
+  it('deletes a 400k-node selection in linear time', () => {
+    const nodes = [stub({ id: 1 })]
+    for (let i = 2; i <= 400_000; i++) nodes.push(stub({ id: i, parentId: 1, branchLevel: 1 }))
+    const started = performance.now()
+    const left = deleteSubtrees(nodes, nodes.slice(1).map((n) => n.id))
+    expect(left.map((n) => n.id)).toEqual([1])
+    // One subtree at a time was ~1.6e11 steps here; the sweep is well under a second.
+    expect(performance.now() - started).toBeLessThan(5000)
   })
 })
 

@@ -157,13 +157,15 @@ canvas {
 
 /* Two ways in — a file pick and a whole scene folder — sharing one row. */
 #hud-open,
+#hud-merge,
 #hud-save-row {
   display: flex;
   gap: 4px;
   margin-top: 6px;
 }
 
-#hud-open label {
+#hud-open label,
+#hud-merge label {
   flex: 1;
   padding: 3px 0;
   border: 1px solid #3a4256;
@@ -173,11 +175,13 @@ canvas {
   color: #cfd6e4;
 }
 
-#hud-open label:hover {
+#hud-open label:hover,
+#hud-merge label:hover {
   background: rgba(255, 255, 255, 0.08);
 }
 
-#hud-open input {
+#hud-open input,
+#hud-merge input {
   display: none;
 }
 
@@ -1603,4 +1607,47 @@ canvas {
 .pc-class-group .basemap-buttons .float-window-action {
   margin-top: 0;
   padding: 2px 0;
+}
+
+/* --- Merge: the scene chooser -----------------------------------------------
+   Only appears when a merged folder or zip holds several scenes. Sized to its
+   list rather than to the tool windows' fixed 620px, which would leave most of
+   a five-scene chooser empty. */
+
+#merge-scene-window {
+  width: 340px;
+  height: auto;
+  max-height: min(520px, calc(100vh - 24px));
+  resize: none;
+}
+
+.merge-scene-intro {
+  color: #aeb6c6;
+}
+
+.merge-scene-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.merge-scene-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 10px;
+  text-align: left;
+}
+
+.merge-scene-label {
+  font-weight: 600;
+}
+
+.merge-scene-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #8a93a6;
+  font-size: 11px;
 }

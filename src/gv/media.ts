@@ -137,6 +137,97 @@ export function buildMediaIndex(names: readonly string[]): MediaIndex {
   }
 }
 
+/** What happens to texture_ids when a second media folder joins a scene's. */
+export interface MediaUnion {
+  /** The combined folder's index — what the saved CSV's ids now mean. */
+  index: MediaIndex
+  /**
+   * Host texture_id → new id, for EVERY host entry (identity included). An id
+   * the host's own folder never supplied is absent and stays as it was.
+   */
+  hostMap: Map<number, number>
+  /** Whether any host id actually moved — the one thing a user must be told. */
+  hostShifted: boolean
+  /** Incoming texture_id → new id, for every incoming entry. */
+  incomingMap: Map<number, number>
+  /** Incoming files the host folder did not have: the ones to copy across. */
+  added: string[]
+  /** Incoming files the host already had under the same name (host's kept). */
+  shared: string[]
+  /** Of `shared`, the ones `differs` says are NOT the same file. */
+  conflicts: string[]
+}
+
+/**
+ * Combine the host scene's media folder with an incoming one, as if the
+ * incoming files had been copied into it — the only folder the saved CSV can
+ * name, since `texture_id` is a position in ONE sorted listing.
+ *
+ * Names match case-insensitively (the comparison compareMediaNames sorts by,
+ * and Windows would refuse two such files in one folder anyway). On a match the
+ * host's file wins and the incoming id is pointed at it: two scenes out of one
+ * example set typically share their media, and that case must renumber nothing.
+ * `differs(name)` reports a match that is not really the same file (the caller
+ * compares sizes) so it can be listed rather than silently swapped.
+ *
+ * Inserting a new name shifts every host id sorted at or after it — the rule
+ * applyBasemap already follows for its one file — so `hostMap` is a full map
+ * rather than a delta.
+ */
+export function unionMedia(
+  host: MediaIndex | null,
+  incoming: MediaIndex,
+  differs: (name: string) => boolean = () => false,
+): MediaUnion {
+  const hostEntries = host?.entries ?? []
+  const hostByLower = new Map(hostEntries.map((e) => [e.name.toLowerCase(), e.name] as const))
+  const added: string[] = []
+  const shared: string[] = []
+  const conflicts: string[] = []
+  for (const e of incoming.entries) {
+    const match = hostByLower.get(e.name.toLowerCase())
+    if (match === undefined) {
+      added.push(e.name)
+    } else {
+      shared.push(e.name)
+      if (differs(e.name)) conflicts.push(e.name)
+    }
+  }
+
+  const index = buildMediaIndex([...hostEntries.map((e) => e.name), ...added])
+  const idByLower = new Map(index.entries.map((e) => [e.name.toLowerCase(), e.textureId] as const))
+  const hostMap = new Map<number, number>()
+  let hostShifted = false
+  for (const e of hostEntries) {
+    const id = idByLower.get(e.name.toLowerCase())!
+    hostMap.set(e.textureId, id)
+    if (id !== e.textureId) hostShifted = true
+  }
+  const incomingMap = new Map<number, number>()
+  for (const e of incoming.entries) incomingMap.set(e.textureId, idByLower.get(e.name.toLowerCase())!)
+  return { index, hostMap, hostShifted, incomingMap, added, shared, conflicts }
+}
+
+/**
+ * Rewrite each node's texture_id through `map`. An id the map does not name is
+ * left as it was: it named no file before, and there is no file for it now.
+ * Returns how many nodes changed.
+ */
+export function remapTextureIds(
+  nodes: Iterable<{ textureId: number }>,
+  map: ReadonlyMap<number, number>,
+): number {
+  let changed = 0
+  for (const n of nodes) {
+    const to = map.get(n.textureId)
+    if (to !== undefined && to !== n.textureId) {
+      n.textureId = to
+      changed++
+    }
+  }
+  return changed
+}
+
 /** One entry of the inspector's texture menu. */
 export interface TextureChoice {
   id: number
