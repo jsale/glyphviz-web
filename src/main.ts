@@ -1932,7 +1932,14 @@ renderer.domElement.addEventListener(
     }
   },
   get drawState() {
-    return { limit: drawLimit, drawn: drawnCount, total: currentNodes.length }
+    return {
+      limit: drawLimit,
+      drawn: drawnCount,
+      // Rows the zero-scale cull skipped. Nowhere in the DOM once the scene
+      // line has scrolled, and the one number that says the cull fired.
+      zeroScale: culledCount,
+      total: currentNodes.length,
+    }
   },
   get channelState() {
     // `bound` is what the "channel in" row changes, and after the load-time
@@ -2629,6 +2636,7 @@ let showHidden = false
 let drawLimit: number | null = null
 /** How many nodes the last build actually drew — the wrist panel's readout. */
 let drawnCount = 0
+let culledCount = 0
 // Tags on, scoped to the selection, is the default PAIR (desktop 2026-08-28,
 // `Viewport.show_tags` / `show_tags_selected_only`, both flipped to True).
 // Either one alone is a poor first impression: all-tags-off hides the labels a
@@ -3500,15 +3508,17 @@ function stepBuiltInScene(delta: number) {
 }
 
 /**
- * Nodes whose position or colour an animation can change each frame: every
- * channel-bound node, plus every node carrying a nonzero rate field.
+ * Nodes whose position, size or colour an animation can change each frame:
+ * every channel-bound node, plus every node carrying a nonzero rate field.
  *
- * Only the point-cloud overlay asks — for everything else DynamicNodes and the
- * rate integrator work on the Object3Ds a cloud point does not have. Computed
- * from the CSV rather than from `rateNodes`, which is itself recomputed further
- * down this same rebuild and so is a build behind at this point.
+ * Two build-time decisions must stand down for these, and only these — where a
+ * cloud's points go (they are baked into one array) and whether a zero-scale row
+ * gets a glyph at all. Both would otherwise be taken on a value that does not
+ * hold still; see BuildSceneOptions.liveNodeIds. Computed from the CSV rather
+ * than from `rateNodes`, which is itself recomputed further down this same
+ * rebuild and so is a build behind at this point.
  */
-function liveCloudPointIds(): ReadonlySet<number> {
+function animatableNodeIds(): ReadonlySet<number> {
   const ids = new Set<number>(channels.boundNodeIds)
   for (const node of rateCandidates(currentNodes, channels.rateBoundNodeIds)) ids.add(node.id)
   return ids
@@ -3527,10 +3537,11 @@ function rebuildScene(fitCamera: boolean) {
     // A channel striking `hide` needs the glyph alive to blank and restore.
     channelHideBound: channels.hideBoundNodeIds,
     // A cloud's points are baked into one array rather than given frames, so
-    // the ones an animation can move have to be re-derived per frame; every
-    // other node animates through DynamicNodes, on Object3Ds a point has none
-    // of. Both sources of motion count — a channel binding and a rate field.
-    liveNodeIds: liveCloudPointIds(),
+    // the ones an animation can move have to be re-derived per frame; and a row
+    // an animation can grow out of scale 0 must keep the glyph the zero-scale
+    // cull would otherwise skip. Both sources of motion count — a channel
+    // binding and a rate field.
+    liveNodeIds: animatableNodeIds(),
   })
   if (currentRoot) {
     gizmo.detach()
@@ -3624,6 +3635,7 @@ function rebuildScene(fitCamera: boolean) {
   const mediaCount = currentMedia?.index.entries.length ?? 0
   // Kept for the wrist panel, which has no HUD line to read it off.
   drawnCount = built.drawnCount
+  culledCount = built.culledCount
   const notes = [
     `${currentNodes.length} node(s)`,
     // Called out rather than left to be inferred from a shrunken "drawn": a
@@ -3638,6 +3650,10 @@ function rebuildScene(fitCamera: boolean) {
     // Reported separately from `drawn` because a cloud's points are deliberately
     // NOT in that count — they draw no glyph — and a scene that is mostly one
     // scan would otherwise read as almost empty.
+    // Reported separately from `drawn` for the same reason the cloud line
+    // below is: these rows are real, visible and opaque, they just draw no
+    // shape — a terrain authored this way would otherwise read as almost empty.
+    ...(built.culledCount > 0 ? [`${built.culledCount.toLocaleString()} zero-scale`] : []),
     ...(built.clouds.cloudCount > 0
       ? [
           `${built.clouds.cloudCount} point cloud(s), ` +

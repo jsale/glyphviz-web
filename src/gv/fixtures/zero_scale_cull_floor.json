@@ -1,0 +1,247 @@
+{
+ "source_csv": "zero_scale_gv_node.csv",
+ "base_scale": 1.0,
+ "scale_floor": 0.2,
+ "engine": "glyphviz_gl.viewport._draws_nothing",
+ "wire_ids": [
+  0,
+  2,
+  4,
+  6,
+  8,
+  10,
+  12,
+  14,
+  17,
+  18,
+  20,
+  34
+ ],
+ "point_id": 22,
+ "nodes": [
+  {
+   "id": 1,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 1.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 2,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 3,
+   "geometry": 22,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 4,
+   "geometry": 2,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 5,
+   "geometry": 3,
+   "texture_id": 1,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 6,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 1.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 7,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 1.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 8,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 9,
+   "geometry": 23,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 10,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 11,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 0.0,
+   "draws_nothing": true
+  },
+  {
+   "id": 12,
+   "geometry": 22,
+   "texture_id": 0,
+   "radius": 0.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 13,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 0.0,
+   "draws_nothing": true
+  },
+  {
+   "id": 14,
+   "geometry": 3,
+   "texture_id": 1,
+   "radius": 0.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 15,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 2.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 16,
+   "geometry": 1,
+   "texture_id": 0,
+   "radius": 0.4,
+   "draws_nothing": false
+  },
+  {
+   "id": 17,
+   "geometry": 1,
+   "texture_id": 0,
+   "radius": 0.4,
+   "draws_nothing": false
+  },
+  {
+   "id": 18,
+   "geometry": 1,
+   "texture_id": 0,
+   "radius": 0.4,
+   "draws_nothing": false
+  },
+  {
+   "id": 19,
+   "geometry": 1,
+   "texture_id": 0,
+   "radius": 0.4,
+   "draws_nothing": false
+  },
+  {
+   "id": 20,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 1.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 21,
+   "geometry": 1,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 22,
+   "geometry": 1,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 23,
+   "geometry": 1,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 24,
+   "geometry": 21,
+   "texture_id": 0,
+   "radius": 0.0,
+   "draws_nothing": true
+  },
+  {
+   "id": 25,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 1.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 26,
+   "geometry": 20,
+   "texture_id": 0,
+   "radius": 0.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 27,
+   "geometry": 21,
+   "texture_id": 0,
+   "radius": 180.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 28,
+   "geometry": 19,
+   "texture_id": 0,
+   "radius": 1.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 29,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 0.2,
+   "draws_nothing": false
+  },
+  {
+   "id": 30,
+   "geometry": 3,
+   "texture_id": 0,
+   "radius": 3.0,
+   "draws_nothing": false
+  },
+  {
+   "id": 31,
+   "geometry": 33,
+   "texture_id": 0,
+   "radius": 0.6,
+   "draws_nothing": false
+  },
+  {
+   "id": 32,
+   "geometry": 34,
+   "texture_id": 0,
+   "radius": 0.6,
+   "draws_nothing": false
+  }
+ ]
+}

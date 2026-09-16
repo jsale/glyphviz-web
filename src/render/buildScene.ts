@@ -19,6 +19,13 @@
 // what makes six-figure point counts affordable (render/pointCloudOverlay.ts).
 // So a cloud is the second source, after the `\` draw limit, of a node that is
 // real in every other way and has no frame.
+//
+// The ZERO-SCALE CULL (render/zeroScale.ts) is the milder version of the same
+// idea: a row whose rendered scale is zero on every axis keeps its frame — its
+// children, its Surface/Plot vertex and its label all hang off that — and gets
+// no glyph and no pick proxy, because a collapsed shape covers no pixels. It is
+// what makes a terrain's 58k Surface vertices cost a frame apiece instead of
+// three Object3Ds and a draw call apiece.
 
 import * as THREE from 'three'
 import { cloudParentIds } from '../gv/pointCloud'
@@ -41,6 +48,7 @@ import { localRotationMatrix } from './rotation'
 import { topoBaseRotation } from './topology'
 import { buildTopologyOverlay, TopologyOverlay } from './topologyOverlay'
 import { createWorldGridObject } from './worldGridGeometry'
+import { drawsNothing, scaleIsZero } from './zeroScale'
 
 /** Background when no World (type 0) row is present. */
 export const DEFAULT_BACKGROUND = new THREE.Color(
@@ -107,6 +115,14 @@ export interface SceneBuildResult {
   background: THREE.Color
   /** Nodes that produced a drawable glyph (Link edges counted separately). */
   drawnCount: number
+  /**
+   * Nodes the zero-scale cull skipped: real, visible, opaque rows whose
+   * rendered scale is zero on every axis, so they got a frame and no glyph
+   * (render/zeroScale.ts). Reported separately from `drawnCount` for the same
+   * reason a cloud's points are — a terrain whose vertices are authored this
+   * way would otherwise read as almost empty.
+   */
+  culledCount: number
   /** Rendered type-7 edges; call update() per frame, setResolution on resize. */
   links: LinkOverlay
   /** Plot polylines + Surface meshes; same per-frame/resize contract. */
@@ -161,11 +177,23 @@ export interface BuildSceneOptions {
    */
   channelHideBound?: ReadonlySet<number>
   /**
-   * Nodes a channel or a rate field can move or recolour each frame. Only the
-   * point-cloud overlay reads it: a cloud's points are baked into one array, so
-   * an animated point has to be re-derived per frame rather than riding a frame
-   * that moves (render/pointCloudOverlay.ts). Everything else animates through
-   * DynamicNodes, which works on the Object3Ds a cloud point does not have.
+   * Nodes a channel or a rate field can move, resize or recolour each frame.
+   * Two things read it, for the same underlying reason — a build-time decision
+   * must not be taken on a value that will not hold still:
+   *
+   *   * the POINT CLOUD overlay, because a cloud's points are baked into one
+   *     array, so an animated point has to be re-derived per frame rather than
+   *     riding a frame that moves (render/pointCloudOverlay.ts);
+   *   * the ZERO-SCALE CULL, which is this app's whole divergence from the
+   *     desktop's version of it. There the cull lives in the draw loop, so a
+   *     channel growing a glyph out of scale 0 is free; here it decides whether
+   *     an Object3D EXISTS, and a culled node would have no glyph for
+   *     DynamicNodes to resize. So an animatable node is never culled, however
+   *     small the CSV says it is.
+   *
+   * Deliberately the whole live set rather than the scale-bound slice of it:
+   * `geometry` and `texture_id` are bindable too and both feed the exemptions,
+   * and being conservative here costs one Object3D per animated vertex.
    */
   liveNodeIds?: ReadonlySet<number>
 }
@@ -242,6 +270,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   const cloudParents = cloudParentIds(nodes)
 
   let drawnCount = 0
+  let culledCount = 0
   // id → frame, first row wins (mirrors byId) — link endpoint resolution
   // must be O(1), never a getObjectByName scene scan.
   const frames = new Map<number, THREE.Object3D>()
@@ -273,6 +302,10 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     parent: THREE.Object3D,
     parentGv: GvNode | null,
     visited: Set<number>,
+    // True once an ancestor's frame scale is zero on all three axes, which
+    // annihilates every draw matrix below it — the desktop reads the same fact
+    // off the composed matrix's radius (render/zeroScale.ts).
+    collapsedAncestor: boolean,
   ): void => {
     if (visited.has(node.id)) {
       warnings.add(`Node ${node.id}: parent cycle detected; subtree truncated.`)
@@ -306,6 +339,11 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     applyFrameTransform(frame, node, parentGv)
     parent.add(frame)
 
+    // Everything below this frame is annihilated too, so the flag only ever
+    // turns on. Read off the FRAME, which applyFrameTransform has just written,
+    // so a World Grid's (1, 1, 1) override is honoured without restating it.
+    const collapsed = collapsedAncestor || scaleIsZero(frame.scale)
+
     // Links draw as overlay edges (below), never as a glyph at their frame.
     const drawable =
       !NON_VISUAL_TYPES.has(node.type) &&
@@ -317,7 +355,19 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
       // descendant; they carry a frame and no glyph.
       (!limit || limit.draw.has(node.id))
 
-    if (drawable && node.type === NodeType.WorldGrid) {
+    // A visible, opaque row that cannot put a pixel on screen: it keeps its
+    // frame (the overlays, links, labels and its own children all resolve
+    // through it) and gets no glyph and no pick proxy. An animatable node is
+    // exempt — see BuildSceneOptions.liveNodeIds.
+    const culled =
+      drawable &&
+      !options.liveNodeIds?.has(node.id) &&
+      drawsNothing(node, collapsed)
+    if (culled) culledCount++
+
+    const drawGlyph = drawable && !culled
+
+    if (drawGlyph && node.type === NodeType.WorldGrid) {
       // Bespoke draw path: ±1-unit plate/globe scaled by the RAW node scale
       // times the shape's half-spans — no base_scale, no 0.2 floor, so the
       // surface sits exactly under the children it frames. Never pickable
@@ -329,7 +379,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
       glyph.userData.isGlyph = true
       frame.add(glyph)
       drawnCount++
-    } else if (drawable) {
+    } else if (drawGlyph) {
       const mesh = meshFor(node)
       const glyph = createGlyphObject(node.geometry, {
         color: new THREE.Color(node.color.r / 255, node.color.g / 255, node.color.b / 255),
@@ -352,13 +402,13 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     }
 
     for (const child of childrenOf.get(node.id) ?? []) {
-      attach(child, frame, node, visited)
+      attach(child, frame, node, visited, collapsed)
     }
   }
 
   const visited = new Set<number>()
   for (const node of roots) {
-    attach(node, root, null, visited)
+    attach(node, root, null, visited, false)
   }
 
   // A link carrying a real glyph geometry draws that glyph stretched between
@@ -399,7 +449,17 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   })
   if (clouds.cloudCount > 0) root.add(clouds.group)
 
-  return { root, background, drawnCount, links, overlays, clouds, frames, warnings: [...warnings] }
+  return {
+    root,
+    background,
+    drawnCount,
+    culledCount,
+    links,
+    overlays,
+    clouds,
+    frames,
+    warnings: [...warnings],
+  }
 }
 
 /**

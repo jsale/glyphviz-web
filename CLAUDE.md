@@ -3146,6 +3146,112 @@ something to decide now).
       - Noticed, not changed: the Scene panel's Save row (`#hud-save-row`) draws
         as unstyled white browser buttons with wrapped labels. It has since
         `242c243`; it predates this work and sits directly under the new row.
+   oo. Zero-scale cull (shipped 2026-09-16, Jeff's request — a port of the
+      zero-scale half of desktop `f73d006`, the renderer budget taken on the San
+      Diego River Watershed Atlas): **a row whose RENDERED scale is zero on all
+      three axes gets no glyph and no pick proxy.** It keeps its frame, so it is
+      still a Surface vertex, a Plot vertex, a link endpoint, a label anchor and
+      a parent — it just stops being a shape.
+      - WHY IT EXISTS, and why the rule has to stay this narrow: scale 0 is the
+        only thing an author can say that means "be a vertex, not a shape".
+        `hide = 1` deletes the vertex from the mesh and `color_a = 0` makes the
+        mesh transparent, because a Surface takes its children's alpha — so
+        neither says it. That authoring rule is documented on both sides (the
+        desktop's Topologies reference and the GlyphViz skill), which is why the
+        same CSV has to behave the same way here.
+      - THE SPLIT the rest of the port turns on: the desktop culls in its DRAW
+        LOOP, so a channel growing a glyph out of scale 0 is free there. This app
+        is retained-mode, so the cull has to decide whether an Object3D EXISTS —
+        which is where the saving is, and which is also the one thing that can go
+        wrong. `BuildSceneOptions.liveNodeIds` is the answer, and it already
+        existed for the point cloud: a node any channel or rate field can touch
+        is NEVER culled, however small the CSV says it is. Deliberately the whole
+        live set rather than the scale-bound slice of it — `geometry` and
+        `texture_id` are bindable too and both feed the exemptions, and being
+        conservative costs one Object3D per animated vertex.
+      - `src/render/zeroScale.ts` is the whole rule. `renderedGlyphScale` is the
+        node's own contribution to its draw matrix — the same arithmetic
+        `applyGlyphDrawScale` and `createWorldGridObject` perform, read off the
+        ROW so the decision can be taken before a glyph exists to measure, with
+        the Rod factors, the Global Scale, the opt-in floor and the World Grid's
+        extents exemption all in it. The desktop reads one `radius` off the fully
+        composed matrix; this walks the tree carrying one boolean instead
+        (`collapsedAncestor`), because an ancestor's RAW scale of 0 annihilates
+        everything below it. Read off the FRAME's scale, not the node's, so the
+        grid rule (frames carry (1, 1, 1)) is honoured without restating it —
+        measured against the desktop, which keeps a zero-scale grid's children
+        for exactly that reason. The two agree except for an ancestor chain that
+        is individually non-degenerate and composes to rank 0, where this keeps a
+        glyph the desktop drops: the safe direction, and not authorable by
+        accident.
+      - THE THREE EXEMPTIONS are the desktop's, and they are what make the
+        picture identical with the cull on and off: Point (22), whose size comes
+        from the material rather than the matrix on both sides; every WIRE id,
+        because a zero-length line can still rasterise a pixel; and anything
+        carrying a `texture_id` (the raw one, so an id the media folder never
+        supplied exempts a node just the same). The textured exemption's desktop
+        reason does NOT exist here — its VideoManager pauses a video no draw call
+        asked for, where this app's videos are HTMLVideoElements that play
+        regardless (textureLibrary.ts, checked rather than assumed) — but the
+        rule is kept identical anyway, the ids being the contract between the two
+        apps and a zero-scale textured node a rounding error in cost.
+      - `WIRE_GEOMETRIES` (glyphGeometry.ts, beside `RATIO_SHAPED_GEOMETRIES` and
+        for the same reason) is this app's `_WIRE_IDS`, and a test pins it
+        against what `createGlyphObject` actually returns a `LineSegments` for
+        across every id — so a future wire glyph cannot join the app without
+        joining the set and silently start being culled.
+      - Counted and reported as `culledCount` / an `N zero-scale` note on the
+        scene line, separately from `drawn`, which is the precedent a cloud's
+        points already set: a terrain authored this way would otherwise read as
+        almost empty. The `\` draw limit is untouched on both sides — its counter
+        increments BEFORE the check, so the cut stays a stable prefix of the FILE
+        rather than of whatever happens to draw.
+      - DIVERGENCE, pre-existing and now measured: with the minimum-size clamp ON
+        the desktop lifts an own-scale-0 node to the floor
+        (`S_child = max(own * base_scale, floor)`) and stops culling it. This app
+        cannot — a frame carries the RAW scale because that is what places its
+        children, and the glyph under it carries a RATIO (`drawScaleCorrection`),
+        and no finite ratio lifts zero. So a zero-scale glyph has rendered flat
+        here whatever the clamp says since 6v; the cull only inherits that, since
+        those rows drew nothing before it and draw nothing after it. Fixing it
+        would mean taking the glyph out from under the scaled frame, which is a
+        scene-graph refactor rather than a line. The parity test pins the
+        divergence as an exact id list rather than hiding it.
+      - Parity: `tools/dump_zero_scale_cull.py` runs the REAL
+        `viewport._draws_nothing` against the REAL `Scene.node_draw_data` radius
+        — the same two calls the draw and pick loops make — over
+        `zero_scale_gv_node.csv`, a fixture built for the RULES rather than for a
+        picture (the plain case, all three exemptions, one zeroed axis and a
+        merely tiny scale, a Mesh id nothing supplies, a Rod, the Surface and
+        Plot vertex cases, a dead ancestor two levels deep with a Point and a
+        textured node under it, a zero-scale grid solid and wire plus a live
+        child of one, a hidden row, and the Flat Ring pair). Dumped twice, clamp
+        off and on. `zeroScale.parity.test.ts` diffs the built graph against it
+        row for row, in both Show Hidden states. Verified to FAIL three ways — no
+        exemptions (6 tests), no ancestor collapse (5), and collapse read off the
+        node so a grid kills its children (5).
+      - Driven in Chrome on the REAL watershed scene (69,676 rows, 69,375 of them
+        at scale 0), 17 measured checks over two passes:
+        **209,188 -> 70,438 Object3Ds** (exactly two per culled row, the glyph
+        and its pick proxy), **69,691 -> 316 draw calls** (221x fewer),
+        1,026,332 -> 193,832 triangles, and **5.0 fps / 201.9 ms of CPU a frame
+        -> 45-49 fps / 21 ms** — 9x either way, on the scene the desktop
+        budgeted. The terrain mesh (58,006 quads) and the 273 river polylines are
+        untouched, which is the point. Then the claim the desktop commit makes
+        for itself, measured: the same scene shot from one pose with the cull and
+        with it disabled is **identical over 0 of 525,600 viewport pixels** (the
+        5,504 that differ across the frame are the HUD's own readouts saying 300
+        drawn against 69,675). A second pass drove the animation exemption — a
+        zero-scale row carrying a `scale_rate` keeps its glyph and grows on
+        screen while its twin without one is culled — and was verified to FAIL
+        with the exemption removed, as the whole drive was with the cull disabled
+        (8 of 11 checks red).
+      - NOT a win for every terrain, and worth saying so because it looks like
+        one: Santa Ana Wind's vertices are authored at **0.002, not 0**, so they
+        are not culled here and would not be on the desktop either. Its ~29 ms
+        frame (6mm) is still 11,400 draw calls. The lever for that scene is
+        either re-authoring it at scale 0 — which is what the desktop's docs now
+        tell authors to do — or instancing, which is a project of its own.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -4841,12 +4947,22 @@ something to decide now).
         the desktop's 442k-point save from 244 MB to 40.7 MB.
 
     - ~~**Surface textures**~~ (desktop `e22d51f` + the surface-cache half of
-      `f73d006`, 2026-09-12) — **shipped 2026-09-12, see roadmap 6mm.** The rest
-      of `f73d006` is NOT ported: its zero-scale glyph skip (worth doing — see
-      6mm's measurement), Plot display-list retention (this app's plots were
-      never re-emitted per frame, so there is nothing to retain), and its
-      tag-candidate cache (`pinnedTagNodes`/`taggableNodes` already play that
-      role here).
+      `f73d006`, 2026-09-12) — **shipped 2026-09-12, see roadmap 6mm.**
+    - ~~**The zero-scale glyph skip**~~ (the other half of `f73d006`) —
+      **shipped 2026-09-16, see roadmap 6oo.** What remains of that commit needs
+      NO port: Plot display-list retention (this app's plots were never
+      re-emitted per frame, so there is nothing to retain — `topologyOverlay.ts`
+      is retained by construction and re-reads positions from the frames each
+      frame, which is also why the desktop's latent surface cache-key bug has no
+      counterpart here) and its tag-candidate cache, where `taggableNodes`
+      already does the part that mattered (it filters cloud points out at
+      scene-build time, the 442k case the desktop measured at 97% of a frame).
+      The one piece genuinely missing is the desktop's newer empty-`text` filter:
+      `placeLabels` still sweeps the full node list twice a frame with the
+      `text === ''` test inside the loop. In Python that was several ms; in JS it
+      is a fraction of one, and it would need a TEXT revision to key the cache
+      on, since text edits deliberately do not rebuild the scene. Low value — ask
+      before doing it.
     - **3D force-directed graph layout** (desktop `d0b9beb` + `bf204b5`,
       2026-08-18) — NOT surveyed yet. It landed alongside the font-size commit
       with two collaboration-network examples and a Trust Network scene that

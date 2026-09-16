@@ -269,6 +269,32 @@ export function ringDims(ratio: number, size = 1): [number, number, number] {
 }
 
 /**
+ * The geometries drawn as LINES rather than as a surface — the desktop's
+ * `_WIRE_IDS` (glyphviz_core/geometry_data.py), id for id.
+ *
+ * Three things read it, and none of them should name the ids itself: a wire
+ * glyph is never textured (the desktop's `geo_id not in _WIRE_IDS` guard on the
+ * texture bind), it is drawn unlit, and it is exempt from the zero-scale cull
+ * because a zero-length line can still rasterise a pixel (render/zeroScale.ts).
+ * A test pins this set against the builders below, so a wire glyph cannot join
+ * the app without joining it.
+ */
+export const WIRE_GEOMETRIES: ReadonlySet<number> = new Set<number>([
+  Geometry.CubeWire,
+  Geometry.SphereWire,
+  Geometry.ConeWire,
+  Geometry.TorusWire,
+  Geometry.DodecahedronWire,
+  Geometry.OctahedronWire,
+  Geometry.TetrahedronWire,
+  Geometry.IcosahedronWire,
+  Geometry.PinWire,
+  Geometry.CylinderWire,
+  Geometry.GridWire,
+  Geometry.RingWire,
+])
+
+/**
  * The geometries whose SHAPE — not merely their size — is set by the node's own
  * `ratio`, so they cannot share one cached geometry the way every other glyph
  * does. The desktop's `RATIO_SHAPED_GEOMETRIES`: everything that dispatches or
