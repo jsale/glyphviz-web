@@ -157,34 +157,93 @@ describe('findScenes', () => {
 // order within one session and name no file), so ids come from the sorted file
 // name — the same rule media/ → texture_id already follows.
 describe('mesh files in a scene folder', () => {
-  it('numbers a mesh/ folder 1..N by sorted name', () => {
+  it('numbers a meshes/ folder 1..N by sorted name, case-SENSITIVELY', () => {
+    // Case-sensitive on purpose: the desktop sorts with Python's sorted(), so
+    // uppercase precedes lowercase and 'hull' comes before 'antenna'. This
+    // used to use compareMediaNames and put Antenna first, which handed the
+    // same folder different mesh_ids in the two apps.
     const scenes = findScenes([
       'Ship/Ship_gv_node.csv',
-      'Ship/mesh/hull.stl',
-      'Ship/mesh/Antenna.obj',
-      'Ship/mesh/readme.txt',
+      'Ship/meshes/hull.stl',
+      'Ship/meshes/Antenna.obj',
+      'Ship/meshes/readme.txt',
     ])
     expect([...scenes[0].meshPathById]).toEqual([
-      [1, 'Ship/mesh/Antenna.obj'], // case-insensitive, so A before h
-      [2, 'Ship/mesh/hull.stl'],
+      [1, 'Ship/meshes/Antenna.obj'], // 'A' (0x41) < 'h' (0x68)
+      [2, 'Ship/meshes/hull.stl'],
     ])
   })
 
-  it('also takes models sitting next to the node CSV', () => {
+  it('sorts uppercase before lowercase, as Python does', () => {
+    const scenes = findScenes([
+      'S/S_gv_node.csv',
+      'S/meshes/alpha.obj',
+      'S/meshes/Zulu.obj',
+      'S/meshes/Beta.obj',
+    ])
+    expect([...scenes[0].meshPathById.values()]).toEqual([
+      'S/meshes/Beta.obj',
+      'S/meshes/Zulu.obj',
+      'S/meshes/alpha.obj',
+    ])
+  })
+
+  it('ignores models sitting loose next to the node CSV', () => {
+    // Dropped 2026-09-16: the desktop only ever looks in meshes/, so a scene
+    // relying on a loose .obj opened here and lost its models there.
     const scenes = findScenes(['Ship/Ship_gv_node.csv', 'Ship/hull.obj'])
-    expect(scenes[0].meshPathById.get(1)).toBe('Ship/hull.obj')
+    expect(scenes[0].meshPathById.size).toBe(0)
+  })
+
+  it('ignores mesh/ and models/, which the desktop does not read', () => {
+    const scenes = findScenes([
+      'Ship/Ship_gv_node.csv',
+      'Ship/mesh/a.obj',
+      'Ship/models/b.obj',
+    ])
+    expect(scenes[0].meshPathById.size).toBe(0)
+  })
+
+  it('counts a format only the desktop can read, so the ids still line up', () => {
+    // mesh_id is a POSITION, so what matters is which files are counted, not
+    // which this app can parse. The desktop's mesh_loader takes .glb/.gltf
+    // through trimesh; skipping them here would hand hull.obj id 1 where the
+    // desktop calls it 2, and every node in the scene would wear its
+    // neighbour's shape. Reading it is a separate question, answered when the
+    // scene loads (the id is reserved and the reason reported).
+    const scenes = findScenes([
+      'Ship/Ship_gv_node.csv',
+      'Ship/meshes/bridge.glb',
+      'Ship/meshes/hull.obj',
+      'Ship/meshes/mast.gltf',
+    ])
+    expect([...scenes[0].meshPathById]).toEqual([
+      [1, 'Ship/meshes/bridge.glb'],
+      [2, 'Ship/meshes/hull.obj'],
+      [3, 'Ship/meshes/mast.gltf'],
+    ])
+  })
+
+  it('still ignores a file neither app calls a model', () => {
+    const scenes = findScenes([
+      'Ship/Ship_gv_node.csv',
+      'Ship/meshes/hull.obj',
+      'Ship/meshes/notes.md',
+      'Ship/meshes/hull.mtl',
+    ])
+    expect([...scenes[0].meshPathById]).toEqual([[1, 'Ship/meshes/hull.obj']])
   })
 
   it('leaves a sub-scene’s models to the sub-scene', () => {
     const scenes = findScenes([
       'Parent/Parent_gv_node.csv',
       'Parent/Child/Child_gv_node.csv',
-      'Parent/Child/mesh/part.obj',
+      'Parent/Child/meshes/part.obj',
     ])
     const parent = scenes.find((s) => s.nodePath === 'Parent/Parent_gv_node.csv')!
     const child = scenes.find((s) => s.nodePath === 'Parent/Child/Child_gv_node.csv')!
     expect(parent.meshPathById.size).toBe(0)
-    expect(child.meshPathById.get(1)).toBe('Parent/Child/mesh/part.obj')
+    expect(child.meshPathById.get(1)).toBe('Parent/Child/meshes/part.obj')
   })
 
   it('is empty for a scene that ships none', () => {

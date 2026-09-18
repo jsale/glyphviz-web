@@ -16,6 +16,10 @@
 //   - `trimesh.load(process=True)` MERGES duplicate vertices. An STL has no
 //     shared vertices at all, so this is what turns 3N loose corners into a
 //     connected surface.
+//   - `validate=True` then drops DEGENERATE triangles — ones with no area to
+//     speak of. Not a nicety: a third of the lab's oak canopy is degenerate
+//     (21,360 faces in the file, 14,952 with any area), and the desktop draws
+//     the smaller number.
 //   - `Trimesh.vertex_normals` is then the ANGLE-WEIGHTED mean of the adjacent
 //     face normals over those merged vertices — i.e. smooth shading. A desktop
 //     STL glyph is smooth-shaded, not faceted, and an STL's own facet normals
@@ -40,6 +44,22 @@ export const MESH_EXTENSIONS = ['.obj', '.stl', '.ply'] as const
  */
 export const DESKTOP_ONLY_MESH_EXTENSIONS = ['.glb', '.gltf'] as const
 
+/**
+ * Everything a scene's `meshes/` folder COUNTS — the desktop's
+ * `mesh_loader.SUPPORTED_EXTENSIONS`, which is the union of the two sets above.
+ *
+ * Wider than what this app can parse, deliberately, and the difference matters
+ * because `mesh_id` is a file's POSITION in that folder. A `.glb` sitting among
+ * the models takes an id on the desktop, so it has to take one here too — skip
+ * it and every model sorting after it shifts down by one, and the scene opens
+ * wearing the wrong shapes. The web still cannot READ it: it is loaded like any
+ * other unreadable file, which reserves the id and reports the reason.
+ */
+export const SCENE_MESH_EXTENSIONS = [
+  ...MESH_EXTENSIONS,
+  ...DESKTOP_ONLY_MESH_EXTENSIONS,
+] as const
+
 export interface MeshData {
   /** File stem, like the desktop's `MeshData.name` (`Path(path).stem`). */
   name: string
@@ -61,6 +81,15 @@ export interface MeshData {
    * left in poisons the bounding box, so the whole model would vanish.
    */
   droppedTriangles: number
+  /**
+   * Triangles thrown away for having no area — trimesh's `nondegenerate_faces`,
+   * which `load_mesh_file` asks for with `validate=True`.
+   *
+   * Counted separately from droppedTriangles because they mean different things
+   * to whoever is importing: a NaN facet is a broken file, a zero-area one is
+   * ordinary generator output. Both are invisible; only the first is a warning.
+   */
+  degenerateTriangles: number
 }
 
 export function extensionOf(name: string): string {
@@ -80,6 +109,11 @@ export function isMeshFileName(name: string): boolean {
 
 export function isDesktopOnlyMeshFileName(name: string): boolean {
   return (DESKTOP_ONLY_MESH_EXTENSIONS as readonly string[]).includes(extensionOf(name))
+}
+
+/** Whether a `meshes/` entry occupies a mesh_id — see SCENE_MESH_EXTENSIONS. */
+export function isSceneMeshFileName(name: string): boolean {
+  return (SCENE_MESH_EXTENSIONS as readonly string[]).includes(extensionOf(name))
 }
 
 // --- Raw triangle soup -------------------------------------------------------
@@ -116,13 +150,7 @@ export function parseMeshFile(name: string, bytes: ArrayBuffer): MeshData {
     // turned a refusal into a format. A PLY with no faces is a point cloud, and
     // falls through to the "no usable triangle mesh" message below — which is
     // the honest answer for something asked to be a mesh glyph.
-    const ply = parsePlyFile(new Uint8Array(bytes))
-    raw = {
-      positions: Array.from(ply.positions),
-      uvs: null,
-      normals: null,
-      indices: ply.indices ? Array.from(ply.indices) : [],
-    }
+    raw = plyRawMesh(parsePlyFile(new Uint8Array(bytes)))
   } else if (isDesktopOnlyMeshFileName(name)) {
     throw new Error(
       `${ext} is not supported in the web app yet — desktop GlyphViz reads it through trimesh. ` +
@@ -312,6 +340,9 @@ export function parseObj(text: string): RawMesh {
  */
 const MERGE_DIGITS = 1e8
 
+/** The same tolerance as a distance: trimesh's `tol.merge`. */
+const MERGE_TOLERANCE = 1e-8
+
 /**
  * Drop triangles with a non-finite coordinate, then compact away every vertex
  * no surviving triangle references.
@@ -369,8 +400,9 @@ function finishMesh(name: string, input: RawMesh): MeshData {
         : 'No usable triangle mesh found.',
     )
   }
-  const vertexCount = raw.positions.length / 3
-  const positions = Float32Array.from(raw.positions)
+  // Both are reassigned when the crease pass splits vertices at hard edges.
+  let vertexCount = raw.positions.length / 3
+  let positions = Float32Array.from(raw.positions)
 
   // Merge by position: trimesh's process=True does this on load, and it is
   // what makes an STL (3 loose corners per facet) a connected, smooth surface.
@@ -389,12 +421,49 @@ function finishMesh(name: string, input: RawMesh): MeshData {
     }
   }
 
-  // A file's own normals are used only if they are all usable; one NaN `vn`
-  // would otherwise shade part of the model black.
-  const fileNormals = raw.normals?.every((v) => Number.isFinite(v)) ? raw.normals : null
-  const normals = fileNormals
-    ? Float32Array.from(fileNormals)
-    : smoothNormals(raw.positions, raw.indices, repOf, vertexCount)
+  // Degenerate faces go before anything reads a face normal: a zero-area
+  // triangle has no direction, so every crease test against it fails and its
+  // corners would fall back to plain smoothing. Dropping them is also what the
+  // desktop does, and the difference is not marginal on generated models.
+  const live = nondegenerateFaces(raw.positions, raw.indices, repOf)
+  const faceIndices = live.indices
+  if (faceIndices.length === 0) {
+    throw new Error(
+      `No usable triangle mesh found: all ${live.dropped} triangle(s) have no area.`,
+    )
+  }
+
+  // Crease-angle normals, matching the desktop's mesh_loader._crease_normals.
+  //
+  // A corner averages only the faces within CREASE_ANGLE_DEG of its OWN face,
+  // so a cube keeps square corners while a lofted hull still shades smooth.
+  // Before this, every imported model was uniformly smoothed and a cube shaded
+  // like a beach ball — the desktop had the same bug and fixed it 2026-09-16.
+  //
+  // A file's own `vn` lines are deliberately NOT used, because the desktop
+  // does not use them either: trimesh recomputes `vertex_normals` on load, so
+  // an OBJ's stated normals never reach the desktop screen. Honouring them
+  // here would make the two apps shade the same file differently, which is the
+  // one thing this port exists to prevent.
+  let normals: Float32Array
+  let indicesOut = Uint32Array.from(faceIndices)
+  let uvsOut = raw.uvs ? Float32Array.from(raw.uvs) : null
+
+  const corner = creaseCornerNormals(raw.positions, faceIndices, repOf, vertexCount)
+  if (corner) {
+    // Per-corner normals need vertices split wherever two corners at one
+    // position disagree — that split IS the hard edge. Smooth regions collapse
+    // straight back to the merged count, so a sphere costs nothing here and a
+    // cube grows from 8 vertices to 24.
+    const split = splitByCornerNormal(positions, corner, faceIndices, uvsOut)
+    positions = split.positions
+    normals = split.normals
+    indicesOut = split.indices
+    uvsOut = split.uvs
+    vertexCount = split.vertexCount
+  } else {
+    normals = smoothNormals(raw.positions, faceIndices, repOf, vertexCount)
+  }
 
   // Desktop normalization: centre on the AABB centre, then divide by the
   // farthest vertex so the glyph fits within radius ~1 like every built-in
@@ -437,12 +506,294 @@ function finishMesh(name: string, input: RawMesh): MeshData {
     name,
     positions,
     normals,
-    uvs: raw.uvs ? Float32Array.from(raw.uvs) : null,
-    indices: Uint32Array.from(raw.indices),
-    triangleCount: raw.indices.length / 3,
+    uvs: uvsOut,
+    indices: indicesOut,
+    triangleCount: faceIndices.length / 3,
     vertexCount,
     droppedTriangles: dropped,
+    degenerateTriangles: live.dropped,
   }
+}
+
+/**
+ * Two faces meeting at a sharper angle than this are a CREASE: the edge
+ * between them stays hard instead of being shaded as one smooth surface.
+ *
+ * 40 degrees is `mesh_loader.DEFAULT_CREASE_ANGLE` on the desktop, and the
+ * value has to match or the two apps shade the same file differently.
+ */
+export const CREASE_ANGLE_DEG = 40
+
+/** Normals closer than this are treated as the same normal when splitting. */
+const NORMAL_DIGITS = 1e4
+
+/**
+ * Per-CORNER normals that keep sharp edges sharp — the desktop's
+ * `mesh_loader._crease_normals`, corner for corner.
+ *
+ * Each corner averages only those faces incident to its (merged) vertex whose
+ * normal is within `CREASE_ANGLE_DEG` of the corner's OWN face normal, weighted
+ * by twice-area. Area weighting rather than the angle weighting `smoothNormals`
+ * uses is deliberate: it is what the desktop does, and it keeps a large panel
+ * from being dragged around by the slivers along its edge.
+ *
+ * Returns (T·3·3) — three normals per triangle, in corner order — or null when
+ * the mesh is degenerate enough that smooth per-vertex normals are the safer
+ * answer, which is also the desktop's fallback.
+ */
+export function creaseCornerNormals(
+  positions: readonly number[],
+  indices: readonly number[],
+  repOf: Int32Array,
+  vertexCount: number,
+): Float32Array | null {
+  const faceCount = indices.length / 3
+  if (faceCount === 0) return null
+
+  // Face normals and twice-areas.
+  const fn = new Float64Array(faceCount * 3)
+  const fw = new Float64Array(faceCount)
+  let live = 0
+  for (let f = 0; f < faceCount; f++) {
+    const a = indices[f * 3] * 3
+    const b = indices[f * 3 + 1] * 3
+    const c = indices[f * 3 + 2] * 3
+    const e1x = positions[b] - positions[a]
+    const e1y = positions[b + 1] - positions[a + 1]
+    const e1z = positions[b + 2] - positions[a + 2]
+    const e2x = positions[c] - positions[a]
+    const e2y = positions[c + 1] - positions[a + 1]
+    const e2z = positions[c + 2] - positions[a + 2]
+    const nx = e1y * e2z - e1z * e2y
+    const ny = e1z * e2x - e1x * e2z
+    const nz = e1x * e2y - e1y * e2x
+    const len = Math.hypot(nx, ny, nz)
+    fw[f] = len
+    if (len > 1e-20) {
+      fn[f * 3] = nx / len
+      fn[f * 3 + 1] = ny / len
+      fn[f * 3 + 2] = nz / len
+      live++
+    }
+  }
+  if (live === 0) return null
+
+  // Faces incident to each merged vertex, as a CSR-style table — the same
+  // structure the desktop builds with numpy, so the cost stays linear instead
+  // of rescanning every face per corner.
+  const counts = new Int32Array(vertexCount)
+  for (let f = 0; f < faceCount; f++) {
+    for (let c = 0; c < 3; c++) counts[repOf[indices[f * 3 + c]]]++
+  }
+  const starts = new Int32Array(vertexCount + 1)
+  for (let v = 0; v < vertexCount; v++) starts[v + 1] = starts[v] + counts[v]
+  const cursor = Int32Array.from(starts.subarray(0, vertexCount))
+  const incident = new Int32Array(indices.length)
+  for (let f = 0; f < faceCount; f++) {
+    for (let c = 0; c < 3; c++) incident[cursor[repOf[indices[f * 3 + c]]]++] = f
+  }
+
+  const cosT = Math.cos((CREASE_ANGLE_DEG * Math.PI) / 180)
+  const out = new Float32Array(faceCount * 9)
+  for (let f = 0; f < faceCount; f++) {
+    const ox = fn[f * 3]
+    const oy = fn[f * 3 + 1]
+    const oz = fn[f * 3 + 2]
+    // A DEGENERATE face has no direction of its own, so it has nothing to
+    // compare its neighbours against: every one of them fails the crease test
+    // and the corner would come out (0, 0, 0) — a silently black vertex.
+    // Fall back to the plain average of every live face at that vertex, i.e.
+    // smooth shading, which is the right answer for a sliver anyway.
+    //
+    // finishMesh drops such faces before calling this (nondegenerateFaces,
+    // which is what the desktop's validate=True does), so the guard is for a
+    // caller that has not — this function takes any index list.
+    const degenerate = fw[f] <= 1e-20
+    for (let c = 0; c < 3; c++) {
+      const v = repOf[indices[f * 3 + c]]
+      let ax = 0
+      let ay = 0
+      let az = 0
+      for (let k = starts[v]; k < starts[v + 1]; k++) {
+        const g = incident[k]
+        if (fw[g] <= 1e-20) continue
+        const gx = fn[g * 3]
+        const gy = fn[g * 3 + 1]
+        const gz = fn[g * 3 + 2]
+        if (!degenerate && gx * ox + gy * oy + gz * oz < cosT) continue
+        ax += gx * fw[g]
+        ay += gy * fw[g]
+        az += gz * fw[g]
+      }
+      let len = Math.hypot(ax, ay, az)
+      if (len <= 1e-12) {
+        // The neighbourhood cancelled out (coincident faces wound opposite,
+        // or a zero-area face): keep the corner's own face normal.
+        ax = ox
+        ay = oy
+        az = oz
+        len = Math.hypot(ax, ay, az) || 1
+      }
+      const o = f * 9 + c * 3
+      out[o] = ax / len
+      out[o + 1] = ay / len
+      out[o + 2] = az / len
+    }
+  }
+  return out
+}
+
+/**
+ * Split vertices wherever two corners sharing a position carry different
+ * normals — which is exactly where a hard edge is.
+ *
+ * The desktop needs no equivalent: it emits normals per corner straight into a
+ * display list, so its geometry is effectively un-indexed. WebGL wants one
+ * normal per vertex, so the split is how the same shading is expressed here.
+ * A smooth region collapses back to one vertex per position, so this costs
+ * nothing on organic models and triples only the genuinely faceted ones.
+ */
+export function splitByCornerNormal(
+  positions: Float32Array,
+  corner: Float32Array,
+  indices: readonly number[],
+  uvs: Float32Array | null,
+): {
+  // Explicit <ArrayBuffer> rather than bare Float32Array: TypeScript's typed
+  // arrays are generic over their buffer, and a bare annotation widens to
+  // ArrayBufferLike, which then will not assign back to the ArrayBuffer-backed
+  // locals in buildMesh.
+  positions: Float32Array<ArrayBuffer>
+  normals: Float32Array<ArrayBuffer>
+  uvs: Float32Array<ArrayBuffer> | null
+  indices: Uint32Array<ArrayBuffer>
+  vertexCount: number
+} {
+  const outPos: number[] = []
+  const outNrm: number[] = []
+  const outUv: number[] | null = uvs ? [] : null
+  const outIdx = new Uint32Array(indices.length)
+  const seen = new Map<string, number>()
+
+  for (let i = 0; i < indices.length; i++) {
+    const v = indices[i]
+    const o = i * 3
+    const nx = corner[o]
+    const ny = corner[o + 1]
+    const nz = corner[o + 2]
+    const key = `${v}|${Math.round(nx * NORMAL_DIGITS)},${Math.round(
+      ny * NORMAL_DIGITS,
+    )},${Math.round(nz * NORMAL_DIGITS)}`
+    let at = seen.get(key)
+    if (at === undefined) {
+      at = outPos.length / 3
+      seen.set(key, at)
+      outPos.push(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2])
+      outNrm.push(nx, ny, nz)
+      if (outUv && uvs) outUv.push(uvs[v * 2], uvs[v * 2 + 1])
+    }
+    outIdx[i] = at
+  }
+
+  return {
+    positions: new Float32Array(outPos),
+    normals: new Float32Array(outNrm),
+    uvs: outUv ? new Float32Array(outUv) : null,
+    indices: outIdx,
+    vertexCount: outPos.length / 3,
+  }
+}
+
+/**
+ * Faces with any area, in trimesh's terms — `triangles.nondegenerate`, which
+ * `load_mesh_file` reaches through `validate=True`.
+ *
+ * The test is NOT area: it is the two heights of the triangle's own oriented
+ * bounding box, `2·area / |edge|` for each of the two edges from corner 0, both
+ * of which must exceed the merge tolerance. So a long thin sliver with a real
+ * width survives while three collinear points do not, which is the distinction
+ * "area > 0" cannot make at floating-point scale.
+ *
+ * Positions are read through `repOf`, i.e. at their MERGED representative,
+ * because that is the mesh trimesh runs this on — two corners a nanometre apart
+ * are one corner by then, and the triangle they sit on has genuinely collapsed.
+ *
+ * Run in the file's OWN units, before normalization, again matching the
+ * desktop: the tolerance is absolute, so scaling first would change the answer.
+ */
+export function nondegenerateFaces(
+  positions: readonly number[],
+  indices: readonly number[],
+  repOf: Int32Array,
+): { indices: number[]; dropped: number } {
+  const out: number[] = []
+  let dropped = 0
+  const at = (i: number, a: number) => positions[repOf[indices[i]] * 3 + a]
+  for (let f = 0; f < indices.length; f += 3) {
+    const ax = at(f + 1, 0) - at(f, 0)
+    const ay = at(f + 1, 1) - at(f, 1)
+    const az = at(f + 1, 2) - at(f, 2)
+    const bx = at(f + 2, 0) - at(f, 0)
+    const by = at(f + 2, 1) - at(f, 1)
+    const bz = at(f + 2, 2) - at(f, 2)
+    const cross = Math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx)
+    const lenA = Math.hypot(ax, ay, az)
+    const lenB = Math.hypot(bx, by, bz)
+    const heightA = lenA > MERGE_TOLERANCE ? cross / lenA : 0
+    const heightB = lenB > MERGE_TOLERANCE ? cross / lenB : 0
+    if (heightA > MERGE_TOLERANCE && heightB > MERGE_TOLERANCE) {
+      out.push(indices[f], indices[f + 1], indices[f + 2])
+    } else {
+      dropped++
+    }
+  }
+  return { indices: out, dropped }
+}
+
+/**
+ * A parsed PLY as a RawMesh, texture coordinates included.
+ *
+ * PLY never settled on where UVs live, so a file carries them either on its
+ * vertices or, more often, per FACE CORNER — and trimesh reads both, which is
+ * what the desktop draws. The per-corner form has to be unpicked here: two
+ * corners at one position may name different coordinates, which is what a UV
+ * seam IS, and a seam is only expressible as two vertices. So each distinct
+ * (vertex, u, v) triple becomes its own vertex, exactly as parseObj already
+ * does for a distinct `v/vt` pair, and for the same reason.
+ *
+ * Splitting here costs the shading nothing: finishMesh's crease pass groups
+ * corners by POSITION, so a seam does not become a crease.
+ */
+function plyRawMesh(ply: ReturnType<typeof parsePlyFile>): RawMesh {
+  const indices = ply.indices ? Array.from(ply.indices) : []
+  if (!ply.cornerUvs || indices.length === 0) {
+    return {
+      positions: Array.from(ply.positions),
+      uvs: ply.uvs ? Array.from(ply.uvs) : null,
+      normals: null,
+      indices,
+    }
+  }
+
+  const positions: number[] = []
+  const uvs: number[] = []
+  const out: number[] = []
+  const seen = new Map<string, number>()
+  for (let i = 0; i < indices.length; i++) {
+    const v = indices[i]
+    const u = ply.cornerUvs[i * 2]
+    const w = ply.cornerUvs[i * 2 + 1]
+    const key = `${v}|${u}|${w}`
+    let at = seen.get(key)
+    if (at === undefined) {
+      at = positions.length / 3
+      seen.set(key, at)
+      positions.push(ply.positions[v * 3], ply.positions[v * 3 + 1], ply.positions[v * 3 + 2])
+      uvs.push(u, w)
+    }
+    out.push(at)
+  }
+  return { positions, uvs, normals: null, indices: out }
 }
 
 /**

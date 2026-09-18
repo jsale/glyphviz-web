@@ -395,6 +395,34 @@ export class Inspector {
    * there is no list to offer, so the row degrades to that same plain id
    * field — an id can be authored before the media it names exists.
    */
+  /**
+   * The texture row, plus the one thing a texture can silently fail at.
+   *
+   * An imported mesh whose file carries no texture coordinates is left
+   * UNTEXTURED however its node sets texture_id, because every vertex would
+   * otherwise sample one texel and smear it over the whole model. That is the
+   * desktop's rule too (`mesh_loader` / `GeoRenderer.draw`), and on both sides
+   * the symptom is a control that appears to do nothing. The desktop answers it
+   * in its manual — "if a mesh you expected to texture renders flat, re-export
+   * it with UVs" — but this app has the parsed file in hand, so it can answer
+   * it beside the control instead of in a document nobody has open.
+   */
+  private textureRows(primary: GvNode): HTMLElement[] {
+    const rows: HTMLElement[] = [this.textureRow(primary)]
+    const asset = primary.geometry === Geometry.Mesh ? this.meshes?.get(primary.meshId) : undefined
+    if (asset && !asset.hasUv) {
+      rows.push(
+        el('div', {
+          className: 'ins-note',
+          textContent:
+            `${asset.name} carries no texture coordinates, so texture_id will not show on ` +
+            'it. Re-export the model with UVs.',
+        }),
+      )
+    }
+    return rows
+  }
+
   private textureRow(primary: GvNode): HTMLDivElement {
     const setId = (v: number) => this.commit((n) => (n.textureId = v))
     if (!this.media || this.media.entries.length === 0) {
@@ -918,7 +946,7 @@ export class Inspector {
           width: '54px',
         }),
       ),
-      this.textureRow(primary),
+      ...this.textureRows(primary),
       // Directly under the texture row, the desktop's own placement — both are
       // ids pointing into a companion file rather than glyph properties.
       ...this.channelInRows(nodes),

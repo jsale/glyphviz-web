@@ -58,6 +58,19 @@ export interface PlyData {
   colors: Uint8Array | null
   /** (T·3) triangle indices, when the file carries faces. */
   indices: Uint32Array | null
+  /**
+   * (V·2) per-VERTEX texture coordinates, when the file carries them as vertex
+   * properties. See UV_NAME_SETS.
+   */
+  uvs: Float32Array | null
+  /**
+   * (T·3·2) per-CORNER texture coordinates, when the file carries them on the
+   * FACE element instead — PLY's other, equally common convention.
+   *
+   * Never set at the same time as `uvs`: a file is read one way or the other,
+   * face coordinates winning, which is trimesh's own precedence.
+   */
+  cornerUvs: Float32Array | null
   vertexCount: number
 }
 
@@ -74,6 +87,29 @@ const COLOR_NAME_SETS = [
   ['diffuse_red', 'diffuse_green', 'diffuse_blue'],
   ['r', 'g', 'b'],
 ]
+
+/**
+ * Texture-coordinate property names, in the order a vertex element is searched.
+ *
+ * PLY never standardised these, which is why there are three spellings and why
+ * the order matters: the list and its precedence are trimesh's own
+ * `texcoord_names`, so a PLY the desktop textures is a PLY this textures.
+ */
+const UV_NAME_SETS = [
+  ['texture_u', 'texture_v'],
+  ['u', 'v'],
+  ['s', 't'],
+]
+
+/**
+ * The face-element list property holding per-corner UVs.
+ *
+ * This is the convention MeshLab and most photogrammetry tools write, and it
+ * is checked BEFORE the vertex properties above, again matching trimesh. Two
+ * corners at one position may then carry different coordinates — that is a UV
+ * seam, and gv/meshFile.ts is where those get split back apart.
+ */
+const FACE_UV_PROPERTY = 'texcoord'
 
 /**
  * Split the header off the front of the file.
@@ -129,17 +165,26 @@ function parseHeader(lines: string[]): { format: string; elements: PlyElement[] 
   return { format, elements }
 }
 
-/** Which of a vertex element's properties hold position and colour. */
-function vertexLayout(element: PlyElement): { xyz: number[]; rgb: number[] | null } {
+/** Which of a vertex element's properties hold position, colour and UVs. */
+interface VertexLayout {
+  xyz: number[]
+  rgb: number[] | null
+  uv: number[] | null
+}
+
+function vertexLayout(element: PlyElement): VertexLayout {
   const index = (name: string): number =>
     element.properties.findIndex((p) => p.name.toLowerCase() === name)
   const xyz = ['x', 'y', 'z'].map(index)
   if (xyz.some((i) => i < 0)) throw new PlyError('PLY vertex element has no x/y/z properties.')
-  for (const names of COLOR_NAME_SETS) {
-    const rgb = names.map(index)
-    if (rgb.every((i) => i >= 0)) return { xyz, rgb }
+  const pick = (sets: string[][]): number[] | null => {
+    for (const names of sets) {
+      const found = names.map(index)
+      if (found.every((i) => i >= 0)) return found
+    }
+    return null
   }
-  return { xyz, rgb: null }
+  return { xyz, rgb: pick(COLOR_NAME_SETS), uv: pick(UV_NAME_SETS) }
 }
 
 /**
@@ -193,9 +238,70 @@ function sizeOf(type: string): number {
   return size
 }
 
-/** A polygon's vertex indices as a triangle fan — trimesh's own triangulation. */
-function fan(poly: number[], out: number[]): void {
-  for (let i = 2; i < poly.length; i++) out.push(poly[0], poly[i - 1], poly[i])
+/**
+ * What one pass writes into: the arrays both encodings fill.
+ *
+ * A record rather than eight positional parameters, which is what the two
+ * parsers' signatures had grown to before UVs were added to them.
+ */
+interface PlySink {
+  positions: Float64Array
+  colors: Uint8Array | null
+  uvs: Float32Array | null
+  faces: number[]
+  /** (corner·2), parallel to `faces`, when the face element carries texcoord. */
+  cornerUvs: number[] | null
+}
+
+/**
+ * A polygon's vertex indices as a triangle fan — trimesh's own triangulation.
+ *
+ * `tex` is that polygon's per-corner UVs when the file gave any, and is fanned
+ * the SAME way so corner k of a triangle keeps the coordinates of the corner it
+ * came from. Fanning the indices and leaving the UVs behind would put a quad's
+ * texture on backwards without failing anything.
+ */
+function fan(poly: number[], tex: number[] | null, sink: PlySink): void {
+  for (let i = 2; i < poly.length; i++) {
+    sink.faces.push(poly[0], poly[i - 1], poly[i])
+    if (sink.cornerUvs) {
+      const at = (k: number) => {
+        const u = tex && k * 2 + 1 < tex.length ? tex[k * 2] : 0
+        const v = tex && k * 2 + 1 < tex.length ? tex[k * 2 + 1] : 0
+        sink.cornerUvs!.push(u, v)
+      }
+      at(0)
+      at(i - 1)
+      at(i)
+    }
+  }
+}
+
+/**
+ * Pull one face row's lists apart: the vertex indices, and the per-corner UVs
+ * if the element declares them.
+ *
+ * The first list that is NOT the texcoord one is the polygon — PLY's own rule,
+ * and why this walks the declared properties instead of assuming the row opens
+ * with its index count.
+ */
+function faceLists(
+  element: PlyElement,
+  nextList: () => number[],
+  skipScalar: () => void,
+): { poly: number[]; tex: number[] | null } {
+  let poly: number[] = []
+  let tex: number[] | null = null
+  for (const property of element.properties) {
+    if (property.countType === null) {
+      skipScalar()
+      continue
+    }
+    const list = nextList()
+    if (property.name.toLowerCase() === FACE_UV_PROPERTY) tex = list
+    else if (poly.length === 0) poly = list
+  }
+  return { poly, tex }
 }
 
 /**
@@ -213,30 +319,33 @@ export function parsePlyFile(bytes: Uint8Array): PlyData {
   }
   const layout = vertexLayout(vertexElement)
 
-  const positions = new Float64Array(vertexElement.count * 3)
-  const colors = layout.rgb ? new Uint8Array(vertexElement.count * 3) : null
-  const faces: number[] = []
+  const faceElement = elements.find((e) => e.name.toLowerCase() === 'face')
+  // Face coordinates win over vertex ones, trimesh's own precedence — a file
+  // carrying both is saying the per-corner set is the authoritative one.
+  const faceUv =
+    faceElement?.properties.some((q) => q.name.toLowerCase() === FACE_UV_PROPERTY) ?? false
+
+  const sink: PlySink = {
+    positions: new Float64Array(vertexElement.count * 3),
+    colors: layout.rgb ? new Uint8Array(vertexElement.count * 3) : null,
+    uvs: layout.uv && !faceUv ? new Float32Array(vertexElement.count * 2) : null,
+    faces: [],
+    cornerUvs: faceUv ? [] : null,
+  }
 
   if (format === 'ascii') {
-    parseAscii(bytes, bodyAt, elements, vertexElement, layout, positions, colors, faces)
+    parseAscii(bytes, bodyAt, elements, vertexElement, layout, sink)
   } else {
-    parseBinary(
-      bytes,
-      bodyAt,
-      format === 'binary_little_endian',
-      elements,
-      vertexElement,
-      layout,
-      positions,
-      colors,
-      faces,
-    )
+    parseBinary(bytes, bodyAt, format === 'binary_little_endian', elements, vertexElement, layout, sink)
   }
 
   return {
-    positions,
-    colors,
-    indices: faces.length > 0 ? Uint32Array.from(faces) : null,
+    positions: sink.positions,
+    colors: sink.colors,
+    indices: sink.faces.length > 0 ? Uint32Array.from(sink.faces) : null,
+    uvs: sink.uvs,
+    cornerUvs:
+      sink.cornerUvs && sink.cornerUvs.length > 0 ? Float32Array.from(sink.cornerUvs) : null,
     vertexCount: vertexElement.count,
   }
 }
@@ -246,10 +355,8 @@ function parseAscii(
   bodyAt: number,
   elements: PlyElement[],
   vertexElement: PlyElement,
-  layout: { xyz: number[]; rgb: number[] | null },
-  positions: Float64Array,
-  colors: Uint8Array | null,
-  faces: number[],
+  layout: VertexLayout,
+  sink: PlySink,
 ): void {
   const text = new TextDecoder('latin1').decode(bytes.subarray(bodyAt))
   const rows = text.split(/\r?\n/)
@@ -270,17 +377,32 @@ function parseAscii(
     for (let i = 0; i < element.count; i++) {
       const values = nextRow()
       if (isVertex) {
-        for (let a = 0; a < 3; a++) positions[i * 3 + a] = values[layout.xyz[a]]
-        if (colors && layout.rgb) {
+        for (let a = 0; a < 3; a++) sink.positions[i * 3 + a] = values[layout.xyz[a]]
+        if (sink.colors && layout.rgb) {
           for (let a = 0; a < 3; a++) {
-            const p = element.properties[layout.rgb[a]]
-            colors[i * 3 + a] = colorByte(values[layout.rgb[a]], p.type)
+            const q = element.properties[layout.rgb[a]]
+            sink.colors[i * 3 + a] = colorByte(values[layout.rgb[a]], q.type)
           }
         }
+        if (sink.uvs && layout.uv) {
+          for (let a = 0; a < 2; a++) sink.uvs[i * 2 + a] = values[layout.uv[a]]
+        }
       } else if (isFace && values.length >= 4) {
-        // The first list property of a face element is its vertex index list;
-        // its leading value is the count, so the polygon is what follows.
-        fan(values.slice(1, 1 + values[0]), faces)
+        // Each list on the row is a leading count followed by that many values.
+        let cursor = 0
+        const { poly, tex } = faceLists(
+          element,
+          () => {
+            const n = values[cursor++]
+            const list = values.slice(cursor, cursor + n)
+            cursor += n
+            return list
+          },
+          () => {
+            cursor++
+          },
+        )
+        if (poly.length >= 3) fan(poly, tex, sink)
       }
     }
   }
@@ -292,10 +414,8 @@ function parseBinary(
   little: boolean,
   elements: PlyElement[],
   vertexElement: PlyElement,
-  layout: { xyz: number[]; rgb: number[] | null },
-  positions: Float64Array,
-  colors: Uint8Array | null,
-  faces: number[],
+  layout: VertexLayout,
+  sink: PlySink,
 ): void {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   let at = bodyAt
@@ -321,14 +441,20 @@ function parseBinary(
         if (at + stride > bytes.length) throw new PlyError('PLY file ends mid-element.')
         if (isVertex) {
           for (let a = 0; a < 3; a++) {
-            const p = element.properties[layout.xyz[a]]
-            positions[i * 3 + a] = readScalar(view, at + offsets[layout.xyz[a]], p.type, little)
+            const q = element.properties[layout.xyz[a]]
+            sink.positions[i * 3 + a] = readScalar(view, at + offsets[layout.xyz[a]], q.type, little)
           }
-          if (colors && layout.rgb) {
+          if (sink.colors && layout.rgb) {
             for (let a = 0; a < 3; a++) {
-              const p = element.properties[layout.rgb[a]]
-              const raw = readScalar(view, at + offsets[layout.rgb[a]], p.type, little)
-              colors[i * 3 + a] = colorByte(raw, p.type)
+              const q = element.properties[layout.rgb[a]]
+              const raw = readScalar(view, at + offsets[layout.rgb[a]], q.type, little)
+              sink.colors[i * 3 + a] = colorByte(raw, q.type)
+            }
+          }
+          if (sink.uvs && layout.uv) {
+            for (let a = 0; a < 2; a++) {
+              const q = element.properties[layout.uv[a]]
+              sink.uvs[i * 2 + a] = readScalar(view, at + offsets[layout.uv[a]], q.type, little)
             }
           }
         }
@@ -337,22 +463,27 @@ function parseBinary(
       }
 
       // A row carrying a list property has to be walked property by property.
-      const poly: number[] = []
-      for (const p of element.properties) {
-        if (p.countType === null) {
-          at += sizeOf(p.type)
-          continue
-        }
-        const n = readScalar(view, at, p.countType, little)
-        at += sizeOf(p.countType)
-        const width = sizeOf(p.type)
-        const wanted = isFace && poly.length === 0
-        for (let k = 0; k < n; k++) {
-          if (wanted) poly.push(readScalar(view, at, p.type, little))
-          at += width
-        }
-      }
-      if (isFace && poly.length >= 3) fan(poly, faces)
+      let column = 0
+      const { poly, tex } = faceLists(
+        element,
+        () => {
+          const q = element.properties[column++]
+          const countType = q.countType as string
+          const n = readScalar(view, at, countType, little)
+          at += sizeOf(countType)
+          const width = sizeOf(q.type)
+          const list: number[] = []
+          for (let k = 0; k < n; k++) {
+            if (isFace) list.push(readScalar(view, at, q.type, little))
+            at += width
+          }
+          return list
+        },
+        () => {
+          at += sizeOf(element.properties[column++].type)
+        },
+      )
+      if (isFace && poly.length >= 3) fan(poly, tex, sink)
     }
   }
 }

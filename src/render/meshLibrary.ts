@@ -8,10 +8,21 @@
 // look the same again, which is why the library OUTLIVES a scene load here, as
 // it does there.
 //
-// The one addition: a scene folder may ship its own mesh files, and those
-// replace the library wholesale (ids by sorted file name, exactly like `media/`
-// → texture_id). See src/gv/bundle.ts — that is an invented convention, since
-// the desktop has no per-scene mesh folder yet.
+// On top of that: a scene folder may ship its own mesh files in `meshes/`,
+// taking ids 1..N by sorted file name, exactly like `media/` → texture_id. That
+// convention began here, because a desktop mesh_id used to name a file only
+// through this session's import order; the desktop adopted the same rule on
+// 2026-09-16 (`Viewport.load_mesh_folder`), so it is now shared. See
+// src/gv/bundle.ts for the sort, which is case-SENSITIVE to match Python's.
+//
+// One divergence in what a scene folder does to the library: here it REPLACES
+// it, where the desktop overwrites ids 1..N and leaves anything above N alone.
+// The desktop's version can leave the previous scene's model still registered
+// at, say, mesh_id 4, so a node of the NEW scene naming 4 silently wears a
+// shape from the old one; clearing shows the sphere fallback instead, which is
+// at least visibly "no such mesh". A scene that ships no models still leaves
+// the library alone on both sides, so the desktop's real requirement — import a
+// model, then open a CSV that references it — is unaffected.
 
 import * as THREE from 'three'
 import type { MeshData } from '../gv/meshFile'
@@ -27,6 +38,8 @@ export interface MeshAsset {
   triangles: number
   /** Facets dropped for NaN/∞ coordinates (see MeshData.droppedTriangles). */
   dropped: number
+  /** Facets dropped for having no area (see MeshData.degenerateTriangles). */
+  degenerate: number
   /** Whether the file carried texture coordinates — see meshGeometry(). */
   hasUv: boolean
 }
@@ -91,6 +104,7 @@ export class MeshLibrary {
       geometry: meshGeometry(data),
       triangles: data.triangleCount,
       dropped: data.droppedTriangles,
+      degenerate: data.degenerateTriangles,
       hasUv: data.uvs !== null,
     }
     this.assets.set(assigned, asset)

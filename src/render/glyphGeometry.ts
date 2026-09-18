@@ -346,12 +346,18 @@ function styleKey(style: GlyphStyle, kind: string, extra: string | number = ''):
 /**
  * An imported mesh with no texture coordinates takes no map.
  *
- * The desktop never textures a mesh at all — `mesh_loader` keeps only
- * vertices/faces/normals and `register_mesh` emits no glTexCoord, so a
- * textured mesh node draws one flat texel there. Honouring the UVs a file
- * DOES carry is strictly better and is what the texture row already promises;
- * a file with none would otherwise smear a single texel over the whole model,
- * which reads as the colour being wrong.
+ * Both apps' rule, and for the same reason: a file with no UVs would give every
+ * vertex the same coordinate and smear one texel over the whole model, which
+ * reads as the colour being wrong rather than as a missing texture. The desktop
+ * expresses it as `draw()` binding only when `_mesh_uv[mesh_id]`; here it is
+ * the map being dropped from the material, so the geometry can stay shared.
+ *
+ * This was a web-only behaviour until 2026-09-17: the desktop used to keep no
+ * texture coordinates at all (`mesh_loader` read vertices/faces/normals and
+ * `register_mesh` emitted no glTexCoord), so a textured mesh node drew one flat
+ * texel there. It now carries them, which is what makes a UV-mapped model look
+ * the same in both apps. src/ui/inspector.ts says so beside the texture row
+ * when the selected model has none.
  */
 function meshStyle(style: GlyphStyle): GlyphStyle {
   return style.mesh?.hasAttribute('uv') ? style : { ...style, map: undefined }

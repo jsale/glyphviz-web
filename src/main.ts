@@ -1927,7 +1927,9 @@ renderer.domElement.addEventListener(
     return {
       names: (currentMedia?.index.entries ?? []).map((e) => [e.textureId, e.name]),
       decoded: [...currentTextures.byId.keys()],
-      meshes: meshLibrary.entries().map((a) => [a.id, a.source]),
+      // hasUv is the one fact about an imported model that decides whether
+      // its texture_id can show at all, and it appears nowhere in the DOM.
+      meshes: meshLibrary.entries().map((a) => [a.id, a.source, a.hasUv]),
       sceneOptions: [...sceneSelect.options].map((o) => o.textContent),
     }
   },
@@ -3768,11 +3770,10 @@ async function readAudioCompanion(
 /**
  * Load the models a scene folder ships with, if it ships any.
  *
- * The web-only half of the mesh story: `mesh_id` names a file only through
- * import order on the desktop, so a scene saved there cannot say which model a
- * node meant. A scene folder that carries its own .obj/.stl files gets ids by
- * sorted name (bundle.ts findMeshFiles), which is reproducible — so such a
- * scene reopens looking the same.
+ * `mesh_id` is the file's 1-based position in the scene's `meshes/` folder,
+ * sorted by name (bundle.ts findMeshFiles) — the same positional rule
+ * `media/` → texture_id follows, and what makes a mesh scene reopen and ship.
+ * Both apps do this; the web had it first, the desktop adopted it 2026-09-16.
  *
  * A scene WITHOUT models leaves the library alone, matching the desktop, where
  * imported meshes live on the viewport and outlive every scene load: import a
@@ -6094,12 +6095,19 @@ async function importMeshFiles(files: Array<{ file: File; source: string }>) {
   const dropped = imported.reduce((sum, a) => sum + a.dropped, 0)
   const droppedNote =
     dropped > 0 ? ` ${dropped.toLocaleString()} triangle(s) with NaN coordinates were skipped.` : ''
+  // Zero-area triangles are ordinary generator output, not a broken file — a
+  // third of the desktop lab's oak canopy is degenerate — so this is worded as
+  // a fact about the model rather than as a warning about it. Both apps drop
+  // them; only this one says how many.
+  const degenerate = imported.reduce((sum, a) => sum + a.degenerate, 0)
+  const degenerateNote =
+    degenerate > 0 ? ` ${degenerate.toLocaleString()} triangle(s) had no area.` : ''
   status(
     (target
       ? `Assigned mesh ${names} to node ${target.id}. ${triangles.toLocaleString()} triangle(s).` +
         (created.length > 0 ? ` ${created.length} further model(s) added as new objects.` : '')
       : `Imported mesh ${names} as ${created.length} new object(s), ` +
-        `${triangles.toLocaleString()} triangle(s).`) + droppedNote,
+        `${triangles.toLocaleString()} triangle(s).`) + droppedNote + degenerateNote,
   )
   if (failures.length > 0) showMessages(failures, [])
 }

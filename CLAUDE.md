@@ -5011,6 +5011,146 @@ something to decide now).
       controls that do nothing without saying so, and treat that as the likely
       shape of any "dead button" report from here.
 
+## Imported meshes: the whole of load_mesh_file (2026-09-16 + 2026-09-18)
+
+Bringing GEO_MESH to parity with the desktop's own mesh work (`630f5ec`,
+"Imported meshes: textures, sharp edges, and a meshes/ folder", whose message
+says in as many words that "the web-side changes are not in this commit"). Done
+in two passes: shading and the folder on 2026-09-16, then on 2026-09-18 the
+three things that pass left — the degenerate-face filter, PLY texture
+coordinates, and the id a format this app cannot read still has to occupy —
+plus the parity harness the mesh loader had never had.
+
+The through-line is that `load_mesh_file` is mostly **trimesh's defaults**, not
+GlyphViz's code, and those defaults are the behaviour to port (they are what the
+desktop actually draws). Every one of the divergences found this session was a
+trimesh pass the web had not reproduced.
+
+- **Crease-angle normals** (`creaseCornerNormals` + `splitByCornerNormal` in
+  `src/gv/meshFile.ts`). A corner averages only the incident faces within
+  `CREASE_ANGLE_DEG` (40, matching `mesh_loader.DEFAULT_CREASE_ANGLE`) of its
+  own face, area-weighted. Before this, both apps smoothed every welded vertex
+  and **a cube shaded like a beach ball**; an STL of a machined part looked
+  melted. WebGL wants one normal per vertex, so corners that disagree are split
+  into separate vertices — that split IS the hard edge. A smooth surface
+  collapses straight back to its merged count, so organic models cost nothing;
+  a cube goes 8 → 24.
+  - A file's own `vn` lines are **deliberately ignored**, because the desktop
+    ignores them too (trimesh recomputes `vertex_normals` on load, so an OBJ's
+    stated normals never reach the desktop screen). Honouring them here would
+    make the two apps disagree, which is the one thing this port prevents.
+  - **Creases are decided on POSITION, not vertex index.** The two sides of a
+    texture seam are separate vertices by construction; treating them as
+    separate geometry shades a hard stripe down a perfectly smooth tube. The
+    desktop had exactly that bug and was fixed to match.
+- **Degenerate faces are dropped** (`nondegenerateFaces`, 2026-09-18) — trimesh's
+  `nondegenerate_faces`, which `load_mesh_file` asks for with `validate=True`.
+  Not a nicety, and not rare: **tower_plant is 156 faces in the file and 148
+  with any area, the lab's oak canopy 21,360 and 14,952, and the Tree scene's
+  six models 17.8% zero-area overall.** The web drew all of them.
+  - The test is NOT area. It is the two heights of the triangle's own oriented
+    bounding box — `2·area / |edge|` for each edge from corner 0 — both of which
+    must exceed `tol.merge` (1e-8). So a long thin sliver with a real width
+    survives while three collinear points do not, which is the distinction
+    "area > 0" cannot make at floating-point scale.
+  - Run on the MERGED positions, in the file's OWN units, before normalization,
+    because that is the mesh trimesh runs it on and the tolerance is absolute.
+  - Counted and reported SEPARATELY from NaN facets, because they mean
+    different things to whoever is importing: a NaN facet is a broken file, a
+    zero-area one is ordinary generator output. Folding them together would
+    report "6,408 triangles with NaN coordinates" for a tree that has none.
+  - It also retires the old note that the crease pass had to cope with
+    degenerate faces "because the desktop removes them and this app does not".
+    The guard stays — `creaseCornerNormals` is exported and takes any index
+    list — but nothing in the app reaches it now.
+- **`unique_faces` and `fix_normals` deliberately NOT ported**, the other two
+  passes `validate=True` adds. Measured across seven lab models including the
+  21,360-face oak canopy: **0 duplicate faces and 0 windings flipped**, every
+  time. Porting `fix_normals` means a connected-component winding propagation,
+  which is real work to get right and, on this evidence, work that changes
+  nothing. If a model ever does arrive with inconsistent winding, this is where
+  the difference would show.
+- **PLY texture coordinates** (2026-09-18) — the desktop gets them free from
+  trimesh, so a textured PLY drew flat here. Both of PLY's conventions are read,
+  with trimesh's own property names and its own precedence: a face-element
+  `texcoord` list wins, else vertex properties in the order `texture_u/v`,
+  `u/v`, `s/t`. The per-corner form is unpicked into vertices in
+  `plyRawMesh` — two corners at one position naming different coordinates IS a
+  seam, and a seam is only expressible as two vertices, exactly as `parseObj`
+  already splits a distinct `v/vt` pair. Costs the shading nothing, since the
+  crease pass groups by position.
+- **`meshes/` only** (`src/gv/bundle.ts`). `mesh/`, `models/` and loose mesh
+  files beside the node CSV are no longer read: the desktop looks in `meshes/`
+  and nowhere else, so a scene built the old way opened here and silently lost
+  its models there.
+  - **What COUNTS as a model there is the DESKTOP's supported set**
+    (`SCENE_MESH_EXTENSIONS`, 2026-09-18), not this app's readable one, because
+    `mesh_id` is a file's POSITION in the folder. A `.glb` among the models
+    takes an id on the desktop; skipping it here handed every later model the
+    id of its neighbour and the scene opened wearing the wrong shapes. The web
+    still cannot read one — it is loaded like any other unreadable file, which
+    reserves the id and reports the reason, which is also the desktop's own
+    "skipped but still consumes its id" rule.
+  - Divergence: a scene folder REPLACES the library here, where the desktop
+    overwrites ids 1..N and leaves anything above N alone. Its version can
+    leave the PREVIOUS scene's model registered at, say, mesh_id 4, so a node
+    of the new scene naming 4 silently wears a shape from the old one;
+    clearing draws the sphere fallback, which is at least visibly "no such
+    mesh". A scene shipping no models still leaves the library alone on both
+    sides, so the desktop's real requirement — import a model, then open a CSV
+    that references it — is unaffected.
+- **Case-SENSITIVE sort**, by file name, matching Python's `sorted()`. This is
+  the one place that deliberately differs from `media/` → `texture_id`, which
+  still uses `compareMediaNames`; that rule is older and changing it would
+  renumber textures in scenes that already ship. The desktop was changed the
+  same day to sort mesh names as plain strings rather than `Path` objects,
+  because pathlib compares case-INSENSITIVELY on Windows and case-sensitively
+  elsewhere — the same folder was handing out different ids per OS.
+
+**Texture management.** A mesh with no texture coordinates is left untextured
+however its node sets `texture_id`, on both sides and for the same reason —
+every vertex would sample one texel and smear it over the model, which reads as
+the colour being wrong rather than as a missing texture. The symptom is a
+control that appears to do nothing, and the desktop answers it in its manual
+("re-export with UVs"). This app has the parsed file in hand, so the Properties
+panel says it beside the texture row when the selected model has none
+(`Inspector.textureRows`). `glyphGeometry.meshStyle` is the enforcement, and
+its comment no longer claims the desktop never textures a mesh — as of
+2026-09-17 it does.
+
+**Parity harness** (2026-09-18) — `tools/dump_mesh_corners.py` runs the REAL
+`load_mesh_file` over four vendored lab models and records, per face CORNER,
+the three quantities that can go wrong independently: position (normalization),
+uv (the texture) and normal (the crease pass). Corner-wise because that is the
+one representation both apps share — the desktop emits per corner into a display
+list, so its geometry is effectively un-indexed, while a BufferGeometry needs
+one normal per vertex and splits instead. `src/gv/meshFile.parity.test.ts` diffs
+them; `src/gv/fixtures/mesh/` holds the models and the dump.
+
+The four are chosen for the rules, not for pictures: **tower_core** (hard-surface
+box work with UV-textured facades), **tower_plant** (the degenerate-face case),
+**whale_body** (a smooth lofted hull WITH UV seams — the case that proves a seam
+is not a crease, which is the bug the desktop fixed) and **car** (smooth and
+faceted together). Verified to FAIL three ways: keeping degenerate faces (8 of
+17 tests), a crease angle of 180° (5), and creases keyed on vertex index rather
+than position (2 — and the 2 are whale_body's, which is why it is in the set).
+
+**Measured.** Over eight lab models and 87,000 corners, every corner agrees
+with the desktop: **positions to 6e-7, texture coordinates to 5e-10, normals to
+0.007° mean and 0.025° max** — float32 noise, and better than the 0.05°/0.21°
+the desktop commit reported before the degenerate filter lined the two up.
+Before the position-merge fix the seam corners differed by up to 14°.
+
+**Driven in Chrome**, 21 measured checks over the desktop's own Building lab
+scene and two folders built for the edges: the five models taking ids 1..5 by
+sorted name and all carrying UVs, the five `media/` images decoding, mesh glyphs
+drawing with a map and their untextured twins without one; a `.glb` dropped into
+`meshes/` taking id 1 and pushing the rest to 2..6, reported by name; a UV-less
+cube raising the panel note, inside its panel and gone again when the scene is;
+and the Tree scene loading its six models. Console clean. The picture is what
+confirms the shading: the textured tower reads window-by-window as texels with
+crisp setback edges, beside its one-flat-colour twin.
+
 ## Collaboration notes
 
 - Address the developer as **Jeff**, not "the user."

@@ -10,9 +10,9 @@
 // which also expands a dropped .zip into that same flat list (src/io/zip.ts) so
 // an archive resolves identically to the folder it was made from.
 
-import { buildMediaIndex, compareMediaNames } from './media'
+import { buildMediaIndex } from './media'
 import type { MediaIndex } from './media'
-import { isMeshFileName } from './meshFile'
+import { isSceneMeshFileName } from './meshFile'
 import { deriveTagFilename } from './tagCsv'
 
 export interface SceneCandidate {
@@ -106,20 +106,39 @@ function looksLikeTagCsv(name: string): boolean {
   return isCsv(name) && stemOf(name).toLowerCase().endsWith('tag')
 }
 
-/** Sub-folders a scene's imported models may live in, besides the folder itself. */
-const MESH_DIRS = ['mesh', 'meshes', 'models']
+/**
+ * The sub-folder a scene's imported models live in.
+ *
+ * Exactly one name, and exactly this name: the desktop looks for `meshes/`
+ * beside the node CSV and nothing else. This app used to also accept `mesh/`
+ * and `models/`, plus loose mesh files sitting next to the CSV — a scene built
+ * that way opened here and silently lost its models on the desktop, so the
+ * wider set has been dropped in favour of one rule both apps share.
+ */
+const MESH_DIR = 'meshes'
 
 /**
- * Imported models shipped with a scene: any .obj/.stl next to the node CSV or
- * in a `mesh/`, `meshes/` or `models/` sub-folder, given mesh_ids 1..N in
- * sorted-name order.
+ * Imported models shipped with a scene: the model files in the scene's
+ * `meshes/` sub-folder, given mesh_ids 1..N in sorted-name order.
  *
- * This convention is the WEB APP'S OWN. The desktop hands out mesh_ids in
- * import order within a session and persists nothing but the id, so a scene
- * saved there with mesh_id 2 has no way to say which file that was. Sorting by
- * name is what makes a scene folder reopen the same way twice — the rule
- * `media/` → texture_id already follows, down to the case-insensitive
- * comparison (see compareMediaNames).
+ * This convention began here, because the desktop used to hand out mesh_ids in
+ * import order within a session and persist nothing but the id — so a scene
+ * saved there with mesh_id 2 had no way to say which file that was. The
+ * desktop adopted the same rule on 2026-09-16
+ * (`Viewport.load_mesh_folder`), and this is now shared behaviour rather than
+ * a local invention.
+ *
+ * Sorting is CASE-SENSITIVE, by file name, deliberately: it has to match
+ * Python's `sorted()` on the desktop so a folder yields the same ids in both
+ * apps and on every OS. Note this differs from `media/` → texture_id, which
+ * still uses the case-insensitive `compareMediaNames`; that rule is older and
+ * changing it would renumber textures in scenes that already ship.
+ *
+ * What COUNTS as a model here is the desktop's supported set, not this app's
+ * readable one (isSceneMeshFileName) — a `.glb` among the files takes an id
+ * there, so it has to take one here, or every model after it wears the shape
+ * of its neighbour. Reading it is a separate question, answered per file when
+ * the scene loads.
  */
 export function findMeshFiles(paths: readonly string[], dir: string): Map<number, string> {
   const prefix = dir === '' ? '' : dir + '/'
@@ -129,18 +148,16 @@ export function findMeshFiles(paths: readonly string[], dir: string): Map<number
     if (!lower.startsWith(prefix.toLowerCase())) continue
     const rest = path.slice(prefix.length)
     const slash = rest.indexOf('/')
-    if (slash !== -1) {
-      // One level down, and only into a mesh folder — a sub-SCENE's models
-      // belong to that scene, not to this one.
-      const sub = rest.slice(0, slash).toLowerCase()
-      const leaf = rest.slice(slash + 1)
-      if (!MESH_DIRS.includes(sub) || leaf.includes('/')) continue
-      if (isMeshFileName(leaf)) found.push({ name: leaf, path })
-    } else if (isMeshFileName(rest)) {
-      found.push({ name: rest, path })
-    }
+    // Exactly one level down, into `meshes/` — a loose .obj beside the CSV is
+    // not a scene asset, and a sub-SCENE's models belong to that scene.
+    if (slash === -1) continue
+    const sub = rest.slice(0, slash).toLowerCase()
+    const leaf = rest.slice(slash + 1)
+    if (sub !== MESH_DIR || leaf.includes('/')) continue
+    if (isSceneMeshFileName(leaf)) found.push({ name: leaf, path })
   }
-  found.sort((a, b) => compareMediaNames(a.name, b.name) || compareMediaNames(a.path, b.path))
+  // Plain code-unit comparison, matching Python's sorted() on the desktop.
+  found.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
   return new Map(found.map((f, i) => [i + 1, f.path]))
 }
 
