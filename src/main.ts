@@ -195,6 +195,7 @@ import {
   SCOPE_ALL,
   SCOPE_COMBO,
   TAU_ANTZ,
+  TAU_DEFAULT,
   TAU_MAX,
   TAU_OFF,
 } from './render/cameraSmoothing'
@@ -843,12 +844,12 @@ hud.innerHTML = `
     </div>
     <div class="hud-create-row" id="hud-cam-smooth-row" title="Camera glide (ANTz-style inertia). 0 = Off: the view tracks the mouse exactly.&#10;Higher = the camera eases toward where you drag, which looks smoother in demos and buffers hand tremor.&#10;Unlike ANTz, aim and position ease together, so what you are orbiting never swings out of frame.&#10;A viewer setting: it never reaches the CSV.">
       <span>Smoothing</span>
-      <input id="hud-cam-smooth" type="range" min="0" max="60" step="1" value="0">
-      <span id="hud-cam-smooth-value">Off</span>
+      <input id="hud-cam-smooth" type="range" min="0" max="60" step="1" value="20">
+      <span id="hud-cam-smooth-value">0.20 s</span>
     </div>
     <div class="hud-create-row" id="hud-cam-smooth-presets">
       <span></span>
-      <button id="hud-cam-smooth-off" title="No smoothing — the default.">Off</button>
+      <button id="hud-cam-smooth-off" title="No smoothing — the view tracks the mouse exactly.">Off</button>
       <button id="hud-cam-smooth-antz" title="ANTz's own feel (0.33 s), without its swing-out-of-frame artefact.">ANTz</button>
     </div>
     <div class="hud-create-row" id="hud-cam-smooth-scope-row" title="Which gestures glide. Left+Right drag only matches ANTz, where smoothing engaged on that combined orbit+zoom gesture.&#10;All camera navigation also covers single-button orbit, pan and wheel zoom — the setting to use for tremor buffering.&#10;Camera Mode (free flight) is never smoothed: it is already rate-based, so it has no jitter to filter.">
@@ -1806,7 +1807,7 @@ function setCameraSmoothingTau(tau: number) {
 // Slider units are hundredths of a second of time constant, the desktop's own
 // scale, so a value set here reads straight across to the other app.
 camSmoothSlider.max = String(Math.round(TAU_MAX * 100))
-camSmoothSlider.value = String(Math.round(TAU_OFF * 100))
+camSmoothSlider.value = String(Math.round(TAU_DEFAULT * 100))
 for (const [value, label] of [
   [SCOPE_COMBO, 'Left+Right drag only'],
   [SCOPE_ALL, 'All camera navigation'],
@@ -1816,8 +1817,14 @@ for (const [value, label] of [
   opt.textContent = label
   camSmoothScopeSelect.append(opt)
 }
-camSmoothScopeSelect.value = SCOPE_COMBO
-camSmoothScopeRow.classList.add('disabled')
+camSmoothScopeSelect.value = SCOPE_ALL
+// Boot with the glide already on — TAU_DEFAULT at SCOPE_ALL, which is what the
+// CameraSmoothing instance above already holds, so the controls, the label and
+// the filter agree from the first frame. The goal is snapped because it is born
+// at distance 1 on the origin: with smoothing on, the first animation frame
+// would otherwise chase the camera there before any scene had been framed.
+applyCameraSmoothingSettings()
+snapCameraGoal()
 camSmoothSlider.addEventListener('input', () => applyCameraSmoothingSettings())
 camSmoothScopeSelect.addEventListener('change', () => applyCameraSmoothingSettings())
 camSmoothOffButton.addEventListener('click', () => setCameraSmoothingTau(TAU_OFF))

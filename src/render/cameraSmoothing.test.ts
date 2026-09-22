@@ -32,6 +32,7 @@ import {
   SCOPE_COMBO,
   TAU_ANTZ,
   TAU_MAX,
+  TAU_DEFAULT,
   TAU_OFF,
 } from './cameraSmoothing'
 
@@ -242,23 +243,28 @@ describe('isSettled', () => {
 // --- CameraSmoothing: the goal-state rules ----------------------------------
 
 describe('CameraSmoothing', () => {
-  it('is off by default, at ANTz’s own narrow scope', () => {
+  it('boots with a light glide over every camera gesture', () => {
     const s = new CameraSmoothing()
-    expect(s.tau).toBe(TAU_OFF)
-    expect(s.scope).toBe(SCOPE_COMBO)
+    expect(s.tau).toBe(TAU_DEFAULT)
+    expect(s.scope).toBe(SCOPE_ALL)
+    // Light: enough to take the edge off a mouse, short of ANTz's own weight.
+    expect(TAU_DEFAULT).toBeGreaterThan(TAU_OFF)
+    expect(TAU_DEFAULT).toBeLessThan(TAU_ANTZ)
     expect(TAU_ANTZ).toBeLessThan(TAU_MAX)
   })
 
   it('covers nothing while off, whatever the scope', () => {
     const s = new CameraSmoothing()
+    s.tau = TAU_OFF
     s.scope = SCOPE_ALL
     expect(s.covers(true)).toBe(false)
     expect(s.covers(false)).toBe(false)
   })
 
-  it('at the default scope covers the Left+Right combo only', () => {
+  it('at ANTz’s own narrow scope covers the Left+Right combo only', () => {
     const s = new CameraSmoothing()
     s.tau = TAU_ANTZ
+    s.scope = SCOPE_COMBO
     expect(s.covers(true)).toBe(true)
     expect(s.covers(false)).toBe(false)
     s.scope = SCOPE_ALL
@@ -275,6 +281,7 @@ describe('CameraSmoothing', () => {
 
   it('step does nothing at all while off', () => {
     const s = new CameraSmoothing()
+    s.tau = TAU_OFF
     s.snap(rig())
     expect(s.step(rig({ azimuth: 90 }), 16)).toBeNull()
   })
@@ -344,13 +351,14 @@ describe('CameraSmoothing', () => {
   })
 
   it('adopts unconditionally while off, so the goal is never stale', () => {
-    // This is what keeps every direct camera write working with smoothing off
-    // — the default. With it ON, a programmatic move is a JUMP and must call
-    // snap() itself, or the filter would drag it back (main.ts does, at every
-    // such site: framing, presets, focus, flight, the XR exit). Follow Selected
-    // is the one exception — it moves eye and pivot by the same delta and so
-    // owns the PIVOT alone; see the Follow Selected block below.
+    // This is what keeps every direct camera write working once smoothing is
+    // switched off. With it ON — the boot state — a programmatic move is a JUMP
+    // and must call snap() itself, or the filter would drag it back (main.ts
+    // does, at every such site: framing, presets, focus, flight, the XR exit).
+    // Follow Selected is the one exception — it moves eye and pivot by the same
+    // delta and so owns the PIVOT alone; see the Follow Selected block below.
     const s = new CameraSmoothing()
+    s.tau = TAU_OFF
     s.goal.azimuth = 90
     s.adopt(rig())
     expect(s.goal.azimuth).toBe(10)

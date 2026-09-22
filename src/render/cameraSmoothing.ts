@@ -73,16 +73,26 @@ import type { OrbitRig, Vec3 } from './cameraMode'
 // The setting is a time constant in seconds: the time to close ~63% of the
 // remaining gap. Exposed to the user as a slider from TAU_OFF to TAU_MAX.
 
-export const TAU_OFF = 0.0 // no smoothing: the rendered camera IS the gesture (default)
+export const TAU_OFF = 0.0 // no smoothing: the rendered camera IS the gesture
 export const TAU_ANTZ = 0.33 // ANTz's own feel: its f = 0.05/frame at 60 fps is tau ≈ 0.33 s
 export const TAU_MAX = 0.6 // slider ceiling — beyond this the camera feels disconnected
 
+// This app's boot default, and a deliberate divergence from the desktop, which
+// starts at TAU_OFF and leaves the glide to be discovered. A light 0.2 s takes
+// the edge off a mouse without the camera feeling roped to it (ANTz's own 0.33
+// is noticeably heavier), and it is the setting that buffers hand tremor — the
+// reason the feature exists — for people who would never think to look for it.
+// It ships at SCOPE_ALL for the same reason: a glide that applies only to the
+// Left+Right combo drag reads, to anyone not making that gesture, as nothing.
+export const TAU_DEFAULT = 0.2
+
 // --- Which gestures the filter applies to ------------------------------------
 //
-// ANTz's positional lag engaged only on the Left+Right combo drag, so that is
-// the faithful default. SCOPE_ALL widens it to every orbit-rig gesture
+// ANTz's positional lag engaged only on the Left+Right combo drag, which is
+// what SCOPE_COMBO reproduces. SCOPE_ALL widens it to every orbit-rig gesture
 // (single-button orbit, wheel zoom, pan), which is what a user relying on the
-// tremor-buffering actually needs — they are not only using the combo gesture.
+// tremor-buffering actually needs — they are not only using the combo gesture —
+// and is this app's default (see TAU_DEFAULT above).
 // Camera Mode (free flight) is excluded under both: it is already integrated
 // per tick from a held cursor offset, so it has no per-event jitter to filter.
 
@@ -240,8 +250,8 @@ export function copyRig(rig: OrbitRig): OrbitRig {
  *     `snap(actual)`. Jumps stay jumps; only drags glide.
  */
 export class CameraSmoothing {
-  tau = TAU_OFF
-  scope: SmoothingScope = SCOPE_COMBO
+  tau = TAU_DEFAULT
+  scope: SmoothingScope = SCOPE_ALL
   goal: OrbitRig = { azimuth: 0, elevation: 0, distance: 1, target: [0, 0, 0] }
 
   /** Whether the glide applies to the gesture now being applied.

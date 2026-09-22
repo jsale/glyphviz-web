@@ -3143,9 +3143,9 @@ something to decide now).
         zero and restoring them on resume; and a 400,000-row cloud merging in
         1.4 s as one 399,999-point batch (484 Object3Ds, 101 fps, no duplicate
         ids). Console clean.
-      - Noticed, not changed: the Scene panel's Save row (`#hud-save-row`) draws
-        as unstyled white browser buttons with wrapped labels. It has since
-        `242c243`; it predates this work and sits directly under the new row.
+      - Noticed here, not changed until 6pp: the Scene panel's Save row
+        (`#hud-save-row`) drew as unstyled white browser buttons. It had since
+        `242c243`; it predated this work and sits directly under the new row.
    oo. Zero-scale cull (shipped 2026-09-16, Jeff's request — a port of the
       zero-scale half of desktop `f73d006`, the renderer budget taken on the San
       Diego River Watershed Atlas): **a row whose RENDERED scale is zero on all
@@ -3252,6 +3252,63 @@ something to decide now).
         frame (6mm) is still 11,400 draw calls. The lever for that scene is
         either re-authoring it at scale 0 — which is what the desktop's docs now
         tell authors to do — or instancing, which is a project of its own.
+   pp. HUD legibility pass (shipped 2026-09-22, Jeff's request — three small GUI
+      changes, none of them a desktop port; the first is a deliberate divergence
+      from that app's own default).
+      - CAMERA SMOOTHING SHIPS ON, at **0.2 s over all camera navigation**
+        (`TAU_DEFAULT`, `src/render/cameraSmoothing.ts`), where the desktop boots
+        at TAU_OFF/SCOPE_COMBO and leaves the glide to be discovered. 0.2 takes
+        the edge off a mouse without the camera feeling roped to it — ANTz's own
+        0.33 is noticeably heavier — and SCOPE_ALL is the other half of the same
+        decision: a glide that applies only to the Left+Right combo drag reads,
+        to anyone not making that gesture, as nothing happening. It is also the
+        setting that buffers hand tremor (6y, Dr. Warner's cohort), which nobody
+        who needs it would think to go looking for. The default lives on the
+        CameraSmoothing class, so the constructor, the slider and the scope
+        select state it once between them.
+        - The boot wiring gained `snapCameraGoal()`, and it is load-bearing: the
+          goal is born at distance 1 on the origin, so with smoothing on from
+          frame one the filter would have chased the camera there before any
+          scene had been framed. Measured at 0.000000 of drift over 600 ms.
+        - Four tests had baked in the off-by-default constructor; each now says
+          which state it is exercising.
+        - Driven in Chrome, and the point of the drive is that this default makes
+          every programmatic camera move a common case rather than an opt-in one:
+          a plain single-button orbit (which the old scope never touched) renders
+          -33.6 deg at the release and coasts to -57.5 of the -57.6 the drag
+          aimed at, arm length unchanged; Off still stops dead at 0.000; and
+          scene framing, Shift+C presets and double-click focus all measure
+          0.000000 of residual travel, Camera Mode still flies and stops dead,
+          and Follow Selected still does not veto an orbit (6cc).
+      - THE SCENE PANEL'S TWO SECTION BREAKS (Create, then World) are 3px rather
+        than a 1px hairline, with 10px either side, and take the panel's own hue
+        instead of a fixed slate. That panel is long enough that its three groups
+        have to be findable at a glance.
+      - EACH PANEL CARRIES ITS OWN HUE, cool through warm in the order the five
+        sit on screen: Scene 212 (blue), Selection 168 (teal), Channels 272
+        (violet), Properties 38 (amber), Node Table 348 (rose). Only
+        `--panel-hue` changes — lightness, saturation and alpha are shared, so
+        the five read as one family and none is louder than the rest, and
+        `--panel-tint` (30%) is the single dial for how hard the colour reads
+        across all of them. Most of the cue is in the HEADER, which is what
+        survives a collapse: three of the panels stack in the left column, where
+        a parked bar is all there is to tell them apart. The body tint is
+        deliberately faint — it must never compete with the scene behind it or
+        with a node's own colour, which is the data.
+      - Two things the tint EXPOSED, both older than it and both invisible while
+        headers were transparent:
+        - `#selection-panel button` outranks `.panel-header-main`/`.panel-close`,
+          so that panel's own header bar wore a body button's padding and border
+          — 26px where every other header is 32, with the × drawn as a boxed
+          button. Scoped to `.panel-body`, matching the width rule already beside
+          it; all five bars now measure the same.
+        - The Save row (`#hud-save-row`) drew as white UA system buttons in the
+          middle of a dark panel, which CLAUDE.md had recorded since `242c243`
+          and left alone. It now wears the Open/Merge rows' own look. A <button>
+          needs `font: inherit` and `background: none` said out loud where those
+          rows' <label>s inherit both, and Save Selection… takes the greyed
+          disabled treatment the Create rows use. The labels still wrap to two
+          lines, which is deliberate: each button names the file it writes.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

@@ -48,13 +48,50 @@ canvas {
   gap: 8px;
 }
 
+/* Each panel carries its own hue, so a glance tells you which one you are
+   looking at — the five of them are otherwise the same dark slab, and three of
+   them stack in the left column where only the title says them apart. The
+   tint is deliberately faint: it is an identity, not a decoration, and it must
+   never compete with the scene behind it or with a node's own colour, which is
+   the data. Lightness and saturation are shared, so the five read as one
+   family and none is louder than the rest; only --panel-hue changes.
+
+   The neutral 225 below is the slate this app used before the hues; a panel
+   that forgets to set its own lands there rather than on something arbitrary.
+   --panel-tint is the one dial for how hard the colour reads: everything else
+   here is shared, so raising it lifts all five together and none of them drifts
+   away from the family. */
 .panel {
+  --panel-hue: 225;
+  --panel-tint: 30%;
   border-radius: 8px;
-  background: rgba(10, 12, 20, 0.78);
+  background: hsl(var(--panel-hue) var(--panel-tint) 6% / 0.8);
   color: #d8dce6;
   font: 12px/1.5 system-ui, sans-serif;
   user-select: none;
   flex: 0 0 auto;
+}
+
+/* Scene, Selection, Channels (left column), Properties (right), Node Table
+   (bottom) — cool through warm, in the order they sit on screen. */
+#hud {
+  --panel-hue: 212; /* blue */
+}
+
+#selection-panel {
+  --panel-hue: 168; /* teal */
+}
+
+#channels-panel {
+  --panel-hue: 272; /* violet */
+}
+
+#inspector {
+  --panel-hue: 38; /* amber */
+}
+
+#node-table {
+  --panel-hue: 348; /* rose */
 }
 
 /* Header row: the title button collapses, the × closes. Two buttons, because
@@ -63,6 +100,9 @@ canvas {
   display: flex;
   align-items: stretch;
   border-radius: 8px;
+  /* A shade brighter than the body: the header is all that is left of a
+     collapsed panel, so the colour has to read there too. */
+  background: hsl(var(--panel-hue) var(--panel-tint) 20% / 0.42);
 }
 
 .panel:not(.collapsed) .panel-header {
@@ -109,7 +149,7 @@ canvas {
 }
 
 .panel-caret {
-  color: #7c8598;
+  color: hsl(var(--panel-hue) 45% 62%);
   font-size: 10px;
   width: 10px;
 }
@@ -205,8 +245,31 @@ canvas {
   display: none;
 }
 
+/* The same look as the Open and Merge rows directly above, which are <label>
+   file pickers rather than buttons — these three were left to the UA and drew
+   as white system buttons in the middle of a dark panel. A <button> also needs
+   `font: inherit` and `background: none` said out loud, where a label inherits
+   both. Save Selection… disables with no selection, so it carries the same
+   greyed treatment the Create rows use. */
 #hud-save-row button {
   flex: 1;
+  padding: 3px 4px;
+  border: 1px solid #3a4256;
+  border-radius: 6px;
+  background: none;
+  color: #cfd6e4;
+  font: inherit;
+  cursor: pointer;
+}
+
+#hud-save-row button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#hud-save-row button:disabled {
+  color: #6c7488;
+  border-color: #2f3648;
+  cursor: default;
 }
 
 #hud-scenes {
@@ -271,10 +334,16 @@ canvas {
   padding: 1px 6px;
 }
 
+/* The Scene panel's two section breaks (Create, then World). Deliberately
+   heavier than the 1px hairline elsewhere: this panel is long enough that its
+   three groups have to be findable at a glance, and a hairline at 80% opacity
+   over a scene is barely there. They take the panel's own hue rather than a
+   fixed slate, so the break reads as part of the panel and not as a seam
+   between two of them. */
 #hud-create {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #2a3040;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 3px solid hsl(var(--panel-hue) 24% 32%);
 }
 
 .hud-create-buttons {
@@ -368,9 +437,9 @@ canvas {
 }
 
 #hud-world {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #2a3040;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 3px solid hsl(var(--panel-hue) 24% 32%);
 }
 
 /* Wider label column than the Create rows above: "Render Mode" and "Grid
@@ -673,7 +742,12 @@ canvas {
   margin-bottom: 6px;
 }
 
-#selection-panel button {
+/* Scoped to the BODY, like the width rule below it: a bare
+   `#selection-panel button` outranks .panel-header-main/.panel-close and was
+   giving this panel's own header bar a body button's padding and border —
+   6px shorter than every other header, with the × drawn as a boxed button.
+   Invisible while headers were transparent; the panel tint made it plain. */
+#selection-panel .panel-body button {
   padding: 3px 8px;
   border: 1px solid #3a4256;
   border-radius: 6px;
@@ -683,11 +757,11 @@ canvas {
   cursor: pointer;
 }
 
-#selection-panel button:hover:not(:disabled) {
+#selection-panel .panel-body button:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
 }
 
-#selection-panel button:disabled {
+#selection-panel .panel-body button:disabled {
   color: #6c7488;
   cursor: default;
 }
