@@ -61,6 +61,9 @@ export function pickNodeId(raycaster: THREE.Raycaster, root: THREE.Object3D): nu
       if (o.userData.isGlyph && !o.visible) hiddenGlyph = true
       o = o.parent
     }
+    // A glyph LINK's object carries the nodeId itself, so the walk above stops
+    // on it without looking — and a channel can hide that one too.
+    if (o?.userData.isGlyph && !o.visible) hiddenGlyph = true
     if (hiddenGlyph) continue
     if (o) return o.userData.nodeId as number
   }

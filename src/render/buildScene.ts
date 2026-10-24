@@ -178,8 +178,11 @@ export interface BuildSceneOptions {
   channelHideBound?: ReadonlySet<number>
   /**
    * Nodes a channel or a rate field can move, resize or recolour each frame.
-   * Two things read it, for the same underlying reason — a build-time decision
-   * must not be taken on a value that will not hold still:
+   * Everything that reads it does so for the same underlying reason — a
+   * build-time decision must not be taken on a value that will not hold still.
+   * The LINK overlay and the PLOT polylines batch by width and alpha and bake
+   * colour, so a bound link or plot is drawn on its own and re-read per frame
+   * (linkOverlay.ts LiveLink, topologyOverlay.ts); and two more:
    *
    *   * the POINT CLOUD overlay, because a cloud's points are baked into one
    *     array, so an animated point has to be re-derived per frame rather than
@@ -413,10 +416,15 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
 
   // A link carrying a real glyph geometry draws that glyph stretched between
   // its two ends, so the overlay needs the same textures and meshes an
-  // ordinary node draws with (linkGeometry.ts).
+  // ordinary node draws with (linkGeometry.ts). A link an animation can change
+  // is built whatever its CSV hide says and re-read each frame — the desktop
+  // reads every link's row in its draw pass — which is the same live set the
+  // clouds and the zero-scale cull stand down for.
   const links = buildLinkOverlay(nodes, frames, root, (m) => warnings.add(m), {
     textures: options.textures,
     meshes: options.meshes,
+    showHidden: options.showHidden,
+    live: options.liveNodeIds,
   })
 
   // A link whose edge never drew — either endpoint missing (the desktop's
@@ -440,6 +448,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
   const overlays = buildTopologyOverlay(nodes, frames, root, {
     showHidden: options.showHidden,
     textures: options.textures,
+    live: options.liveNodeIds,
   })
 
   const clouds = buildPointCloudOverlay(nodes, frames, {

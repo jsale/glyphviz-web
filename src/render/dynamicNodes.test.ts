@@ -367,3 +367,60 @@ describe('DynamicNodes shape, hide and placement animation', () => {
     dynamic.dispose()
   })
 })
+
+describe('DynamicNodes World Grid appearance (the desktop reads a grid row per frame)', () => {
+  const parts = (frame: THREE.Object3D) => {
+    const glyph = frame.children.find((c) => c.userData.isGlyph)!
+    const part = (role: string) =>
+      glyph.children.find((c) => c.userData.gridPart === role) as THREE.Mesh | undefined
+    return {
+      surface: part('surface')?.material as THREE.MeshBasicMaterial | undefined,
+      lattice: part('lattice')?.material as THREE.LineBasicMaterial,
+    }
+  }
+
+  it('recolours a solid grid by the per-part rule: surface at alpha, lattice at half', () => {
+    const nodes = scene({ type: 6, geometry: 21, color_r: 0, color_g: 0, color_b: 0 })
+    const { frames } = buildScene(nodes)
+    const dynamic = new DynamicNodes(nodes, frames, { ...NO_SETS, appearance: new Set([1]) }, new Map())
+    nodes[0].color = { r: 255, g: 0, b: 0, a: 102 }
+    dynamic.update()
+    const { surface, lattice } = parts(frames.get(1)!)
+    expect(surface!.color.r).toBe(1)
+    expect(surface!.opacity).toBeCloseTo(0.4, 10)
+    expect(surface!.transparent).toBe(true)
+    expect(lattice.color.r).toBe(1)
+    expect(lattice.opacity).toBeCloseTo(0.2, 10)
+  })
+
+  it('draws a wire grid lattice at the full alpha', () => {
+    const nodes = scene({ type: 6, geometry: 20 })
+    const { frames } = buildScene(nodes)
+    const dynamic = new DynamicNodes(nodes, frames, { ...NO_SETS, appearance: new Set([1]) }, new Map())
+    nodes[0].color = { r: 0, g: 255, b: 0, a: 102 }
+    dynamic.update()
+    const { surface, lattice } = parts(frames.get(1)!)
+    expect(surface).toBeUndefined()
+    expect(lattice.color.g).toBe(1)
+    expect(lattice.opacity).toBeCloseTo(0.4, 10)
+  })
+
+  it('flips a grid between basemaps, leaving the textured surface untinted', () => {
+    const maps = new Map([
+      [1, new THREE.Texture()],
+      [2, new THREE.Texture()],
+    ])
+    const nodes = scene({ type: 6, geometry: 21, color_r: 0, texture_id: 1 })
+    const { frames } = buildScene(nodes, { textures: maps })
+    const dynamic = new DynamicNodes(nodes, frames, { ...NO_SETS, appearance: new Set([1]) }, maps)
+    nodes[0].textureId = 2
+    dynamic.update()
+    const { surface } = parts(frames.get(1)!)
+    expect(surface!.map).toBe(maps.get(2))
+    expect([surface!.color.r, surface!.color.g, surface!.color.b]).toEqual([1, 1, 1])
+    nodes[0].textureId = 0
+    dynamic.update()
+    expect(surface!.map).toBeNull()
+    expect(surface!.color.r).toBe(0) // back to the row's own colour
+  })
+})

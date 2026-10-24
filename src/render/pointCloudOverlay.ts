@@ -36,6 +36,7 @@ import type { GvNode } from '../gv/types'
 import { drawScaleCorrection } from './baseScale'
 import { framePosition } from './framePlacement'
 import { patchPointSprite } from './pointSprite'
+import { setNaturalTransparency } from './renderMode'
 
 /**
  * The desktop's pick pass draws a cloud's points at exactly the size the
@@ -66,7 +67,8 @@ class CloudGroup {
   /** Points whose position must be rewritten from the parent's matrixWorld. */
   private readonly local: Float32Array
   private readonly positions: THREE.BufferAttribute
-  readonly pointSizePx: number
+  /** Pixel size, `ratio × 20` off the parent — re-read per frame when bound. */
+  pointSizePx: number
   /** The frame the whole cloud hangs from — its matrixWorld places every point. */
   private readonly parentFrame: THREE.Object3D
   private readonly matrix = new THREE.Matrix4()
@@ -101,6 +103,11 @@ class CloudGroup {
    */
   private readonly hideBound: boolean
   private readonly showHidden: boolean
+  /**
+   * A channel or rate drives the PARENT row, whose `ratio` is the point size.
+   * The desktop calls `glPointSize(point_size(parent))` every frame.
+   */
+  private readonly parentLive: boolean
 
   constructor(
     parent: GvNode,
@@ -111,9 +118,11 @@ class CloudGroup {
     live: number[],
     hideBound = false,
     showHidden = false,
+    parentLive = false,
   ) {
     this.parentId = parent.id
     this.parent = parent
+    this.parentLive = parentLive
     this.hideBound = hideBound
     this.showHidden = showHidden
     this.parentFrame = parentFrame
@@ -209,6 +218,7 @@ class CloudGroup {
    */
   refreshLive(): boolean {
     let changed = false
+    let alphaChanged = false
     const colors = this.object.geometry.getAttribute('color')
     const a = colors.array as Float32Array
     for (const i of this.live) {
@@ -226,6 +236,7 @@ class CloudGroup {
         a[i * 4] = c.r / 255
         a[i * 4 + 1] = c.g / 255
         a[i * 4 + 2] = c.b / 255
+        if (a[i * 4 + 3] !== c.a / 255) alphaChanged = true
         a[i * 4 + 3] = c.a / 255
         colors.needsUpdate = true
       }
@@ -236,7 +247,25 @@ class CloudGroup {
       this.scales[i * 3 + 1] = s.y
       this.scales[i * 3 + 2] = s.z
     }
+    // Translucency is decided at build from the colours then; a channel fading
+    // a point below full alpha has to be able to change it, or an opaque-built
+    // cloud would go on ignoring alpha (the desktop's GL_BLEND is global, so a
+    // point's color_a always counts there). A scan of the whole array, but only
+    // on a frame whose alpha actually moved.
+    if (alphaChanged) this.syncTranslucency(hasTranslucentPoints(a))
     return changed
+  }
+
+  /** Opaque (alpha-to-coverage, depth-writing) or blended, as built for. */
+  private syncTranslucency(translucent: boolean): void {
+    const material = this.object.material as THREE.PointsMaterial
+    setNaturalTransparency(material, translucent)
+    const coverage = !material.transparent
+    if (material.alphaToCoverage !== coverage) {
+      material.alphaToCoverage = coverage
+      material.needsUpdate = true
+    }
+    material.depthWrite = !translucent
   }
 
   /**
@@ -259,6 +288,13 @@ class CloudGroup {
     // alone would never trip. The positions are written either way, so a cloud
     // appearing mid-playback is already in the right place.
     if (this.hideBound) this.object.visible = this.showHidden || this.parent.hide === 0
+    if (this.parentLive) {
+      const size = pointSize(this.parent)
+      if (size !== this.pointSizePx) {
+        this.pointSizePx = size
+        ;(this.object.material as THREE.PointsMaterial).size = size
+      }
+    }
     const m = this.matrix.copy(this.parentFrame.matrixWorld).elements
     const moved = this.live.length > 0 && this.refreshLive()
     if (!moved && this.written && matrixEquals(m, this.lastMatrix)) return
@@ -685,7 +721,19 @@ export function buildPointCloudOverlay(
     // frame, which is the same call drawMode's stamping and Selection.set make
     // for the same reason. A handful of clouds, each with a short chain.
     parentFrame.updateWorldMatrix(true, false)
-    groups.push(new CloudGroup(parent, parentFrame, kids, ids, local, live, hideBound, showHidden))
+    groups.push(
+      new CloudGroup(
+        parent,
+        parentFrame,
+        kids,
+        ids,
+        local,
+        live,
+        hideBound,
+        showHidden,
+        options.liveNodeIds?.has(parent.id) === true,
+      ),
+    )
   }
 
   const overlay = new PointCloudOverlay(groups)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyAudioMode, loadTextures, referencedTextureIds } from './textureLibrary'
+import { readFileSync } from 'node:fs'
+import { applyAudioMode, loadTextures, referencedTextureIds, tickTextures } from './textureLibrary'
 import type { TextureLibrary, VideoEntry } from './textureLibrary'
 import { buildMediaIndex } from '../gv/media'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
@@ -97,7 +98,7 @@ describe('applyAudioMode', () => {
         },
       } as unknown as HTMLVideoElement,
     }))
-    return { library: { byId: new Map(), videos, warnings: [] }, elements }
+    return { library: { byId: new Map(), videos, gifs: [], warnings: [] }, elements }
   }
 
   it('mutes everything in muted mode', () => {
@@ -124,5 +125,57 @@ describe('applyAudioMode', () => {
     const { library, elements } = fakeLibrary(1, 2)
     applyAudioMode(library, 'selected', () => false)
     expect(elements.map((e) => e.muted)).toEqual([true, true])
+  })
+})
+
+describe('animated GIF textures', () => {
+  const fixture = (name: string) =>
+    new Blob([new Uint8Array(readFileSync(new URL(`../io/fixtures/gif/${name}.gif`, import.meta.url)))])
+
+  /** RGBA of pixel (x, y) in GL order: y counts up from the BOTTOM row. */
+  const texel = (pixels: Uint8Array, width: number, x: number, y: number) =>
+    [...pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 4)]
+
+  it('plays a multi-frame GIF as a texture, on its own delays', async () => {
+    const index = buildMediaIndex(['anim.gif'])
+    const library = await loadTextures(index, new Set([1]), async () => fixture('basic'))
+    expect(library.warnings).toEqual([])
+    expect(library.gifs).toHaveLength(1)
+    const gif = library.gifs[0]
+    expect(library.byId.get(1)).toBe(gif.texture)
+    // The desktop's animated sampling: no mipmap chain to regenerate per frame.
+    expect(gif.texture.generateMipmaps).toBe(false)
+
+    // basic.gif fills the whole frame with palette entry 0, 1, 2 in turn
+    // (red, green, blue), held 100 / 200 / 300 ms.
+    expect(texel(gif.pixels, 8, 0, 0)).toEqual([255, 0, 0, 255])
+    const version = gif.texture.version
+    tickTextures(library, 99)
+    expect(gif.texture.version).toBe(version) // nothing due, nothing uploaded
+    tickTextures(library, 1)
+    expect(gif.texture.version).toBe(version + 1)
+    expect(texel(gif.pixels, 8, 0, 0)).toEqual([0, 255, 0, 255])
+  })
+
+  it('uploads the image bottom row first, as GL expects', async () => {
+    // first_frame_subrect: frame 1 paints a 2×2 blue block in the TOP-left
+    // corner of a 12 × 10 yellow screen.
+    const library = await loadTextures(buildMediaIndex(['a.gif']), new Set([1]), async () =>
+      fixture('first_frame_subrect'),
+    )
+    const gif = library.gifs[0]
+    tickTextures(library, 100)
+    expect(texel(gif.pixels, 12, 0, 9)).toEqual([0, 0, 255, 255]) // top row, stored last
+    expect(texel(gif.pixels, 12, 0, 0)).toEqual([255, 255, 0, 255])
+  })
+
+  it('leaves a single-frame GIF to the ordinary still-image path', async () => {
+    // That path decodes through createImageBitmap, which plain node lacks, so
+    // the attempt is reported as a warning — the point is that it was not
+    // claimed as an animation.
+    const library = await loadTextures(buildMediaIndex(['still.gif']), new Set([1]), async () =>
+      fixture('single_frame'),
+    )
+    expect(library.gifs).toHaveLength(0)
   })
 })

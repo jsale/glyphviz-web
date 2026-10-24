@@ -564,3 +564,48 @@ describe('labels', () => {
     expect(result.clouds.pointPosition(11)!.z).toBeCloseTo(5, 6)
   })
 })
+
+describe('channel-driven cloud appearance', () => {
+  const materialOf = (result: ReturnType<typeof built>) =>
+    result.root.getObjectByName('gv-cloud:1') as THREE.Points
+
+  it('re-reads the point size off a live parent every frame, as glPointSize does', () => {
+    const nodes = cloudScene(3)
+    const result = built(nodes, { liveNodeIds: new Set([1]) })
+    const material = materialOf(result).material as THREE.PointsMaterial
+    expect(material.size).toBeCloseTo(2, 10) // ratio 0.1 · 20
+    nodes[0].ratio = 0.5
+    result.clouds.update()
+    expect(material.size).toBeCloseTo(10, 10)
+    // The picker's tolerance is read off the same number.
+    expect(result.clouds.pointSizeOf(10)).toBeCloseTo(10, 10)
+  })
+
+  it('leaves the size of a cloud no animation reaches alone', () => {
+    const nodes = cloudScene(3)
+    const result = built(nodes)
+    nodes[0].ratio = 0.5
+    result.clouds.update()
+    expect((materialOf(result).material as THREE.PointsMaterial).size).toBeCloseTo(2, 10)
+  })
+
+  it('turns blending on when a live point fades, and back off when it returns', () => {
+    const nodes = cloudScene(3)
+    const result = built(nodes, { liveNodeIds: new Set([11]) })
+    const material = materialOf(result).material as THREE.PointsMaterial
+    expect(material.transparent).toBe(false)
+    expect(material.alphaToCoverage).toBe(true)
+
+    nodes[2].color = { ...nodes[2].color, a: 64 } // id 11
+    result.clouds.update()
+    expect(material.transparent).toBe(true)
+    expect(material.alphaToCoverage).toBe(false)
+    expect(material.depthWrite).toBe(false)
+
+    nodes[2].color = { ...nodes[2].color, a: 255 }
+    result.clouds.update()
+    expect(material.transparent).toBe(false)
+    expect(material.alphaToCoverage).toBe(true)
+    expect(material.depthWrite).toBe(true)
+  })
+})

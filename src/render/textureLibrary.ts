@@ -10,8 +10,14 @@
 //
 // Only ids a node actually references are fetched: a scene folder can hold
 // tens of megabytes of media that nothing in the CSV points at.
+//
+// A multi-frame GIF PLAYS, as it does on the desktop (`_AnimatedGifEntry`):
+// decoded by src/io/gifFile.ts rather than the browser, which would hand over
+// only the first frame, and advanced by `tickTextures` from the animation loop
+// on its own per-frame delays — independent of Channels, exactly as there.
 
 import * as THREE from 'three'
+import { GifPlayer, parseGif } from '../io/gifFile'
 import type { MediaEntry, MediaIndex } from '../gv/media'
 import { NodeType } from '../gv/types'
 import type { GvNode } from '../gv/types'
@@ -27,16 +33,28 @@ export interface VideoEntry {
   url: string
 }
 
+/** A playing multi-frame GIF and the texture its frames are uploaded into. */
+export interface AnimatedGifEntry {
+  textureId: number
+  name: string
+  player: GifPlayer
+  texture: THREE.DataTexture
+  /** The texture's own pixel buffer, BOTTOM row first (see flipRows). */
+  pixels: Uint8Array
+}
+
 export interface TextureLibrary {
-  /** texture_id → texture, for every id that decoded (videos included). */
+  /** texture_id → texture, for every id that decoded (videos and GIFs included). */
   byId: Map<number, THREE.Texture>
   /** Loaded videos, in texture_id order — the audio controls drive these. */
   videos: VideoEntry[]
+  /** Multi-frame GIFs, advanced by tickTextures. */
+  gifs: AnimatedGifEntry[]
   warnings: string[]
 }
 
 export function emptyTextureLibrary(): TextureLibrary {
-  return { byId: new Map(), videos: [], warnings: [] }
+  return { byId: new Map(), videos: [], gifs: [], warnings: [] }
 }
 
 /**
@@ -90,6 +108,64 @@ async function decodeTga(blob: Blob): Promise<THREE.Texture> {
     return configure(texture)
   } finally {
     URL.revokeObjectURL(url)
+  }
+}
+
+/**
+ * Copy a top-row-first image into a bottom-row-first buffer: GL's origin is the
+ * bottom-left, which is why the desktop uploads every frame `mirrored` and why
+ * still images are decoded with imageOrientation 'flipY'. Done by hand rather
+ * than with the texture's flipY, which WebGL does not promise for typed-array
+ * uploads.
+ */
+function flipRows(src: Uint8Array, dst: Uint8Array, width: number, height: number): void {
+  const row = width * 4
+  for (let y = 0; y < height; y++) {
+    dst.set(src.subarray(y * row, (y + 1) * row), (height - 1 - y) * row)
+  }
+}
+
+/**
+ * A GIF with more than one frame, as a texture that plays; null for a single
+ * frame (that takes the ordinary still-image path, mipmaps and all — the
+ * desktop's own `imageCount() > 1` split) or a file the parser cannot read, which
+ * the browser then gets a chance to decode as a still.
+ */
+async function decodeAnimatedGif(blob: Blob, entry: MediaEntry): Promise<AnimatedGifEntry | null> {
+  let player: GifPlayer
+  try {
+    const gif = parseGif(new Uint8Array(await blob.arrayBuffer()))
+    if (gif.frames.length < 2) return null
+    player = new GifPlayer(gif)
+  } catch {
+    return null
+  }
+  const { width, height } = player.compositor.gif
+  const pixels = new Uint8Array(width * height * 4)
+  flipRows(player.rgba, pixels, width, height)
+  const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat)
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.RepeatWrapping
+  texture.colorSpace = THREE.NoColorSpace // raw, as in configure()
+  // The desktop's animated entries skip mipmaps — a frame is re-uploaded every
+  // time it changes, and regenerating the chain each time is not worth it.
+  texture.minFilter = THREE.LinearFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.generateMipmaps = false
+  texture.needsUpdate = true
+  return { textureId: entry.textureId, name: entry.name, player, texture, pixels }
+}
+
+/**
+ * Advance every playing GIF by `dtMs` and upload the frames that changed. Call
+ * once per display frame; a still scene with no GIF costs one empty loop.
+ */
+export function tickTextures(library: TextureLibrary, dtMs: number): void {
+  for (const gif of library.gifs) {
+    if (!gif.player.advance(dtMs)) continue
+    const { width, height } = gif.player.compositor.gif
+    flipRows(gif.player.rgba, gif.pixels, width, height)
+    gif.texture.needsUpdate = true
   }
 }
 
@@ -158,6 +234,7 @@ export async function loadTextures(
 ): Promise<TextureLibrary> {
   const byId = new Map<number, THREE.Texture>()
   const videos: VideoEntry[] = []
+  const gifs: AnimatedGifEntry[] = []
   const warnings: string[] = []
   const missing: number[] = []
 
@@ -182,8 +259,16 @@ export async function loadTextures(
           const [texture, video] = await decodeVideo(blob, entry)
           byId.set(id, texture)
           videos.push(video)
+        } else if (entry.support === 'addon') {
+          byId.set(id, await decodeTga(blob))
         } else {
-          byId.set(id, entry.support === 'addon' ? await decodeTga(blob) : await decodeImage(blob))
+          const gif = /.gif$/i.test(entry.name) ? await decodeAnimatedGif(blob, entry) : null
+          if (gif) {
+            byId.set(id, gif.texture)
+            gifs.push(gif)
+          } else {
+            byId.set(id, await decodeImage(blob))
+          }
         }
       } catch (err: unknown) {
         warnings.push(`texture_id ${id} (${entry.name}): ${String(err)}`)
@@ -191,6 +276,7 @@ export async function loadTextures(
     }),
   )
   videos.sort((a, b) => a.textureId - b.textureId)
+  gifs.sort((a, b) => a.textureId - b.textureId)
 
   if (missing.length > 0) {
     // The desktop is silent here; saying it out loud is the difference between
@@ -200,7 +286,7 @@ export async function loadTextures(
         `media folder only supplies ${index.entries.length} file(s).`,
     )
   }
-  return { byId, videos, warnings }
+  return { byId, videos, gifs, warnings }
 }
 
 /**
@@ -229,9 +315,17 @@ export function mergeTextureLibrary(into: TextureLibrary, from: TextureLibrary):
     into.videos.push(video)
   }
   into.videos.sort((a, b) => a.textureId - b.textureId)
+  for (const gif of from.gifs) {
+    // Its texture was disposed above if the id was already present.
+    if (into.byId.get(gif.textureId) === gif.texture) {
+      into.gifs.push(gif)
+    }
+  }
+  into.gifs.sort((a, b) => a.textureId - b.textureId)
   into.warnings.push(...from.warnings)
   from.byId.clear()
   from.videos.length = 0
+  from.gifs.length = 0
 }
 
 /** Stop a video and give its object URL back to the browser. */
@@ -247,6 +341,7 @@ export function disposeTextures(library: TextureLibrary): void {
   library.byId.clear()
   for (const video of library.videos) releaseVideo(video)
   library.videos.length = 0
+  library.gifs.length = 0 // their textures went with byId
 }
 
 /** How a scene's video soundtracks are mixed. */

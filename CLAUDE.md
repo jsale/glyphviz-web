@@ -917,7 +917,7 @@ something to decide now).
       - Known non-animating edges, both matching a build-time bake no example
         exercises: a hide-bound LINK's edge (link batches are per build) and
         World-Grid colour writes (excluded from appearance sync since 6,
-        for the per-part colour rule).
+        for the per-part colour rule). BOTH FIXED 2026-10-24, see 6rr.
    t. Fetch Basemap (shipped 2026-07-31, Jeff's request — a port of desktop
       `8573571`, the GIS mapping feature): a flat World Grid downloads real
       map imagery (OSM streets / Esri World Imagery satellite / OpenTopoMap
@@ -3350,6 +3350,107 @@ something to decide now).
         Reachable Net every 60 frames from 30), with point totals matching the
         files to the point, during real playback as well as seeks, console
         clean.
+   rr. Dave Warner's parity probe: Channels on links, and animated GIFs
+      (fixed 2026-10-24, the same day as 6qq). Dr. Dave Warner opened 14 probe
+      scenes in this app and in desktop GlyphViz20260919 side by side
+      (`GlyphViz_findings_for_Jeff_Sale_v1.docx`, 2026-10-21) and found two
+      gaps, both of them build-time bakes where the desktop reads per frame.
+      His generators currently refuse both features in web-targeted scenes,
+      and his probe scenes are ready to re-test against this.
+      - CHANNELS ON A LINK ROW. The desktop's link pass and its pick pass read
+        every link's hide, colour, alpha, ratio and geometry on every frame.
+        Here a link batched by (width, alpha) with colour baked into a vertex
+        buffer, and a CSV-hidden link was never built, so `hide`, `color_*`,
+        `color_a` and `ratio` tracks on a type-7 row did nothing. Now a link
+        in `liveNodeIds` (the set the clouds and the zero-scale cull already
+        stand down for) is a `LiveLink` (linkOverlay.ts): built whatever its
+        CSV hide says, drawn on its own object, and re-read every frame —
+        visibility (and the picker skips it while hidden), colour, alpha
+        through `setNaturalTransparency`, line width / tube half-width / glyph
+        thickness, pick width, and a glyph link's texture. A change to what
+        the object is BUILT from (mode, glyph geometry, mesh, a torus/ring's
+        quantized ratio) rebuilds that one link; `update()` returns true then
+        and main.ts re-applies the render mode and refreshes the halos, the
+        swapped-glyph consequences pushAnimationFrame already handles.
+        - Costs a draw call per BOUND link, which is the desktop's own
+          per-link cost; unbound links batch exactly as before
+          (Org_Event_Network: 6,400 links, one batch, measured).
+        - Private material clones for a bound glyph link come from the new
+          `render/glyphAppearance.ts`, which DynamicNodes now uses too, so the
+          clone-and-write rule has one statement. It is its own module
+          because linkOverlay sits under buildScene and dynamicNodes imports
+          buildScene.
+        - Two bugs found on the way. `pickNodeId` stopped its walk at the
+          first ancestor carrying a nodeId — which for a glyph link is the
+          object itself — so its `visible` was never consulted. And a link
+          bound to `geometry`/`ratio` landed in DynamicNodes' shape set, which
+          would have swapped a glyph in at the link's own frame (the A-end);
+          links are excluded there now.
+        - Also fixed: Show Hidden Nodes never drew a CSV-hidden link, where
+          the desktop does. `LinkOverlay` also gained `dispose()`, called from
+          rebuildScene — its batches' GPU buffers were never freed before.
+      - THE OVERLAY AUDIT (what else was read only at build):
+        - PLOT polylines: a plot whose parent or any child is live gets its
+          own line batch and re-reads width (parent ratio), per-vertex colour
+          and mean alpha each frame — the desktop's `_plot_entry` re-emits a
+          bound plot instead of replaying its display list. Membership is
+          still baked; hide flips rebuild it via `overlayDirty` as before.
+        - POINT CLOUDS: a live parent's `ratio` is the point size, which the
+          desktop re-reads (`glPointSize(point_size(parent))`) every frame; and
+          a live point fading below full alpha now switches the batch to
+          blended (alpha-to-coverage off, depthWrite off) and back — an
+          opaque-built cloud otherwise ignored the fade.
+        - WORLD GRID colour, alpha and texture: the "known non-animating edge"
+          recorded at 6s. `applyWorldGridAppearance` (worldGridGeometry.ts)
+          restates the builder's per-part rule (surface untinted when mapped,
+          lattice at half alpha over a solid surface) on the grid's own
+          materials, so a texture_id flip-book of basemaps plays too.
+        - Surfaces needed nothing (6mm already reads colour and the parent's
+          texture/alpha live).
+      - ANIMATED GIF TEXTURES. A browser hands a page only a GIF's first
+        frame, so a multi-frame GIF was frozen where the desktop plays it
+        (`_AnimatedGifEntry`: its own per-frame delays, a 20 ms floor, looping,
+        catching up whole frames, independent of Channels). `src/io/gifFile.ts`
+        is an in-house decoder (container, LZW, compositor, player — no
+        dependency, node-testable); `textureLibrary.ts` turns a multi-frame GIF
+        into a `DataTexture` uploaded bottom row first (by hand — WebGL does
+        not promise flipY for typed arrays) with the desktop's animated
+        sampling (linear, no mipmaps), and `tickTextures` advances every GIF
+        from the animation loop. A single-frame GIF keeps the ordinary
+        browser path, mipmaps and all — the desktop's `imageCount() > 1`
+        split. Anything the decoder cannot parse falls back to that path too.
+        - The rules are QT's, because the desktop never decodes a GIF itself —
+          QImageReader does. `tools/dump_gif_frames.py` writes 16 fixtures
+          with a deliberately literal encoder (Pillow re-optimises frames and
+          would not leave each case's disposal/transparency where the case put
+          it) and records every frame Qt returns; `gifFile.parity.test.ts`
+          diffs every pixel exactly. What it established, none of it guessable:
+          the canvas is OPAQUE for the whole animation unless the first frame
+          has a transparent index (Qt's RGB32 vs ARGB32), so a "transparent"
+          fill on it shows as opaque white; the first frame WRITES its
+          transparent pixels (as their colour at alpha 0) where later frames
+          skip them; a first frame smaller than the screen pads it with its
+          transparent colour, else the background; disposal 2 fills with
+          transparent white when the disposed frame has a transparent index,
+          else the background colour, else pixel 0; a delay under 2 cs reads
+          as 10 cs (so 0 and 1 cs both play at 100 ms); and a frame with no
+          GCE keeps the previous delay AND transparent index. Verified to FAIL
+          six ways, one rule each.
+      - Driven in Chrome on a purpose-built probe folder (a CSV-hidden line
+        link with hide/colour/alpha/ratio tracks, a prism, a link whose
+        geometry steps Line → Cylinder, a plot with a coloured child, a
+        coloured World Grid, a cube wearing a four-frame GIF): 20/20 measured
+        checks, including clicking the link only once its channel shows it and
+        the cube's on-screen pixels cycling colour. The SAME drive against the
+        unfixed build fails 16/20 with exactly Dave's symptoms. Plus
+        Org_Event_Network still one link batch, and a single-frame GIF still a
+        mipmapped ImageBitmap. Console clean.
+      - Not changed, and worth knowing: the fallback pick sphere buildScene
+        gives an endpoint-less link. Desktop `_draw_link_pick_targets` REMOVED
+        its equivalent (it let an invisible link outrank a visible node), so
+        that divergence comment in buildScene is now stale in the other
+        direction — this app draws one where the desktop draws none. Not
+        reported by anyone; ask before changing it.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,
@@ -3467,8 +3568,8 @@ something to decide now).
      dropdown and "Solo Audio to Selection" checkbox. Divergence:
      browsers refuse audible autoplay, so muted is the default and
      picking a mode supplies the gesture. Deferred: the desktop pauses
-     videos no node drew this frame; animated-GIF per-frame delays
-     (no example uses one — `ImageDecoder` is the eventual path).
+     videos no node drew this frame. (Animated GIFs shipped 2026-10-24
+     with an in-house decoder rather than ImageDecoder — see 6rr.)
      - Assigning a texture (shipped 2026-07-25): a `texture` row in the
        Properties panel, where the desktop has a bare `Texture ID`
        spinbox. Because the web app already knows the folder's contents
@@ -3548,9 +3649,9 @@ something to decide now).
        frame's value instead of becoming pandas' NaN (which the desktop
        writes straight into the attribute — a NaN translate deletes the
        glyph permanently, and holding is what the spec's authoring rule
-       asks for). World Grid nodes are excluded from appearance sync:
-       their surface draws untinted and their lattice at half alpha, so
-       one uniform colour write would misdraw both. `?csv=<url>` loads
+       asks for). World Grid nodes are excluded from the UNIFORM appearance
+       write: their surface draws untinted and their lattice at half alpha,
+       so they take their own per-part rule instead (6rr). `?csv=<url>` loads
        guess the conventional companion names (no folder to scan).
        Not done: the desktop's rate-pause snapshot restore (the panel's
        Rate Motion checkbox just freezes in place).

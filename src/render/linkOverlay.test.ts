@@ -4,6 +4,15 @@ import { LineSegments2 } from 'three/addons/lines/LineSegments2.js'
 import type { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { applyFrameTransform, buildScene } from './buildScene'
 import { pickNodeId } from './picking'
+import { DynamicNodes } from './dynamicNodes'
+import {
+  applyChannelFrame,
+  bindChannels,
+  parseGvChMap,
+  parseGvChTracks,
+  resetChannels,
+  setChannelInputId,
+} from '../gv/channels'
 import { parseGvNodeCsv } from '../gv/nodeCsv'
 import { Geometry, NodeType, RotationMode, Topo } from '../gv/types'
 import type { GvNode } from '../gv/types'
@@ -415,5 +424,247 @@ describe('link picking', () => {
       makeLink(6, 3, 4), // 20 units nearer the camera at z = 50
     ])
     expect(pickAtWorld(root, pickCamera(), [0, 0, 20])).toBe(6)
+  })
+})
+
+describe('channel-bound links (desktop reads every link row per frame)', () => {
+  const VIEWPORT = { width: 800, height: 600 }
+  const ends = () => [
+    makeNode({ id: 1, translate: { x: -10, y: 0, z: 0 } }),
+    makeNode({ id: 2, translate: { x: 10, y: 0, z: 0 } }),
+  ]
+
+  /** Bind channel 1 to the link's `attributes`, one track each, and build. */
+  function animated(link: GvNode, attributes: string[], tracks: string) {
+    const nodes = [...ends(), link]
+    setChannelInputId(link, 1)
+    const map = ['channel_id,track_id,attribute', ...attributes.map((a, i) => `1,${i + 1},${a}`)]
+    const anim = bindChannels(parseGvChMap(map.join('\n')), parseGvChTracks(tracks), nodes)
+    const built = buildScene(nodes, {
+      channelHideBound: anim.hideBoundNodeIds,
+      liveNodeIds: anim.boundNodeIds,
+    })
+    built.links.setResolution(VIEWPORT.width, VIEWPORT.height)
+    built.root.updateMatrixWorld(true)
+    const at = (frame: number) => {
+      applyChannelFrame(anim, frame)
+      return built.links.update()
+    }
+    return { anim, built, at, link }
+  }
+
+  function camera(): THREE.PerspectiveCamera {
+    const cam = new THREE.PerspectiveCamera(60, VIEWPORT.width / VIEWPORT.height, 0.1, 1000)
+    cam.position.set(0, 0, 50)
+    cam.lookAt(0, 0, 0)
+    cam.updateMatrixWorld(true)
+    return cam
+  }
+
+  /** Click at world point `p`, `dyPx` pixels below it. */
+  function pickAt(root: THREE.Object3D, p: [number, number, number], dyPx = 0): number | null {
+    const cam = camera()
+    root.updateMatrixWorld(true)
+    const ndc = new THREE.Vector3(...p).project(cam)
+    const raycaster = new THREE.Raycaster()
+    raycaster.setFromCamera(new THREE.Vector2(ndc.x, ndc.y - (dyPx * 2) / VIEWPORT.height), cam)
+    return pickNodeId(raycaster, root)
+  }
+
+  /** The line object a bound link draws on (its own, never a shared batch). */
+  const lineOf = (root: THREE.Object3D) => {
+    const lines = lineBatches(root)
+    expect(lines).toHaveLength(1)
+    return lines[0]
+  }
+
+  it('builds a CSV-hidden link a channel can unhide, and follows hide frame by frame', () => {
+    const { built, at, anim } = animated(
+      makeLink(3, 1, 2, { hide: 1 }),
+      ['hide'],
+      'cyclecount,ch1\n0,1\n1,0\n2,1\n',
+    )
+    expect(built.links.liveCount).toBe(1)
+    // Applied at build: a CSV-hidden link never flashes on screen.
+    expect(lineOf(built.root).visible).toBe(false)
+    expect(pickAt(built.root, [0, 0, 0])).toBeNull()
+
+    at(1)
+    expect(lineOf(built.root).visible).toBe(true)
+    expect(pickAt(built.root, [0, 0, 0])).toBe(3)
+    at(2)
+    expect(lineOf(built.root).visible).toBe(false)
+    expect(pickAt(built.root, [0, 0, 0])).toBeNull()
+
+    at(1)
+    resetChannels(anim) // Stop restores the CSV's hide = 1
+    built.links.update()
+    expect(lineOf(built.root).visible).toBe(false)
+  })
+
+  it('animates a line link colour, alpha and width', () => {
+    const { built, at } = animated(
+      makeLink(3, 1, 2, { color: { r: 255, g: 0, b: 0, a: 255 }, ratio: 0.1 }),
+      ['color_g', 'color_a', 'ratio'],
+      'cyclecount,ch1,ch2,ch3\n0,0,255,0.1\n1,255,51,1.5\n',
+    )
+    const line = lineOf(built.root)
+    const material = line.material as LineMaterial
+    expect(material.linewidth).toBeCloseTo(2, 10)
+    expect(material.transparent).toBe(false)
+
+    at(1)
+    const colors = line.geometry.attributes.instanceColorStart as THREE.InterleavedBufferAttribute
+    const c = colors.data.array as Float32Array
+    expect([...c.slice(0, 6)]).toEqual([1, 1, 0, 1, 1, 0])
+    expect(material.opacity).toBeCloseTo(0.2, 10)
+    // Without the transparency flag three would draw it solid at opacity 0.2.
+    expect(material.transparent).toBe(true)
+    expect(material.linewidth).toBeCloseTo(30, 10) // max(1.5 · 20, 1)
+  })
+
+  it('widens the pick target with an animated ratio', () => {
+    const { built, at } = animated(makeLink(3, 1, 2), ['ratio'], 'cyclecount,ch1\n0,0.1\n1,2\n')
+    expect(pickAt(built.root, [0, 0, 0], 15)).toBeNull() // 5 px target at ratio 0.1
+    at(1)
+    expect(pickAt(built.root, [0, 0, 0], 15)).toBe(3) // 40 px at ratio 2
+  })
+
+  it('animates a prism link tube width and colour', () => {
+    const { built, at } = animated(
+      makeLink(3, 1, 2, { geometry: Geometry.TexturedPrism, ratio: 0.5 }),
+      ['ratio', 'color_b'],
+      'cyclecount,ch1,ch2\n0,0.5,0\n1,2,255\n',
+    )
+    const prism = prismBatches(built.root)[0]
+    // Ring vertex 0 sits at (+r, +r) off an edge running along x.
+    const halfWidth = () => Math.abs(prism.geometry.getAttribute('position').getY(0))
+    expect(halfWidth()).toBeCloseTo(0.5, 10)
+    at(1)
+    expect(halfWidth()).toBeCloseTo(2, 10)
+    expect(prism.geometry.getAttribute('color').getZ(0)).toBe(1)
+  })
+
+  it('recolours a glyph link on private materials, leaving look-alikes alone', () => {
+    const look = { geometry: Geometry.CylinderSolid, color: { r: 0, g: 0, b: 255, a: 255 } }
+    const nodes = [
+      ...ends(),
+      makeNode({ id: 9, translate: { x: 0, y: 30, z: 0 } }),
+      makeLink(3, 1, 2, look),
+      makeLink(4, 1, 9, look), // unbound, same colour → same cached material
+    ]
+    setChannelInputId(nodes[3], 1)
+    const anim = bindChannels(
+      parseGvChMap('channel_id,track_id,attribute\n1,1,color_r\n1,2,color_a\n'),
+      parseGvChTracks('cyclecount,ch1,ch2\n0,0,255\n1,255,128\n'),
+      nodes,
+    )
+    const built = buildScene(nodes, { liveNodeIds: anim.boundNodeIds })
+    applyChannelFrame(anim, 1)
+    built.links.update()
+    const materialOf = (id: number) =>
+      (built.links.glyphObjects.get(id) as THREE.Mesh).material as THREE.MeshLambertMaterial
+    expect(materialOf(3).color.r).toBe(1)
+    expect(materialOf(3).opacity).toBeCloseTo(128 / 255, 10)
+    expect(materialOf(3).transparent).toBe(true)
+    expect(materialOf(4).color.r).toBe(0)
+    expect(materialOf(4).transparent).toBe(false)
+  })
+
+  it('hides a glyph link from the picker as well as the screen', () => {
+    const { built, at } = animated(
+      makeLink(3, 1, 2, { geometry: Geometry.CylinderSolid, ratio: 4 }),
+      ['hide'],
+      'cyclecount,ch1\n0,0\n1,1\n',
+    )
+    // 3.5 units off-axis is outside the centre line's tolerance and on the
+    // glyph's solid body, so this exercises the pick proxy, not LinkPicker.
+    at(0)
+    expect(pickAt(built.root, [0, 3.5, 0])).toBe(3)
+    at(1)
+    expect(built.links.glyphObjects.get(3)!.visible).toBe(false)
+    expect(pickAt(built.root, [0, 3.5, 0])).toBeNull()
+  })
+
+  it('animates a glyph link thickness without rebuilding it', () => {
+    const { built, at } = animated(
+      makeLink(3, 1, 2, { geometry: Geometry.CylinderSolid, ratio: 1 }),
+      ['ratio'],
+      'cyclecount,ch1\n0,1\n1,3\n',
+    )
+    const object = built.links.glyphObjects.get(3)!
+    const thickness = () => axisOf(object.matrixWorld, 0).length()
+    expect(thickness()).toBeCloseTo(1, 10)
+    expect(at(1)).toBe(false) // a cylinder's shape does not depend on ratio
+    expect(built.links.glyphObjects.get(3)).toBe(object)
+    expect(thickness()).toBeCloseTo(3, 10)
+  })
+
+  it('rebuilds just that link when a channel steps its geometry', () => {
+    const { built, at } = animated(
+      makeLink(3, 1, 2),
+      ['geometry'],
+      `cyclecount,ch1\n0,${Geometry.Line}\n1,${Geometry.CylinderSolid}\n2,${Geometry.TexturedPrism}\n`,
+    )
+    expect(lineBatches(built.root)).toHaveLength(1)
+    expect(at(1)).toBe(true)
+    expect(lineBatches(built.root)).toHaveLength(0)
+    expect(glyphLinks(built.root)).toHaveLength(1)
+    // The selection reads this map for the halo, so it has to follow the swap.
+    expect(built.links.glyphObjects.get(3)).toBe(glyphLinks(built.root)[0])
+    expect(at(1)).toBe(false) // same frame again: nothing to rebuild
+    expect(at(2)).toBe(true)
+    expect(glyphLinks(built.root)).toHaveLength(0)
+    expect(built.links.glyphObjects.has(3)).toBe(false)
+    const p = prismBatches(built.root)[0].geometry.getAttribute('position')
+    expect(p.getX(0)).toBeCloseTo(-10, 10)
+    expect(p.getX(4)).toBeCloseTo(10, 10)
+  })
+
+  it('never lets DynamicNodes put a glyph at a geometry-bound link frame', () => {
+    const nodes = [...ends(), makeLink(3, 1, 2)]
+    setChannelInputId(nodes[2], 1)
+    const anim = bindChannels(
+      parseGvChMap('channel_id,track_id,attribute\n1,1,geometry\n'),
+      parseGvChTracks(`cyclecount,ch1\n0,${Geometry.Line}\n1,${Geometry.SphereSolid}\n`),
+      nodes,
+    )
+    const built = buildScene(nodes, { liveNodeIds: anim.boundNodeIds })
+    const dynamic = new DynamicNodes(
+      nodes,
+      built.frames,
+      {
+        transform: anim.transformBoundNodeIds,
+        appearance: anim.appearanceBoundNodeIds,
+        scaled: anim.scaleBoundNodeIds,
+        shape: anim.shapeBoundNodeIds,
+        placement: anim.placementBoundNodeIds,
+        hidden: anim.hideBoundNodeIds,
+      },
+      new Map(),
+    )
+    applyChannelFrame(anim, 1)
+    dynamic.update()
+    expect(built.frames.get(3)!.children.some((c) => c.userData.isGlyph)).toBe(false)
+  })
+
+  it('leaves unbound links batched', () => {
+    const nodes = [...ends(), makeLink(3, 1, 2), makeLink(4, 2, 1)]
+    // An END node is bound, not either link.
+    const built = buildScene(nodes, { liveNodeIds: new Set([1]) })
+    expect(built.links.liveCount).toBe(0)
+    expect(lineBatches(built.root)).toHaveLength(1)
+  })
+
+  it('draws a CSV-hidden link under Show Hidden Nodes, as the desktop does', () => {
+    const nodes = [...ends(), makeLink(3, 1, 2, { hide: 1 })]
+    expect(buildScene(nodes).links.count).toBe(0)
+    expect(buildScene(nodes, { showHidden: true }).links.count).toBe(1)
+  })
+
+  it('detaches everything it drew on dispose', () => {
+    const { built } = animated(makeLink(3, 1, 2), ['color_r'], 'cyclecount,ch1\n0,0\n')
+    built.links.dispose()
+    expect(built.root.getObjectByName('link-overlay')).toBeUndefined()
   })
 })

@@ -445,3 +445,63 @@ describe('overlay lifecycle', () => {
     expect(() => overlays.dispose()).not.toThrow()
   })
 })
+
+describe('channel-driven plots (the desktop re-emits a bound plot every frame)', () => {
+  /** Two identical plots, the first of which an animation can reach. */
+  function twoPlots(live: Set<number>) {
+    const nodes = [
+      ...plotScene([0, 1, 2]),
+      makeNode({ id: 2, topo: Topo.Plot, ratio: 0.15, geometry: Geometry.Point }),
+      ...[0, 1, 2].map((z, i) =>
+        makeNode({ id: 20 + i, parentId: 2, branchLevel: 1, translate: { x: i, y: 5, z } }),
+      ),
+    ]
+    const built = buildScene(nodes, { liveNodeIds: live })
+    built.root.updateMatrixWorld(true)
+    return { nodes, built, byId: new Map(nodes.map((n) => [n.id, n])) }
+  }
+
+  const batchOf = (root: THREE.Object3D, plotId: number) => {
+    const plan = lineBatches(root).find((b) =>
+      // The polyline whose first vertex is that plot's first child.
+      Math.abs(segmentStart(b, 0)[1] - (plotId === 1 ? 0 : 5)) < 1e-9,
+    )
+    return plan!
+  }
+
+  function segmentStart(batch: LineSegments2, i: number): number[] {
+    const start = batch.geometry.attributes.instanceStart as THREE.InterleavedBufferAttribute
+    return [start.getX(i), start.getY(i), start.getZ(i)]
+  }
+
+  it('gives a plot an animation reaches a batch of its own', () => {
+    expect(lineBatches(twoPlots(new Set()).built.root)).toHaveLength(1)
+    // A CHILD being live is enough: its colour is a vertex of the line.
+    expect(lineBatches(twoPlots(new Set([11])).built.root)).toHaveLength(2)
+  })
+
+  it('follows the parent ratio and the children colours and alpha', () => {
+    const { built, byId } = twoPlots(new Set([1]))
+    byId.get(1)!.ratio = 1
+    byId.get(10)!.color = { r: 255, g: 0, b: 0, a: 51 }
+    byId.get(11)!.color = { r: 0, g: 255, b: 0, a: 51 }
+    byId.get(12)!.color = { r: 0, g: 0, b: 255, a: 51 }
+    built.overlays.update()
+
+    const live = batchOf(built.root, 1)
+    const material = live.material as LineMaterial
+    expect(material.linewidth).toBeCloseTo(20, 10)
+    expect(material.opacity).toBeCloseTo(0.2, 10)
+    expect(material.transparent).toBe(true)
+    const colors = live.geometry.attributes.instanceColorStart as THREE.InterleavedBufferAttribute
+    expect([...(colors.data.array as Float32Array).slice(0, 12)]).toEqual([
+      1, 0, 0, 0, 1, 0,
+      0, 1, 0, 0, 0, 1,
+    ])
+
+    // The plot no animation reaches is untouched by any of it.
+    const other = batchOf(built.root, 2).material as LineMaterial
+    expect(other.linewidth).toBeCloseTo(3, 10)
+    expect(other.opacity).toBe(1)
+  })
+})

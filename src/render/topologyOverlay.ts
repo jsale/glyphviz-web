@@ -79,6 +79,17 @@ const NORMAL_EPS = 1e-10
 /** One Plot parent's polyline, placed inside a batched line group. */
 interface PlotPlan {
   nodeId: number
+  /** The Plot parent and its drawn children, read back by a live plot. */
+  parent: GvNode
+  kids: GvNode[]
+  /**
+   * A channel or rate drives the parent or a child, so this plot has a group
+   * to itself and re-reads its width, colours and alpha every frame — the
+   * desktop re-emits such a plot instead of replaying its display list
+   * (`_plot_entry`). Only membership stays baked (a hide flip rebuilds the
+   * overlay; see DynamicUpdateReport.overlayDirty).
+   */
+  live: boolean
   widthPx: number
   /** Child frames in file order; the polyline's vertices. */
   frames: THREE.Object3D[]
@@ -152,9 +163,56 @@ class PlotGroup {
     this.positions.setUsage(THREE.DynamicDrawUsage)
   }
 
+  /**
+   * Re-read a live plot's width, colours and alpha from its rows. A live plan
+   * has its group to itself, so the material IS the plan's: a width or an
+   * alpha written here reaches no other plot.
+   */
+  private refreshLive(plan: PlotPlan): void {
+    const width = Math.max(plan.parent.ratio * 20, 1)
+    if (width !== plan.widthPx) {
+      plan.widthPx = width
+      this.material.linewidth = width
+    }
+    let alphaSum = 0
+    let recolor = false
+    for (let i = 0; i < plan.kids.length; i++) {
+      const c = plan.kids[i].color
+      alphaSum += c.a / 255
+      const color = plan.colors[i]
+      if (color.r !== c.r / 255 || color.g !== c.g / 255 || color.b !== c.b / 255) {
+        color.setRGB(c.r / 255, c.g / 255, c.b / 255)
+        recolor = true
+      }
+    }
+    if (recolor) {
+      const attr = this.geometry.attributes.instanceColorStart as THREE.InterleavedBufferAttribute
+      const arr = attr.data.array as Float32Array
+      for (let i = 0; i + 1 < plan.colors.length; i++) {
+        const o = (plan.segStart + i) * 6
+        const a = plan.colors[i]
+        const b = plan.colors[i + 1]
+        arr[o] = a.r
+        arr[o + 1] = a.g
+        arr[o + 2] = a.b
+        arr[o + 3] = b.r
+        arr[o + 4] = b.g
+        arr[o + 5] = b.b
+      }
+      attr.data.needsUpdate = true
+    }
+    const alpha = alphaSum / plan.kids.length
+    if (alpha !== plan.alpha) {
+      plan.alpha = alpha
+      this.material.opacity = alpha
+      setNaturalTransparency(this.material, alpha < 1)
+    }
+  }
+
   update(a: THREE.Vector3, b: THREE.Vector3): void {
     const arr = this.positions.array as Float32Array
     for (const plan of this.plans) {
+      if (plan.live) this.refreshLive(plan)
       const frames = plan.frames
       a.setFromMatrixPosition(frames[0].matrixWorld)
       for (let i = 0; i + 1 < frames.length; i++) {
@@ -645,6 +703,9 @@ export interface TopologyOverlayOptions {
    *  texture_id drapes across its mesh. Read live, so a texture merged into
    *  this map later is picked up without rebuilding the overlay. */
   textures?: ReadonlyMap<number, THREE.Texture>
+  /** Nodes an animation can change (BuildSceneOptions.liveNodeIds): a plot
+   *  touching one is drawn on its own and re-read per frame. */
+  live?: ReadonlySet<number>
 }
 
 /**
@@ -705,15 +766,23 @@ export function buildTopologyOverlay(
       return new THREE.Color(kid.color.r / 255, kid.color.g / 255, kid.color.b / 255)
     })
     const alpha = alphaSum / kids.length
+    const live =
+      options.live !== undefined &&
+      (options.live.has(node.id) || kids.some((kid) => options.live!.has(kid.id)))
     const key = `${widthPx.toFixed(4)}:${alpha.toFixed(6)}`
-    let group = groupsByKey.get(key)
+    // A live plot never joins a batch: its width and alpha are about to move
+    // away from the ones it would be sharing.
+    let group = live ? undefined : groupsByKey.get(key)
     if (!group) {
       group = new PlotGroup(widthPx, alpha)
-      groupsByKey.set(key, group)
+      if (!live) groupsByKey.set(key, group)
       plotGroups.push(group)
     }
     const plan: PlotPlan = {
       nodeId: node.id,
+      parent: node,
+      kids,
+      live,
       widthPx,
       frames: kidFrames,
       colors,

@@ -18,11 +18,11 @@
 // on each child every tick is the whole re-layout. Grandchildren ride along.
 //
 // Materials are the one place where the shared-everything build has to be
-// undone. buildScene caches materials by (colour, opacity, side, map), which is
-// what keeps 209k glyphs affordable — but a colour track would then either
-// repaint every node sharing that material or mint a new cache entry per frame
-// (an unbounded leak over a long animation). Nodes with an appearance binding
-// therefore get a PRIVATE clone of each of their materials, mutated in place.
+// undone: nodes with an appearance binding get PRIVATE clones of their
+// materials, mutated in place (render/glyphAppearance.ts says why). A World
+// Grid is the exception — its materials are its own already, and its parts take
+// different values from one row, so it goes through worldGridGeometry's own
+// per-part rule instead.
 //
 // Shape bindings (geometry / mesh_id / a torus or Point ratio / the node's own
 // topo) cannot be a material write: the glyph OBJECT is wrong. Those swap the
@@ -42,8 +42,12 @@ import {
   createPickProxy,
   quantizedShapeRatio,
 } from './glyphGeometry'
-import { setNaturalTransparency } from './renderMode'
-import { createWorldGridObject } from './worldGridGeometry'
+import {
+  applyGlyphAppearance,
+  privatiseGlyphMaterials,
+  type MappedMaterial,
+} from './glyphAppearance'
+import { applyWorldGridAppearance, createWorldGridObject } from './worldGridGeometry'
 
 export interface DynamicSets {
   /** Nodes whose translate/rotate/scale (or child-placement fields) can change. */
@@ -93,18 +97,11 @@ interface TransformEntry {
 interface AppearanceEntry {
   node: GvNode
   frame: THREE.Object3D
-  /** Private clones of this glyph's materials. */
+  /** Private clones of this glyph's materials (empty for a World Grid). */
   materials: THREE.Material[]
-  /**
-   * Materials that carry a map — only solid meshes are ever textured. Basic as
-   * well as Lambert, since the interior shapes draw unlit (glyphGeometry.ts)
-   * and a 360° video is exactly the case a channel-animated texture_id serves.
-   */
+  /** The ones carrying a map (glyphAppearance.ts). */
   mapped: MappedMaterial[]
 }
-
-/** A solid glyph material with a `map` slot, lit or unlit. */
-type MappedMaterial = THREE.MeshLambertMaterial | THREE.MeshBasicMaterial
 
 interface ScaleEntry {
   node: GvNode
@@ -194,12 +191,16 @@ export class DynamicNodes {
           this.transforms.push({ node, frame, parent })
         }
       }
-      // World Grids are left out: their surface draws untinted and their
-      // lattice at half the node's alpha, so one uniform colour/opacity write
-      // would misdraw both. No example animates a grid's colour; when one
-      // does, it wants the builder's per-part rule, not this loop.
-      if (sets.appearance.has(node.id) && node.type !== NodeType.WorldGrid) {
-        const entry = privatiseMaterials(node, frame)
+      // A World Grid registers with no clones: its surface draws untinted and
+      // its lattice at half alpha, so the update pass hands it to the grid's
+      // own per-part rule rather than a uniform write.
+      if (sets.appearance.has(node.id)) {
+        const entry: AppearanceEntry | null =
+          node.type === NodeType.WorldGrid
+            ? glyphOf(frame)
+              ? { node, frame, materials: [], mapped: [] }
+              : null
+            : privatiseMaterials(node, frame)
         if (entry) {
           this.appearances.push(entry)
           this.appearanceByNode.set(node.id, entry)
@@ -212,7 +213,10 @@ export class DynamicNodes {
         // and need no rewrite. Their placement is already carried by the frame.
         if (glyphOf(frame)) this.scales.push({ node, frame })
       }
-      if (sets.shape?.has(node.id)) {
+      // A LINK's shape is the link overlay's business (linkOverlay.ts LiveLink):
+      // it draws between its two ends, never at its own frame, so swapping a
+      // glyph in here would put a stray shape at the A-end.
+      if (sets.shape?.has(node.id) && node.type !== NodeType.Link) {
         this.shapes.push({
           node,
           frame,
@@ -269,30 +273,16 @@ export class DynamicNodes {
       glyphsRebuilt = true
     }
 
-    for (const { node, materials, mapped } of this.appearances) {
-      const opacity = node.color.a / 255
-      const r = node.color.r / 255
-      const g = node.color.g / 255
-      const b = node.color.b / 255
-      for (const material of materials) {
-        material.opacity = opacity
-        // NOT a plain assignment: three bakes transparency into the shader
-        // program, so a glyph whose CSV alpha was 255 would go on drawing solid
-        // at opacity 0 (Breathing_Century's whole animation is that flip).
-        setNaturalTransparency(material, opacity < 1)
-        const colored = material as THREE.Material & { color?: THREE.Color }
-        colored.color?.setRGB(r, g, b)
+    for (const entry of this.appearances) {
+      const node = entry.node
+      if (node.type === NodeType.WorldGrid) {
+        // Resolved per tick: a shape swap (globe ↔ flat) replaces the object.
+        const glyph = glyphOf(entry.frame)
+        const texture = node.textureId > 0 ? (this.textures.get(node.textureId) ?? null) : null
+        if (glyph) applyWorldGridAppearance(glyph, node, texture)
+        continue
       }
-      const texture = node.textureId > 0 ? (this.textures.get(node.textureId) ?? null) : null
-      for (const material of mapped) {
-        if ((material.map === null) !== (texture === null)) {
-          // Gaining or losing a map flips the USE_MAP define — that one needs a
-          // recompile. Swapping one texture for another does not, which is what
-          // makes a flip-book affordable.
-          material.needsUpdate = true
-        }
-        material.map = texture
-      }
+      applyGlyphAppearance(entry, node, this.textures)
     }
 
     for (const entry of this.hiddens) {
@@ -373,7 +363,7 @@ export class DynamicNodes {
       const hiddenEntry = this.hiddens.find((h) => h.node.id === node.id)
       if (hiddenEntry) glyph.visible = !hiddenEntry.lastHidden
       frame.add(glyph)
-      if (appearance) {
+      if (appearance && node.type !== NodeType.WorldGrid) {
         const rebuilt = privatiseMaterials(node, frame)
         if (rebuilt) {
           appearance.materials = rebuilt.materials
@@ -401,31 +391,10 @@ export class DynamicNodes {
   }
 }
 
-/**
- * Give one node's glyph its own materials, so per-frame colour/texture writes
- * cannot reach every other node that happened to look the same.
- *
- * Pick proxies keep the shared invisible material — they are never drawn.
- */
+/** Give one node's glyph its own materials (glyphAppearance.ts). */
 function privatiseMaterials(node: GvNode, frame: THREE.Object3D): AppearanceEntry | null {
   const glyph = glyphOf(frame)
   if (!glyph) return null
-
-  const materials: THREE.Material[] = []
-  const mapped: MappedMaterial[] = []
-  glyph.traverse((object) => {
-    if (object.userData.isPickProxy) return
-    const drawable = object as THREE.Object3D & { material?: THREE.Material | THREE.Material[] }
-    const material = drawable.material
-    if (!material || Array.isArray(material)) return
-    const clone = material.clone()
-    drawable.material = clone
-    materials.push(clone)
-    if (clone instanceof THREE.MeshLambertMaterial || clone instanceof THREE.MeshBasicMaterial) {
-      mapped.push(clone)
-    }
-  })
-  if (materials.length === 0) return null
-
-  return { node, frame, materials, mapped }
+  const owned = privatiseGlyphMaterials(glyph)
+  return owned ? { node, frame, ...owned } : null
 }

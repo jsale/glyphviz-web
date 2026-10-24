@@ -147,6 +147,7 @@ import {
   loadTextures,
   mergeTextureLibrary,
   referencedTextureIds,
+  tickTextures,
 } from './render/textureLibrary'
 import type { AudioMode, TextureLibrary } from './render/textureLibrary'
 import { MAX_HALOS, pickNodeId, Selection } from './render/picking'
@@ -3035,6 +3036,7 @@ function rebuildAnimatedOverlays() {
   currentOverlays = buildTopologyOverlay(currentNodes, currentFrames, currentRoot, {
     showHidden,
     textures: currentTextures.byId,
+    live: currentLiveIds,
   })
   applyLineResolution()
 }
@@ -3146,6 +3148,12 @@ function openSelectedLink() {
 
 let currentRoot: THREE.Group | null = null
 let currentLinks: SceneBuildResult['links'] | null = null
+/**
+ * What the last build was told an animation can change (animatableNodeIds) —
+ * kept, because rebuildAnimatedOverlays rebuilds the plots against the same
+ * set without going back through buildScene.
+ */
+let currentLiveIds: ReadonlySet<number> = new Set()
 let currentOverlays: SceneBuildResult['overlays'] | null = null
 /**
  * The scene's Point Cloud batches. It is also the position source for every
@@ -3538,6 +3546,7 @@ function rebuildScene(fitCamera: boolean) {
   // Select page's distinct-value lists can move under any rebuild.
   xrSelectEpoch++
   const prevSelected = new Set(selection.ids)
+  currentLiveIds = animatableNodeIds()
   const built = buildScene(currentNodes, {
     showHidden,
     textures: currentTextures.byId,
@@ -3550,7 +3559,7 @@ function rebuildScene(fitCamera: boolean) {
     // an animation can grow out of scale 0 must keep the glyph the zero-scale
     // cull would otherwise skip. Both sources of motion count — a channel
     // binding and a rate field.
-    liveNodeIds: animatableNodeIds(),
+    liveNodeIds: currentLiveIds,
   })
   if (currentRoot) {
     gizmo.detach()
@@ -3560,6 +3569,7 @@ function rebuildScene(fitCamera: boolean) {
   // The animated slice belongs to one build: it holds that build's Object3Ds
   // and its own material clones.
   dynamic?.dispose()
+  currentLinks?.dispose()
   currentOverlays?.dispose()
   currentClouds?.dispose()
   currentRoot = built.root
@@ -6725,6 +6735,10 @@ renderer.setAnimationLoop(() => {
   // scene: a stroke has to appear AS it is drawn, on a desk and in a headset
   // alike. (This is the loop that runs in both — see requestDrawRebuild.)
   flushDrawRebuild()
+  // Animated GIF textures run on their own per-frame delays, whether or not a
+  // Channels animation is playing — the desktop ticks its TextureManager from
+  // paintGL the same way.
+  tickTextures(currentTextures, dtMs)
   // A channel frame or a gizmo drag rewrites node fields without a rebuild, so
   // the table's visible rows have to be repainted from them. Only the ~30 rows
   // on screen are touched, and nothing at all while the panel is collapsed.
@@ -6776,7 +6790,14 @@ renderer.setAnimationLoop(() => {
   // Edges, plot lines and surface meshes chase the nodes they connect (gizmo
   // drags mutate frames between rebuilds), so refresh them every frame like
   // the desktop's redraw.
-  currentLinks?.update()
+  if (currentLinks?.update()) {
+    // A channel stepped a bound link's geometry, so its draw object was
+    // rebuilt: the same two consequences a swapped glyph has in
+    // pushAnimationFrame — fresh materials need the blend mode, and a halo may
+    // hold the object that was just replaced.
+    syncRenderMode()
+    if (selection.size > 0) setSelection(selection.asSet())
+  }
   currentOverlays?.update()
   currentClouds?.update()
   // Selection halos are world-space geometry for the same batching reason, so

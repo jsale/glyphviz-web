@@ -20,6 +20,7 @@ import * as THREE from 'three'
 import type { GvNode } from '../gv/types'
 import { gridIsGlobe, gridSegments } from '../gv/worldGrid'
 import { WIRE_TO_SOLID } from './glyphGeometry'
+import { setNaturalTransparency } from './renderMode'
 import { zSphereGeometry } from './uvGeometry'
 
 // Globe tessellation, matching the desktop's density choice.
@@ -131,6 +132,7 @@ export function createWorldGridObject(node: GvNode, map?: THREE.Texture): THREE.
       }),
     )
     surface.name = 'grid-surface'
+    surface.userData.gridPart = 'surface'
     // Solid surfaces occlude picking without being pickable themselves.
     surface.userData.isGridOccluder = true
     group.add(surface)
@@ -140,7 +142,53 @@ export function createWorldGridObject(node: GvNode, map?: THREE.Texture): THREE.
   const lines = globe
     ? graticuleGeometry(seg.x, seg.y, wireOnly ? 1.0 : 1.002)
     : plateLatticeGeometry(seg.x, seg.y, wireOnly ? 0 : 0.001)
-  group.add(new THREE.LineSegments(lines, lineMaterial(color, lineAlpha)))
+  const lattice = new THREE.LineSegments(lines, lineMaterial(color, lineAlpha))
+  lattice.userData.gridPart = 'lattice'
+  group.add(lattice)
 
   return group
 }
+
+/**
+ * Re-apply a grid's colour, alpha and texture to the object createWorldGridObject
+ * built, in place — the per-part rule above, for a Channels-animated grid. The
+ * desktop's `_draw_world_grid` reads the row every frame, so a colour track on
+ * a grid (or a texture_id flip-book of basemaps) animates there.
+ *
+ * The parts take DIFFERENT values from one row, which is why a grid cannot go
+ * through the uniform glyph write: the surface is untinted white when it wears a
+ * map, the lattice is half alpha over a solid surface. A grid's materials are
+ * its own (never cached), so nothing needs privatising first.
+ *
+ * Gaining or losing a map is the one change that recompiles. Whether a surface
+ * exists at all is the geometry's business (wire vs solid), and a geometry
+ * change swaps the whole object through DynamicNodes' shape path instead.
+ */
+export function applyWorldGridAppearance(
+  glyph: THREE.Object3D,
+  node: GvNode,
+  map: THREE.Texture | null,
+): void {
+  const color = new THREE.Color(node.color.r / 255, node.color.g / 255, node.color.b / 255)
+  const alpha = node.color.a / 255
+  const wireOnly = node.geometry in WIRE_TO_SOLID
+  for (const part of glyph.children) {
+    const role = part.userData.gridPart
+    if (role === 'surface') {
+      const material = (part as THREE.Mesh).material as THREE.MeshBasicMaterial
+      if ((material.map === null) !== (map === null)) material.needsUpdate = true
+      material.map = map
+      material.color.copy(map ? WHITE : color)
+      material.opacity = alpha
+      setNaturalTransparency(material, alpha < 1)
+    } else if (role === 'lattice') {
+      const material = (part as THREE.LineSegments).material as THREE.LineBasicMaterial
+      const lineAlpha = wireOnly ? alpha : alpha * 0.5
+      material.color.copy(color)
+      material.opacity = lineAlpha
+      setNaturalTransparency(material, lineAlpha < 1)
+    }
+  }
+}
+
+const WHITE = new THREE.Color(1, 1, 1)
