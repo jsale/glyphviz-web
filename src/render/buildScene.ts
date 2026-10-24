@@ -446,6 +446,7 @@ export function buildScene(nodes: GvNode[], options: BuildSceneOptions = {}): Sc
     showHidden: options.showHidden,
     keep: limit?.keep,
     liveNodeIds: options.liveNodeIds,
+    hideBound: options.channelHideBound,
   })
   if (clouds.cloudCount > 0) root.add(clouds.group)
 

@@ -13,6 +13,14 @@ import { drawLimitPlan } from './drawLimit'
 import { nodeIdsInRect } from './rectSelect'
 import { placeLabels, taggableNodes } from './labelOverlay'
 import { cloudParentIds, drawableChildren, isCloudParent, pointSize } from '../gv/pointCloud'
+import {
+  applyChannelFrame,
+  bindChannels,
+  parseGvChMap,
+  parseGvChTracks,
+  resetChannels,
+  setChannelInputId,
+} from '../gv/channels'
 import { Geometry, NodeType, RotationMode, Topo } from '../gv/types'
 import type { GvNode } from '../gv/types'
 
@@ -327,6 +335,103 @@ describe('the rules a cloud imposes on the rest of the app', () => {
       points: result.clouds,
     })
     expect([...withPoints].sort((a, b) => a - b)).toEqual([1, 10, 11, 12, 13])
+  })
+})
+
+describe('a channel animating the PARENT hide', () => {
+  // The qudit synthesis examples are built entirely this way: every layer of
+  // points is a cloud authored hide = 1 and struck visible by its own channel,
+  // so the scene assembles itself. A cloud left out of the build at load had
+  // nothing to reveal, and the whole animation sat on an empty stage.
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1000)
+  camera.position.set(1.5, 0, 40)
+  camera.lookAt(1.5, 0, 0)
+  camera.updateMatrixWorld(true)
+  const rect = { x1: 0, y1: 0, x2: 800, y2: 600 }
+  const size = { width: 800, height: 600 }
+
+  function pointAt(result: ReturnType<typeof built>, id: number): number | null {
+    const target = result.clouds.pointPosition(id)!
+    const raycaster = new THREE.Raycaster()
+    raycaster.camera = camera
+    raycaster.set(camera.position, target.clone().sub(camera.position).normalize())
+    return pickNodeId(raycaster, result.root)
+  }
+
+  function swept(nodes: GvNode[], result: ReturnType<typeof built>): number[] {
+    return [...nodeIdsInRect(nodes, result.frames, camera, rect, size, { points: result.clouds })]
+      .filter((id) => id !== 1)
+      .sort((a, b) => a - b)
+  }
+
+  it('builds the hidden cloud, keeps it off screen, and shows it on the flip', () => {
+    const nodes = cloudScene(4, { hide: 1 })
+    const result = built(nodes, { channelHideBound: new Set([1]) })
+    result.clouds.setResolution(800, 600)
+    expect(result.clouds.cloudCount).toBe(1)
+    expect(result.clouds.pointCount).toBe(4)
+
+    // Hidden: nothing drawn, nothing clicked, nothing swept — the desktop's
+    // draw and pick passes both skip it — but the points stay MEMBERS, so a
+    // selection made through the Node Table survives the flip.
+    const points = result.clouds.group.children.find((c) => c instanceof THREE.Points)!
+    expect(points.visible).toBe(false)
+    expect(result.clouds.hasPoint(12)).toBe(true)
+    expect(result.clouds.pointDrawn(12)).toBe(false)
+    expect(pointAt(result, 12)).toBeNull()
+    expect(swept(nodes, result)).toEqual([])
+    // Positions are written while hidden, so a cloud appearing mid-playback is
+    // already where it belongs and a pinned point's label anchors correctly.
+    expect(result.clouds.pointPosition(12)!.x).toBeCloseTo(2, 6)
+
+    nodes[0].hide = 0
+    result.clouds.update()
+    expect(points.visible).toBe(true)
+    expect(result.clouds.pointDrawn(12)).toBe(true)
+    expect(pointAt(result, 12)).toBe(12)
+    expect(swept(nodes, result)).toEqual([10, 11, 12, 13])
+
+    // …and back, which is what Stop (restoring the CSV) and a Loop restart do.
+    nodes[0].hide = 1
+    result.clouds.update()
+    expect(points.visible).toBe(false)
+  })
+
+  it('leaves an unbound hidden cloud out of the build, as before', () => {
+    // No channel can unhide it, so building it would only cost memory.
+    const result = built(cloudScene(4, { hide: 1 }), { channelHideBound: new Set([99]) })
+    expect(result.clouds.cloudCount).toBe(0)
+  })
+
+  it('draws a hide-bound cloud throughout under Show Hidden Nodes', () => {
+    const nodes = cloudScene(4, { hide: 1 })
+    const result = built(nodes, { channelHideBound: new Set([1]), showHidden: true })
+    expect(result.clouds.pointDrawn(12)).toBe(true)
+    nodes[0].hide = 1
+    result.clouds.update()
+    expect(result.clouds.pointDrawn(12)).toBe(true)
+  })
+
+  it('follows the real Channels engine frame by frame, and Stop', () => {
+    const nodes = cloudScene(3, { hide: 1 })
+    setChannelInputId(nodes[0], 1)
+    const anim = bindChannels(
+      parseGvChMap('channel_id,track_id,attribute\n1,1,hide\n'),
+      parseGvChTracks('cyclecount,ch1\n0,1\n1,1\n2,0\n3,0\n'),
+      nodes,
+    )
+    expect([...anim.hideBoundNodeIds]).toEqual([1])
+    const result = built(nodes, { channelHideBound: anim.hideBoundNodeIds })
+
+    const drawnAt = (frame: number) => {
+      applyChannelFrame(anim, frame)
+      result.clouds.update()
+      return result.clouds.pointDrawn(11)
+    }
+    expect([0, 1, 2, 3].map(drawnAt)).toEqual([false, false, true, true])
+    resetChannels(anim)
+    result.clouds.update()
+    expect(result.clouds.pointDrawn(11)).toBe(false)
   })
 })
 

@@ -108,7 +108,9 @@ export function nodeIdsInRect(
       // A cloud point IS its own centre, so this is the same centre-projection
       // rule as every other node — with the position read from the batch rather
       // than from an Object3D that does not exist. The desktop catches these in
-      // its colour-ID region pass, by pixel.
+      // its colour-ID region pass, by pixel — which skips a hidden cloud, as
+      // this does one a channel is holding hidden.
+      if (!options.points.pointDrawn(node.id)) continue
       options.points.pointPosition(node.id, world)
     } else {
       const frame = frames.get(node.id)

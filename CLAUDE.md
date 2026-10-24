@@ -3309,6 +3309,47 @@ something to decide now).
           rows' <label>s inherit both, and Save Selection… takes the greyed
           disabled treatment the Create rows use. The labels still wrap to two
           lines, which is deliberate: each button names the file it writes.
+   qq. Channels can unhide a Point Cloud (fixed 2026-10-24, Jeff's report on the
+      desktop's two `qudit_synthesis_lab/` scenes — Cyclotomic Search and
+      Reachable Net — which played as a static, near-empty stage here while on
+      the desktop they assemble themselves layer by layer).
+      - Cause: both scenes are built from Point Cloud parents (topo 18) authored
+        `hide = 1`, each struck visible by its own `hide` channel on schedule.
+        `buildPointCloudOverlay` dropped a hidden cloud parent AT BUILD TIME, so
+        when the channel cleared the flag there was nothing to reveal — every
+        one of the 3,707 / 100,854 points was missing for the whole animation.
+        The desktop tests `parent.hide` in its draw and pick passes EVERY FRAME
+        (`_draw_point_clouds`, `_draw_cloud_pick_targets`) against a cached
+        batch, which is what makes this authoring pattern work there.
+      - Fix, the same move buildScene already makes for an ordinary glyph
+        (`channelHideBound`): a cloud parent in `hideBound` is built whatever
+        the CSV says, and `CloudGroup.update` sets `object.visible` from the
+        row each frame, BEFORE the standing-still guard (a flip alone never
+        trips it). Positions are written while hidden, so a cloud appears
+        already in place. An UNBOUND hidden cloud is still left out of the build.
+      - What follows visibility and what does not, each matching the desktop:
+        picking skips it (CloudPicker already tested `visible`); region select
+        skips it, through a new `PointPositions.pointDrawn` (the desktop's
+        region pass IS its pick pass); but `hasPoint` stays MEMBERSHIP, so a
+        selection survives the flip, and `pointPosition` stays live, so a pinned
+        point's label anchors where the desktop's tag pass — which never tests
+        the cloud parent's hide — puts it. A selected point in a held-hidden
+        cloud keeps its halo, as a channel-hidden glyph here already does.
+      - Not changed, and neither side does it: a hide-bound POINT inside a cloud.
+        The desktop's batch is cached on scene revision and `hide` is not a
+        transform field, so its cloud never re-gathers for one; here
+        `drawableChildren` filters at build. No scene in the corpus needs it.
+      - Tests: `pointCloudOverlay.test.ts` gains the rule (built hidden, unseen,
+        unpickable, unswept, still a member; shown on the flip; back on Stop),
+        the unbound case, Show Hidden, and the real Channels engine driving it
+        frame by frame. Verified to FAIL two ways — no build exemption, and no
+        per-frame visibility.
+      - Driven in Chrome on Jeff's two folders, and on the unfixed build first:
+        0 clouds built at every frame, before; after, every layer appears on
+        exactly the frame its track clears `hide` (Cyclotomic 30/150/270,
+        Reachable Net every 60 frames from 30), with point totals matching the
+        files to the point, during real playback as well as seeks, console
+        clean.
 7. Still-unimplemented format features, scheduled opportunistically:
    - ~~World Grid placement~~ (shipped 2026-07-24): flat plate + globe,
      extents windows, the scale-respacing rule, geographic gizmo drags,

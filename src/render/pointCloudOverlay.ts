@@ -94,6 +94,13 @@ class CloudGroup {
   /** The parent matrixWorld the buffer was last written from — the move test. */
   private readonly lastMatrix = new Float64Array(16)
   private written = false
+  /**
+   * True when a channel animates the PARENT's `hide`. Such a cloud is built
+   * whatever the CSV says and shown or hidden per frame from the row — see
+   * `BuildPointCloudOptions.hideBound`.
+   */
+  private readonly hideBound: boolean
+  private readonly showHidden: boolean
 
   constructor(
     parent: GvNode,
@@ -102,9 +109,13 @@ class CloudGroup {
     ids: Int32Array,
     local: Float32Array,
     live: number[],
+    hideBound = false,
+    showHidden = false,
   ) {
     this.parentId = parent.id
     this.parent = parent
+    this.hideBound = hideBound
+    this.showHidden = showHidden
     this.parentFrame = parentFrame
     this.nodes = children
     this.live = live
@@ -171,6 +182,14 @@ class CloudGroup {
   }
 
   /**
+   * Whether the cloud is on screen right now. Only a hide-bound cloud can be
+   * built and NOT drawn; every other hidden cloud is left out at build time.
+   */
+  get drawn(): boolean {
+    return this.object.visible
+  }
+
+  /**
    * Re-derive the points a channel or a rate can move, from their rows.
    *
    * A cloud's local offsets and colours are baked at build time, so an ANIMATED
@@ -234,6 +253,12 @@ class CloudGroup {
    * points is animated, and both are detectable in constant time.
    */
   update(): void {
+    // The desktop tests the parent's `hide` in its draw and pick passes every
+    // frame (`_draw_point_clouds`), so a channel striking it shows or hides the
+    // whole cloud at once. Read before the standing-still guard, which a flip
+    // alone would never trip. The positions are written either way, so a cloud
+    // appearing mid-playback is already in the right place.
+    if (this.hideBound) this.object.visible = this.showHidden || this.parent.hide === 0
     const m = this.matrix.copy(this.parentFrame.matrixWorld).elements
     const moved = this.live.length > 0 && this.refreshLive()
     if (!moved && this.written && matrixEquals(m, this.lastMatrix)) return
@@ -435,6 +460,12 @@ class CloudPicker extends THREE.Object3D {
 export interface PointPositions {
   /** True when this node id is a point inside some drawn cloud. */
   hasPoint(nodeId: number): boolean
+  /**
+   * True when that point is on screen THIS frame. Differs from `hasPoint` only
+   * for a cloud whose parent a channel is holding hidden: its points stay
+   * members (a selection survives the flip) but are not there to be swept.
+   */
+  pointDrawn(nodeId: number): boolean
   /** Its world position, or null when it is not a drawn point. */
   pointPosition(nodeId: number, out?: THREE.Vector3): THREE.Vector3 | null
   /** The rendered size in pixels of the cloud it belongs to. */
@@ -490,6 +521,11 @@ export class PointCloudOverlay {
   /** True when this node id is a point inside some drawn cloud. */
   hasPoint(nodeId: number): boolean {
     return this.index.has(nodeId)
+  }
+
+  /** True when the point's cloud is on screen this frame. */
+  pointDrawn(nodeId: number): boolean {
+    return this.index.get(nodeId)?.group.drawn ?? false
   }
 
   /**
@@ -568,6 +604,16 @@ export interface BuildPointCloudOptions {
    * riding the offsets baked here — the desktop's `dynamic` cloud.
    */
   liveNodeIds?: ReadonlySet<number>
+  /**
+   * Nodes whose `hide` a channel animates (`channels.hideBoundNodeIds`). A
+   * cloud PARENT in this set is built even while hidden and follows its row's
+   * `hide` every frame, because a cloud left out of the build has nothing to
+   * reveal when the channel later clears the flag. Authoring a cloud hidden and
+   * striking it visible is how a scene builds itself up layer by layer — the
+   * qudit synthesis examples are made of nothing else. The same reason
+   * buildScene keeps a glyph alive for a hide-bound node (`channelHideBound`).
+   */
+  hideBound?: ReadonlySet<number>
 }
 
 /**
@@ -607,8 +653,10 @@ export function buildPointCloudOverlay(
     if (seen.has(parent.id)) continue
     seen.add(parent.id)
     // A hidden cloud parent draws nothing, exactly as the desktop's pass skips
-    // it — the whole cloud is the parent's rendering.
-    if (!showHidden && parent.hide !== 0) continue
+    // it — the whole cloud is the parent's rendering. Unless a channel can
+    // unhide it: then it is built now and hidden per frame (CloudGroup.update).
+    const hideBound = options.hideBound?.has(parent.id) === true
+    if (!showHidden && parent.hide !== 0 && !hideBound) continue
     if (options.keep && !options.keep.has(parent.id)) continue
     const parentFrame = frames.get(parent.id)
     if (!parentFrame) continue
@@ -637,7 +685,7 @@ export function buildPointCloudOverlay(
     // frame, which is the same call drawMode's stamping and Selection.set make
     // for the same reason. A handful of clouds, each with a short chain.
     parentFrame.updateWorldMatrix(true, false)
-    groups.push(new CloudGroup(parent, parentFrame, kids, ids, local, live))
+    groups.push(new CloudGroup(parent, parentFrame, kids, ids, local, live, hideBound, showHidden))
   }
 
   const overlay = new PointCloudOverlay(groups)
